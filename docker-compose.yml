@@ -1,0 +1,16 @@
+services:
+  app:
+    build:
+      context: .
+      target: development
+    ports:
+      - "3000:3000"
+    volumes:
+      - .:/app
+      - /app/node_modules
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    env_file:
+      - .env
+    stdin_open: true
+    tty: true
