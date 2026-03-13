@@ -5,6 +5,9 @@ import {defineConfig, loadEnv} from 'vite';
 
 export default defineConfig(({mode}) => {
   const env = loadEnv(mode, '.', '');
+  const usePolling =
+    env.VITE_USE_POLLING === 'true' || process.env.CHOKIDAR_USEPOLLING === 'true';
+  const pollingInterval = Number(env.CHOKIDAR_INTERVAL ?? 100);
   return {
     plugins: [react(), tailwindcss()],
     define: {
@@ -19,6 +22,10 @@ export default defineConfig(({mode}) => {
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
       // Do not modifyâfile watching is disabled to prevent flickering during agent edits.
       hmr: process.env.DISABLE_HMR !== 'true',
+      host: true,
+      port: 3000,
+      strictPort: true,
+      watch: usePolling ? {usePolling: true, interval: pollingInterval} : undefined,
     },
   };
 });

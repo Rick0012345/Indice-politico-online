@@ -3,8 +3,9 @@ import { Search, Star, TrendingUp, TrendingDown, Filter, ChevronRight } from 'lu
 import { Link } from 'react-router-dom';
 import { mockPoliticos } from '../data/mockData';
 import { cn } from '../lib/utils';
+import type { Politico } from '../types';
 
-const PoliticoCard = ({ politico, type }: { politico: any, type: 'best' | 'worst' }) => {
+const PoliticoCard: React.FC<{ politico: Politico; type: 'best' | 'worst' }> = ({ politico, type }) => {
   return (
     <Link 
       to={`/politico/${politico.id}`}

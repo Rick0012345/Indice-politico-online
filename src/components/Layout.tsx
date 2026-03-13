@@ -9,10 +9,10 @@ export const Navbar = () => {
         <div className="flex items-center gap-2">
           <Link to="/" className="flex items-center gap-2">
             <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600 text-white font-bold">
-              CP
+              VC
             </div>
             <span className="text-xl font-bold tracking-tight text-slate-900">
-              Catálogo<span className="text-blue-600">Político</span>
+              Voto<span className="text-blue-600">Consciente</span>
             </span>
           </Link>
         </div>
@@ -46,7 +46,7 @@ export const Footer = () => {
           <div className="col-span-1 md:col-span-2">
             <div className="flex items-center gap-2 mb-4">
               <div className="flex h-6 w-6 items-center justify-center rounded bg-blue-600 text-white font-bold text-xs">
-                CP
+                VC
               </div>
               <span className="text-lg font-bold tracking-tight text-slate-900">
                 Catálogo Político

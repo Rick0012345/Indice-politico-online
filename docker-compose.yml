@@ -10,6 +10,9 @@ services:
       - /app/node_modules
     environment:
       - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - CHOKIDAR_USEPOLLING=true
+      - CHOKIDAR_INTERVAL=100
+      - VITE_USE_POLLING=true
     env_file:
       - .env
     stdin_open: true
