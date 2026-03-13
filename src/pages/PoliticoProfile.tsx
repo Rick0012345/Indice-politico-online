@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { 
   Star, 
@@ -14,15 +14,126 @@ import {
   ExternalLink,
   BarChart3
 } from 'lucide-react';
-import { mockPoliticos } from '../data/mockData';
 import { cn } from '../lib/utils';
 import { EvaluationModal } from '../components/EvaluationModal';
 
+type PoliticoDetail = {
+  id: string;
+  nome: string;
+  partido: string;
+  estado: string;
+  cargo: string;
+  foto: string;
+  notaMedia: number;
+  totalAvaliacoes: number;
+  presenca?: number | null;
+  alinhamentoGoverno?: number | null;
+};
+
+type VotacaoItem = {
+  id: string;
+  siglaTipo: string | null;
+  numero: number | null;
+  ano: number | null;
+  ementa: string | null;
+  dataVotacao: string;
+  voto: string;
+};
+
+type DespesaItem = {
+  id: string;
+  ano: number;
+  mes: number;
+  tipo: string;
+  valor: number;
+  urlDocumento: string | null;
+  fornecedor: string | null;
+};
+
 export const PoliticoProfile = () => {
   const { id } = useParams();
-  const politico = mockPoliticos.find(p => p.id === id);
   const [activeTab, setActiveTab] = useState('geral');
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [politico, setPolitico] = useState<PoliticoDetail | null>(null);
+  const [votacoes, setVotacoes] = useState<VotacaoItem[]>([]);
+  const [despesas, setDespesas] = useState<DespesaItem[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    const politicoId = id?.trim();
+    if (!politicoId) return;
+
+    const controller = new AbortController();
+    setIsLoading(true);
+
+    const run = async () => {
+      try {
+        const [politicoRes, votacoesRes, despesasRes] = await Promise.all([
+          fetch(`/api/politicos/${encodeURIComponent(politicoId)}`, {signal: controller.signal}),
+          fetch(`/api/politicos/${encodeURIComponent(politicoId)}/votacoes?limit=50`, {signal: controller.signal}),
+          fetch(`/api/politicos/${encodeURIComponent(politicoId)}/despesas?limit=50`, {signal: controller.signal}),
+        ]);
+
+        if (politicoRes.ok) {
+          const data = (await politicoRes.json()) as {politico?: PoliticoDetail};
+          if (data.politico) {
+            setPolitico({
+              ...data.politico,
+              foto: data.politico.foto || `https://picsum.photos/seed/${data.politico.id}/400/400`,
+            });
+          } else {
+            setPolitico(null);
+          }
+        } else {
+          setPolitico(null);
+        }
+
+        if (votacoesRes.ok) {
+          const data = (await votacoesRes.json()) as {items?: VotacaoItem[]};
+          setVotacoes(data.items ?? []);
+        } else {
+          setVotacoes([]);
+        }
+
+        if (despesasRes.ok) {
+          const data = (await despesasRes.json()) as {items?: DespesaItem[]};
+          setDespesas(data.items ?? []);
+        } else {
+          setDespesas([]);
+        }
+      } catch {
+        setPolitico(null);
+        setVotacoes([]);
+        setDespesas([]);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    run();
+    return () => controller.abort();
+  }, [id]);
+
+  const despesasTotal = useMemo(() => {
+    return despesas.reduce((acc, curr) => acc + (Number.isFinite(curr.valor) ? curr.valor : 0), 0);
+  }, [despesas]);
+
+  const tabs = [
+    { id: 'geral', label: 'Visão Geral', icon: BarChart3 },
+    { id: 'votacoes', label: 'Votações', icon: CheckCircle2 },
+    { id: 'despesas', label: 'Despesas', icon: DollarSign },
+    { id: 'noticias', label: 'Notícias', icon: FileText },
+  ];
+
+  if (isLoading) {
+    return (
+      <div className="mx-auto max-w-7xl px-4 py-12 sm:px-6 lg:px-8">
+        <div className="rounded-3xl border border-slate-200 bg-white p-8 text-center text-slate-600">
+          Carregando perfil…
+        </div>
+      </div>
+    );
+  }
 
   if (!politico) {
     return (
@@ -33,12 +144,10 @@ export const PoliticoProfile = () => {
     );
   }
 
-  const tabs = [
-    { id: 'geral', label: 'Visão Geral', icon: BarChart3 },
-    { id: 'votacoes', label: 'Votações', icon: CheckCircle2 },
-    { id: 'despesas', label: 'Despesas', icon: DollarSign },
-    { id: 'noticias', label: 'Notícias', icon: FileText },
-  ];
+  const presencaLabel = politico.presenca == null ? '—' : `${politico.presenca}%`;
+  const presencaValue = politico.presenca ?? 0;
+  const alinhamentoLabel = politico.alinhamentoGoverno == null ? '—' : `${politico.alinhamentoGoverno}%`;
+  const alinhamentoValue = politico.alinhamentoGoverno ?? 0;
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
@@ -125,24 +234,24 @@ export const PoliticoProfile = () => {
                 <div>
                   <div className="flex justify-between mb-2">
                     <span className="text-sm font-medium text-slate-600">Presença em Sessões</span>
-                    <span className="text-sm font-bold text-slate-900">{politico.presenca}%</span>
+                    <span className="text-sm font-bold text-slate-900">{presencaLabel}</span>
                   </div>
                   <div className="h-3 w-full rounded-full bg-slate-100 overflow-hidden">
                     <div 
                       className="h-full bg-emerald-500 rounded-full transition-all duration-1000" 
-                      style={{ width: `${politico.presenca}%` }}
+                      style={{ width: `${presencaValue}%` }}
                     />
                   </div>
                 </div>
                 <div>
                   <div className="flex justify-between mb-2">
                     <span className="text-sm font-medium text-slate-600">Alinhamento com o Governo</span>
-                    <span className="text-sm font-bold text-slate-900">{politico.alinhamentoGoverno}%</span>
+                    <span className="text-sm font-bold text-slate-900">{alinhamentoLabel}</span>
                   </div>
                   <div className="h-3 w-full rounded-full bg-slate-100 overflow-hidden">
                     <div 
                       className="h-full bg-blue-500 rounded-full transition-all duration-1000" 
-                      style={{ width: `${politico.alinhamentoGoverno}%` }}
+                      style={{ width: `${alinhamentoValue}%` }}
                     />
                   </div>
                 </div>
@@ -169,7 +278,12 @@ export const PoliticoProfile = () => {
 
         {activeTab === 'votacoes' && (
           <div className="space-y-4">
-            {politico.votacoes.map((v) => (
+            {votacoes.map((v) => {
+              const titulo =
+                v.siglaTipo && v.numero && v.ano
+                  ? `${v.siglaTipo} ${v.numero}/${v.ano}${v.ementa ? ` - ${v.ementa}` : ''}`
+                  : v.ementa || 'Votação';
+              return (
               <div key={v.id} className="flex items-center justify-between rounded-2xl border border-slate-200 bg-white p-6 transition-all hover:border-slate-300">
                 <div className="flex gap-4 items-start">
                   <div className={cn(
@@ -181,9 +295,9 @@ export const PoliticoProfile = () => {
                      v.voto === 'Não' ? <XCircle size={20} /> : <MinusCircle size={20} />}
                   </div>
                   <div>
-                    <h4 className="font-bold text-slate-900">{v.projeto}</h4>
+                    <h4 className="font-bold text-slate-900">{titulo}</h4>
                     <div className="mt-1 flex items-center gap-3 text-xs text-slate-500">
-                      <span className="flex items-center gap-1"><Calendar size={12} /> {new Date(v.data).toLocaleDateString('pt-BR')}</span>
+                      <span className="flex items-center gap-1"><Calendar size={12} /> {new Date(v.dataVotacao).toLocaleDateString('pt-BR')}</span>
                       <span className={cn(
                         "font-bold uppercase tracking-wider",
                         v.voto === 'Sim' ? "text-emerald-600" : 
@@ -196,7 +310,8 @@ export const PoliticoProfile = () => {
                   <ExternalLink size={18} />
                 </button>
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
 
@@ -211,9 +326,11 @@ export const PoliticoProfile = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {politico.despesas.map((d) => (
+                {despesas.map((d) => (
                   <tr key={d.id} className="hover:bg-slate-50/50 transition-colors">
-                    <td className="px-6 py-4 text-sm text-slate-600">{new Date(d.data).toLocaleDateString('pt-BR')}</td>
+                    <td className="px-6 py-4 text-sm text-slate-600">
+                      {new Date(`${d.ano}-${String(d.mes).padStart(2, '0')}-01`).toLocaleDateString('pt-BR')}
+                    </td>
                     <td className="px-6 py-4 text-sm font-medium text-slate-900">{d.tipo}</td>
                     <td className="px-6 py-4 text-sm font-bold text-slate-900 text-right">
                       {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(d.valor)}
@@ -226,7 +343,7 @@ export const PoliticoProfile = () => {
                   <td colSpan={2} className="px-6 py-4 text-sm text-slate-900">Total no período</td>
                   <td className="px-6 py-4 text-sm text-slate-900 text-right">
                     {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(
-                      politico.despesas.reduce((acc, curr) => acc + curr.valor, 0)
+                      despesasTotal
                     )}
                   </td>
                 </tr>
@@ -236,23 +353,8 @@ export const PoliticoProfile = () => {
         )}
 
         {activeTab === 'noticias' && (
-          <div className="space-y-6">
-            {politico.noticias.map((n) => (
-              <a 
-                key={n.id} 
-                href={n.link}
-                className="group flex flex-col gap-2 rounded-2xl border border-slate-200 bg-white p-6 transition-all hover:border-blue-200 hover:shadow-md"
-              >
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-blue-600 uppercase tracking-widest">Notícia</span>
-                  <span className="text-xs text-slate-400">{new Date(n.data).toLocaleDateString('pt-BR')}</span>
-                </div>
-                <h4 className="text-lg font-bold text-slate-900 group-hover:text-blue-600 transition-colors">{n.titulo}</h4>
-                <div className="mt-2 flex items-center gap-1 text-sm font-medium text-slate-500">
-                  Ler matéria completa <ChevronRight size={14} />
-                </div>
-              </a>
-            ))}
+          <div className="rounded-3xl border border-slate-200 bg-white p-8 text-slate-600">
+            Notícias em breve.
           </div>
         )}
       </div>

@@ -1,23 +1,54 @@
-import React, { useState } from 'react';
-import { Star, Filter, Search, ChevronRight, TrendingUp, TrendingDown } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Star, Filter, ChevronRight } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { mockPoliticos } from '../data/mockData';
 import { cn } from '../lib/utils';
+
+type PoliticoRankingItem = {
+  id: string;
+  nome: string;
+  partido: string;
+  estado: string;
+  cargo: string;
+  foto: string;
+  notaMedia: number;
+};
 
 export const Ranking = () => {
   const [filter, setFilter] = useState<'all' | 'best' | 'worst'>('all');
   const [cargo, setCargo] = useState('Todos');
+  const [items, setItems] = useState<PoliticoRankingItem[]>([]);
 
-  const sortedPoliticos = [...mockPoliticos].sort((a, b) => {
-    if (filter === 'best') return b.notaMedia - a.notaMedia;
-    if (filter === 'worst') return a.notaMedia - b.notaMedia;
-    return b.notaMedia - a.notaMedia; // Default to best
-  });
+  useEffect(() => {
+    const controller = new AbortController();
 
-  const filteredPoliticos = sortedPoliticos.filter(p => {
-    if (cargo === 'Todos') return true;
-    return p.cargo === cargo;
-  });
+    const run = async () => {
+      const selectedCargo = cargo === 'Todos' || cargo === 'Todos os Cargos' ? '' : cargo;
+      const filterParam = filter === 'all' ? 'best' : filter;
+
+      if (selectedCargo && selectedCargo !== 'Deputado Federal') {
+        setItems([]);
+        return;
+      }
+
+      try {
+        const response = await fetch(`/api/politicos/ranking?filter=${filterParam}&limit=1000`, {
+          signal: controller.signal,
+        });
+        if (!response.ok) return;
+        const data = (await response.json()) as {items?: PoliticoRankingItem[]};
+        setItems(
+          (data.items ?? []).map((p) => ({
+            ...p,
+            foto: p.foto || `https://picsum.photos/seed/${p.id}/400/400`,
+          })),
+        );
+      } catch {
+      }
+    };
+
+    run();
+    return () => controller.abort();
+  }, [filter, cargo]);
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-12 sm:px-6 lg:px-8">
@@ -81,7 +112,7 @@ export const Ranking = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filteredPoliticos.map((p, index) => (
+              {items.map((p, index) => (
                 <tr key={p.id} className="group hover:bg-slate-50/50 transition-colors">
                   <td className="px-6 py-6">
                     <span className={cn(

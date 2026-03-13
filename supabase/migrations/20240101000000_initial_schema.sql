@@ -1,9 +1,11 @@
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
 -- 1. Tabela de Políticos (Deputados Federais) 
 -- O 'id' será o id exato fornecido pela API da Câmara dos Deputados. 
-CREATE TABLE politicos ( 
+CREATE TABLE IF NOT EXISTS politicos ( 
     id BIGINT PRIMARY KEY, 
     nome TEXT NOT NULL, 
-    sigla_partido VARCHAR(10) NOT NULL, 
+    sigla_partido VARCHAR(50) NOT NULL, 
     sigla_uf VARCHAR(2) NOT NULL, 
     url_foto TEXT, 
     ativo BOOLEAN DEFAULT TRUE, 
@@ -12,7 +14,7 @@ CREATE TABLE politicos (
 
 -- 2. Tabela de Votações (Os Projetos de Lei, PECs, etc.) 
 -- O 'id' também vem da API da Câmara. 
-CREATE TABLE votacoes ( 
+CREATE TABLE IF NOT EXISTS votacoes ( 
     id TEXT PRIMARY KEY, 
     sigla_tipo VARCHAR(10), -- Ex: PL, PEC, MPV 
     numero INTEGER, 
@@ -22,7 +24,7 @@ CREATE TABLE votacoes (
 ); 
 
 -- 3. Tabela de Votos dos Parlamentares (Como cada deputado votou) 
-CREATE TABLE votos_deputados ( 
+CREATE TABLE IF NOT EXISTS votos_deputados ( 
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(), 
     votacao_id TEXT REFERENCES votacoes(id) ON DELETE CASCADE, 
     politico_id BIGINT REFERENCES politicos(id) ON DELETE CASCADE, 
@@ -31,7 +33,7 @@ CREATE TABLE votos_deputados (
 ); 
 
 -- 4. Tabela de Despesas (Cota Parlamentar) 
-CREATE TABLE despesas ( 
+CREATE TABLE IF NOT EXISTS despesas ( 
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(), 
     politico_id BIGINT REFERENCES politicos(id) ON DELETE CASCADE, 
     ano INTEGER NOT NULL, 
@@ -43,7 +45,7 @@ CREATE TABLE despesas (
 ); 
 
 -- 5. Tabela de Avaliações dos Cidadãos (O teu sistema de estrelas) 
-CREATE TABLE avaliacoes ( 
+CREATE TABLE IF NOT EXISTS avaliacoes ( 
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(), 
     politico_id BIGINT REFERENCES politicos(id) ON DELETE CASCADE, 
     cpf_hash TEXT NOT NULL, -- Armazena apenas o hash criptografado do CPF 
@@ -55,6 +57,6 @@ CREATE TABLE avaliacoes (
 ); 
 
 -- Criação de Índices para garantir que o site carregue rápido quando houver muitos dados 
-CREATE INDEX idx_votos_politico ON votos_deputados(politico_id); 
-CREATE INDEX idx_despesas_politico ON despesas(politico_id); 
-CREATE INDEX idx_avaliacoes_politico ON avaliacoes(politico_id); 
+CREATE INDEX IF NOT EXISTS idx_votos_politico ON votos_deputados(politico_id); 
+CREATE INDEX IF NOT EXISTS idx_despesas_politico ON despesas(politico_id); 
+CREATE INDEX IF NOT EXISTS idx_avaliacoes_politico ON avaliacoes(politico_id); 

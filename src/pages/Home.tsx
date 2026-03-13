@@ -1,11 +1,18 @@
-import React, { useState } from 'react';
-import { Search, Star, TrendingUp, TrendingDown, Filter, ChevronRight } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Search, Star, TrendingUp, TrendingDown, ChevronRight, Sparkles } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { mockPoliticos } from '../data/mockData';
 import { cn } from '../lib/utils';
-import type { Politico } from '../types';
 
-const PoliticoCard: React.FC<{ politico: Politico; type: 'best' | 'worst' }> = ({ politico, type }) => {
+type PoliticoCardModel = {
+  id: string;
+  nome: string;
+  partido: string;
+  estado: string;
+  foto: string;
+  notaMedia: number;
+};
+
+const PoliticoCard: React.FC<{ politico: PoliticoCardModel; type: 'best' | 'worst' }> = ({ politico, type }) => {
   return (
     <Link 
       to={`/politico/${politico.id}`}
@@ -39,12 +46,139 @@ const PoliticoCard: React.FC<{ politico: Politico; type: 'best' | 'worst' }> = (
   );
 };
 
+const NovoPoliticoCard: React.FC<{ politico: PoliticoCardModel }> = ({ politico }) => {
+  return (
+    <Link 
+      to={`/politico/${politico.id}`}
+      className="group relative flex flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white p-4 transition-all hover:shadow-lg hover:-translate-y-1"
+    >
+      <div className="flex items-center gap-4">
+        <div className="relative h-16 w-16 overflow-hidden rounded-full border-2 border-slate-100">
+          <img 
+            src={politico.foto} 
+            alt={politico.nome} 
+            className="h-full w-full object-cover"
+            referrerPolicy="no-referrer"
+          />
+        </div>
+        <div className="flex-1">
+          <h3 className="font-bold text-slate-900 transition-colors">{politico.nome}</h3>
+          <p className="text-xs text-slate-500">{politico.partido} • {politico.estado}</p>
+          <div className="mt-1 flex items-center gap-1">
+            <Star size={14} className="fill-yellow-400 text-yellow-400" />
+            <span className="text-sm font-bold text-slate-700">{politico.notaMedia.toFixed(1)}</span>
+          </div>
+        </div>
+        <div className="flex h-8 w-8 items-center justify-center rounded-full bg-blue-50 text-blue-600">
+          <Sparkles size={16} />
+        </div>
+      </div>
+    </Link>
+  );
+};
+
 export const Home = () => {
   const [search, setSearch] = useState('');
+  const [novosCadastrados, setNovosCadastrados] = useState<PoliticoCardModel[]>([]);
+  const [bestPoliticos, setBestPoliticos] = useState<PoliticoCardModel[]>([]);
+  const [worstPoliticos, setWorstPoliticos] = useState<PoliticoCardModel[]>([]);
+  const [searchResults, setSearchResults] = useState<PoliticoCardModel[]>([]);
 
-  // Simulating 4 best and 4 worst (using mock data)
-  const bestPoliticos = [...mockPoliticos].sort((a, b) => b.notaMedia - a.notaMedia).slice(0, 4);
-  const worstPoliticos = [...mockPoliticos].sort((a, b) => a.notaMedia - b.notaMedia).slice(0, 4);
+  useEffect(() => {
+    const controller = new AbortController();
+
+    const run = async () => {
+      try {
+        const [bestRes, worstRes] = await Promise.all([
+          fetch('/api/politicos/ranking?filter=best&limit=4', {signal: controller.signal}),
+          fetch('/api/politicos/ranking?filter=worst&limit=4', {signal: controller.signal}),
+        ]);
+
+        if (bestRes.ok) {
+          const data = (await bestRes.json()) as {items?: PoliticoCardModel[]};
+          setBestPoliticos((data.items ?? []).map((p) => ({...p, foto: p.foto || `https://picsum.photos/seed/${p.id}/400/400` })));
+        }
+        if (worstRes.ok) {
+          const data = (await worstRes.json()) as {items?: PoliticoCardModel[]};
+          setWorstPoliticos((data.items ?? []).map((p) => ({...p, foto: p.foto || `https://picsum.photos/seed/${p.id}/400/400` })));
+        }
+      } catch {
+      }
+    };
+
+    run();
+    return () => controller.abort();
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    const run = async () => {
+      try {
+        const response = await fetch('/api/politicos/novos?limit=6', {signal: controller.signal});
+        if (!response.ok) return;
+        const data = (await response.json()) as {items?: Array<Partial<PoliticoCardModel>>};
+
+        const items = (data.items ?? [])
+          .filter((p): p is Omit<PoliticoCardModel, 'foto'> & {foto?: string | null} => {
+            return (
+              typeof p.id === 'string' &&
+              typeof p.nome === 'string' &&
+              typeof p.partido === 'string' &&
+              typeof p.estado === 'string' &&
+              typeof p.notaMedia === 'number'
+            );
+          })
+          .map((p) => ({
+            id: p.id,
+            nome: p.nome,
+            partido: p.partido,
+            estado: p.estado,
+            notaMedia: p.notaMedia,
+            foto: p.foto || `https://picsum.photos/seed/${p.id}/400/400`,
+          }));
+
+        setNovosCadastrados(items);
+      } catch {
+      }
+    };
+
+    run();
+    return () => controller.abort();
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    const run = async () => {
+      const q = search.trim();
+      if (q.length < 2) {
+        setSearchResults([]);
+        return;
+      }
+
+      try {
+        const response = await fetch(`/api/politicos?search=${encodeURIComponent(q)}&limit=12`, {
+          signal: controller.signal,
+        });
+        if (!response.ok) return;
+        const data = (await response.json()) as {items?: PoliticoCardModel[]};
+        setSearchResults(
+          (data.items ?? []).map((p) => ({
+            ...p,
+            foto: p.foto || `https://picsum.photos/seed/${p.id}/400/400`,
+          })),
+        );
+      } catch {
+      }
+    };
+
+    const t = setTimeout(run, 250);
+    return () => {
+      clearTimeout(t);
+      controller.abort();
+    };
+  }, [search]);
 
   return (
     <div className="flex flex-col gap-16 pb-20">
@@ -88,6 +222,38 @@ export const Home = () => {
           </div>
         </div>
       </section>
+
+      {searchResults.length > 0 && (
+        <section className="mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8">
+          <div className="mb-6 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Search className="text-slate-600" />
+              <h2 className="text-2xl font-bold text-slate-900">Resultados</h2>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {searchResults.map((p) => (
+              <PoliticoCard key={p.id} politico={p} type="best" />
+            ))}
+          </div>
+        </section>
+      )}
+
+      {novosCadastrados.length > 0 && (
+        <section className="mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8">
+          <div className="mb-6 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Sparkles className="text-blue-600" />
+              <h2 className="text-2xl font-bold text-slate-900">Novos cadastrados</h2>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {novosCadastrados.map((p) => (
+              <NovoPoliticoCard key={p.id} politico={p} />
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* Destaques Section */}
       <section className="mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8">
