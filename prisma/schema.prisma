@@ -1,0 +1,82 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Politico {
+  id           BigInt  @id @db.BigInt
+  nome         String
+  siglaPartido String  @map("sigla_partido") @db.VarChar(50)
+  siglaUf      String  @map("sigla_uf") @db.VarChar(2)
+  urlFoto      String? @map("url_foto")
+  ativo        Boolean? @default(true)
+  atualizadoEm DateTime? @default(now()) @map("atualizado_em") @db.Timestamptz(6)
+
+  votos      VotoDeputado[]
+  despesas   Despesa[]
+  avaliacoes Avaliacao[]
+
+  @@map("politicos")
+}
+
+model Votacao {
+  id         String   @id
+  siglaTipo  String?  @map("sigla_tipo") @db.VarChar(20)
+  numero     Int?
+  ano        Int?
+  ementa     String?
+  dataVotacao DateTime @map("data_votacao") @db.Date
+
+  votos VotoDeputado[]
+
+  @@map("votacoes")
+}
+
+model VotoDeputado {
+  id        String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  votacaoId String @map("votacao_id")
+  politicoId BigInt @map("politico_id") @db.BigInt
+  voto      String @db.VarChar(50)
+
+  votacao  Votacao  @relation(fields: [votacaoId], references: [id], onDelete: Cascade)
+  politico Politico @relation(fields: [politicoId], references: [id], onDelete: Cascade)
+
+  @@unique([votacaoId, politicoId])
+  @@index([votacaoId])
+  @@index([politicoId])
+  @@map("votos_deputados")
+}
+
+model Despesa {
+  id          String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  politicoId  BigInt  @map("politico_id") @db.BigInt
+  ano         Int
+  mes         Int
+  tipoDespesa String  @map("tipo_despesa")
+  valorLiquido Decimal @map("valor_liquido") @db.Decimal(10, 2)
+  urlDocumento String? @map("url_documento")
+  fornecedor   String?
+
+  politico Politico @relation(fields: [politicoId], references: [id], onDelete: Cascade)
+
+  @@index([politicoId], map: "idx_despesas_politico")
+  @@map("despesas")
+}
+
+model Avaliacao {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  politicoId    BigInt   @map("politico_id") @db.BigInt
+  cpfHash       String   @map("cpf_hash")
+  nota          Int
+  dataAvaliacao DateTime? @default(now()) @map("data_avaliacao") @db.Timestamptz(6)
+
+  politico Politico @relation(fields: [politicoId], references: [id], onDelete: Cascade)
+
+  @@unique([politicoId, cpfHash])
+  @@index([politicoId], map: "idx_avaliacoes_politico")
+  @@map("avaliacoes")
+}

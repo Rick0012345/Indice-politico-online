@@ -31,7 +31,7 @@ services:
       - POSTGRES_DB=n8n
     volumes:
       - n8n_db_data:/var/lib/postgresql/data
-      - ./supabase/migrations/20240101000000_initial_schema.sql:/docker-entrypoint-initdb.d/001_app_schema.sql:ro
+      - ./prisma/migrations/20240101000000_initial_schema/migration.sql:/docker-entrypoint-initdb.d/001_app_schema.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U n8n -d n8n"]
       interval: 5s
