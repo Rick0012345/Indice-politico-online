@@ -16,7 +16,8 @@ CREATE TABLE IF NOT EXISTS votacoes (
     numero INTEGER,
     ano INTEGER,
     ementa TEXT,
-    data_votacao DATE NOT NULL
+    data_votacao DATE NOT NULL,
+    aprovacao INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS votos_deputados (
@@ -51,4 +52,3 @@ CREATE INDEX IF NOT EXISTS idx_votos_votacao ON votos_deputados(votacao_id);
 CREATE INDEX IF NOT EXISTS idx_votos_politico ON votos_deputados(politico_id);
 CREATE INDEX IF NOT EXISTS idx_despesas_politico ON despesas(politico_id);
 CREATE INDEX IF NOT EXISTS idx_avaliacoes_politico ON avaliacoes(politico_id);
-

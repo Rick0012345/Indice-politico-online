@@ -198,7 +198,9 @@ export default defineConfig(({mode}) => {
                 const result = await pool.query(
                   `
                   SELECT
-                    vd.id::text AS id,
+                    vd.id::text AS "votoId",
+                    vd.politico_id::text AS "politicoId",
+                    v.id::text AS "votacaoId",
                     v.sigla_tipo AS "siglaTipo",
                     v.numero,
                     v.ano,

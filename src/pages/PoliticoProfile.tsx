@@ -31,7 +31,9 @@ type PoliticoDetail = {
 };
 
 type VotacaoItem = {
-  id: string;
+  votoId: string;
+  politicoId: string;
+  votacaoId: string;
   siglaTipo: string | null;
   numero: number | null;
   ano: number | null;
@@ -58,6 +60,7 @@ export const PoliticoProfile = () => {
   const [votacoes, setVotacoes] = useState<VotacaoItem[]>([]);
   const [despesas, setDespesas] = useState<DespesaItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [expandedVotoId, setExpandedVotoId] = useState<string | null>(null);
 
   useEffect(() => {
     const politicoId = id?.trim();
@@ -220,6 +223,16 @@ export const PoliticoProfile = () => {
           >
             <tab.icon size={18} />
             {tab.label}
+            {tab.id === 'votacoes' && (
+              <span
+                className={cn(
+                  "ml-1 inline-flex min-w-6 items-center justify-center rounded-full px-2 py-0.5 text-[11px] font-black",
+                  activeTab === tab.id ? "bg-blue-100 text-blue-700" : "bg-slate-100 text-slate-600",
+                )}
+              >
+                {votacoes.length}
+              </span>
+            )}
           </button>
         ))}
       </div>
@@ -283,32 +296,67 @@ export const PoliticoProfile = () => {
                 v.siglaTipo && v.numero && v.ano
                   ? `${v.siglaTipo} ${v.numero}/${v.ano}${v.ementa ? ` - ${v.ementa}` : ''}`
                   : v.ementa || 'Votação';
+              const isExpanded = expandedVotoId === v.votoId;
               return (
-              <div key={v.id} className="flex items-center justify-between rounded-2xl border border-slate-200 bg-white p-6 transition-all hover:border-slate-300">
-                <div className="flex gap-4 items-start">
-                  <div className={cn(
-                    "mt-1 flex h-10 w-10 shrink-0 items-center justify-center rounded-full",
-                    v.voto === 'Sim' ? "bg-emerald-50 text-emerald-600" : 
-                    v.voto === 'Não' ? "bg-rose-50 text-rose-600" : "bg-slate-50 text-slate-600"
-                  )}>
-                    {v.voto === 'Sim' ? <CheckCircle2 size={20} /> : 
-                     v.voto === 'Não' ? <XCircle size={20} /> : <MinusCircle size={20} />}
-                  </div>
-                  <div>
-                    <h4 className="font-bold text-slate-900">{titulo}</h4>
-                    <div className="mt-1 flex items-center gap-3 text-xs text-slate-500">
-                      <span className="flex items-center gap-1"><Calendar size={12} /> {new Date(v.dataVotacao).toLocaleDateString('pt-BR')}</span>
-                      <span className={cn(
-                        "font-bold uppercase tracking-wider",
-                        v.voto === 'Sim' ? "text-emerald-600" : 
-                        v.voto === 'Não' ? "text-rose-600" : "text-slate-600"
-                      )}>Votou: {v.voto}</span>
+              <div key={v.votoId} className="rounded-2xl border border-slate-200 bg-white transition-all hover:border-slate-300">
+                <button
+                  onClick={() => setExpandedVotoId((curr) => (curr === v.votoId ? null : v.votoId))}
+                  className="flex w-full items-center justify-between p-6 text-left"
+                >
+                  <div className="flex gap-4 items-start">
+                    <div className={cn(
+                      "mt-1 flex h-10 w-10 shrink-0 items-center justify-center rounded-full",
+                      v.voto === 'Sim' ? "bg-emerald-50 text-emerald-600" : 
+                      v.voto === 'Não' ? "bg-rose-50 text-rose-600" : "bg-slate-50 text-slate-600"
+                    )}>
+                      {v.voto === 'Sim' ? <CheckCircle2 size={20} /> : 
+                       v.voto === 'Não' ? <XCircle size={20} /> : <MinusCircle size={20} />}
+                    </div>
+                    <div>
+                      <h4 className="font-bold text-slate-900">{titulo}</h4>
+                      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
+                        <span className="flex items-center gap-1"><Calendar size={12} /> {new Date(v.dataVotacao).toLocaleDateString('pt-BR')}</span>
+                        <span className={cn(
+                          "font-bold uppercase tracking-wider",
+                          v.voto === 'Sim' ? "text-emerald-600" : 
+                          v.voto === 'Não' ? "text-rose-600" : "text-slate-600"
+                        )}>Votou: {v.voto}</span>
+                      </div>
                     </div>
                   </div>
-                </div>
-                <button className="text-slate-400 hover:text-blue-600">
-                  <ExternalLink size={18} />
+                  <span className={cn("text-slate-400 transition-transform", isExpanded ? "rotate-90" : "rotate-0")}>
+                    <ChevronRight size={18} />
+                  </span>
                 </button>
+
+                {isExpanded && (
+                  <div className="border-t border-slate-100 px-6 py-5">
+                    <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                      <div className="rounded-2xl bg-slate-50 p-4">
+                        <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Ementa</div>
+                        <div className="mt-1 text-sm font-semibold text-slate-900">{v.ementa || '—'}</div>
+                      </div>
+                      <div className="rounded-2xl bg-slate-50 p-4">
+                        <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Identificadores</div>
+                        <div className="mt-2 grid grid-cols-1 gap-1 text-xs text-slate-600">
+                          <div><span className="font-bold text-slate-800">Voto ID:</span> {v.votoId}</div>
+                          <div><span className="font-bold text-slate-800">Votação ID:</span> {v.votacaoId}</div>
+                          <div><span className="font-bold text-slate-800">Político ID:</span> {v.politicoId}</div>
+                        </div>
+                      </div>
+                      <div className="rounded-2xl bg-slate-50 p-4">
+                        <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Tipo</div>
+                        <div className="mt-1 text-sm font-semibold text-slate-900">{v.siglaTipo || '—'}</div>
+                      </div>
+                      <div className="rounded-2xl bg-slate-50 p-4">
+                        <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Número/Ano</div>
+                        <div className="mt-1 text-sm font-semibold text-slate-900">
+                          {v.numero != null && v.ano != null ? `${v.numero}/${v.ano}` : '—'}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
               );
             })}

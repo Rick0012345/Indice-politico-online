@@ -30,6 +30,7 @@ model Votacao {
   ano        Int?
   ementa     String?
   dataVotacao DateTime @map("data_votacao") @db.Date
+  aprovacao  Int?
 
   votos VotoDeputado[]
 
