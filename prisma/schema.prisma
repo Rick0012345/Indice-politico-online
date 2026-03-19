@@ -8,13 +8,20 @@ datasource db {
 }
 
 model Politico {
-  id           BigInt  @id @db.BigInt
-  nome         String
-  siglaPartido String  @map("sigla_partido") @db.VarChar(50)
-  siglaUf      String  @map("sigla_uf") @db.VarChar(2)
-  urlFoto      String? @map("url_foto")
-  ativo        Boolean? @default(true)
-  atualizadoEm DateTime? @default(now()) @map("atualizado_em") @db.Timestamptz(6)
+  id             BigInt    @id @db.BigInt
+  cpf            String?   @unique @db.VarChar(11)
+  nome           String
+  nomeCivil      String?   @map("nome_civil")
+  siglaPartido   String    @map("sigla_partido") @db.VarChar(50)
+  siglaUf        String    @map("sigla_uf") @db.VarChar(2)
+  dataNascimento DateTime? @map("data_nascimento") @db.Date
+  sexo           String?   @db.VarChar(1)
+  urlFoto        String?   @map("url_foto")
+  email          String?   @db.VarChar(100)
+  telefone       String?   @db.VarChar(50)
+  situacao       String?   @default("Exercício") @db.VarChar(50)
+  ativo          Boolean?  @default(true)
+  atualizadoEm   DateTime? @default(now()) @map("atualizado_em") @db.Timestamptz(6)
 
   votos      VotoDeputado[]
   despesas   Despesa[]
@@ -24,13 +31,14 @@ model Politico {
 }
 
 model Votacao {
-  id         String   @id
-  siglaTipo  String?  @map("sigla_tipo") @db.VarChar(20)
-  numero     Int?
-  ano        Int?
-  ementa     String?
-  dataVotacao DateTime @map("data_votacao") @db.Date
-  aprovacao  Int?
+  id              String    @id
+  siglaTipo       String?   @map("sigla_tipo") @db.VarChar(20)
+  numero          Int?
+  ano             Int?
+  ementa          String?   @db.Text
+  dataHoraVotacao DateTime? @map("data_hora_votacao") @db.Timestamptz(6)
+  resultado       String?   @db.VarChar(255)
+  aprovacao       Int?
 
   votos VotoDeputado[]
 
@@ -53,26 +61,37 @@ model VotoDeputado {
 }
 
 model Despesa {
-  id          String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  politicoId  BigInt  @map("politico_id") @db.BigInt
-  ano         Int
-  mes         Int
-  tipoDespesa String  @map("tipo_despesa")
-  valorLiquido Decimal @map("valor_liquido") @db.Decimal(10, 2)
-  urlDocumento String? @map("url_documento")
-  fornecedor   String?
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  politicoId        BigInt    @map("politico_id") @db.BigInt
+  ano               Int       @db.SmallInt
+  mes               Int       @db.SmallInt
+  tipoDespesa       String    @map("tipo_despesa") @db.VarChar(255)
+  cnpjCpfFornecedor String?   @map("cnpj_cpf_fornecedor") @db.VarChar(14)
+  nomeFornecedor    String?   @map("nome_fornecedor") @db.VarChar(255)
+  tipoDocumento     String?   @map("tipo_documento") @db.VarChar(50)
+  dataDocumento     DateTime? @map("data_documento") @db.Date
+  numDocumento      String?   @map("num_documento") @db.VarChar(100)
+  valorDocumento    Decimal   @map("valor_documento") @db.Decimal(12, 2)
+  valorGlosa        Decimal?  @default(0) @map("valor_glosa") @db.Decimal(12, 2)
+  valorLiquido      Decimal   @map("valor_liquido") @db.Decimal(12, 2)
+  numLote           String?   @map("num_lote") @db.VarChar(50)
+  numRessarcimento  String?   @map("num_ressarcimento") @db.VarChar(50)
+  parcela           Int?      @default(0) @db.SmallInt
+  urlDocumento      String?   @map("url_documento") @db.Text
 
   politico Politico @relation(fields: [politicoId], references: [id], onDelete: Cascade)
 
   @@index([politicoId], map: "idx_despesas_politico")
+  @@index([cnpjCpfFornecedor], map: "idx_despesas_fornecedor")
+  @@index([ano, mes], map: "idx_despesas_data_competencia")
   @@map("despesas")
 }
 
 model Avaliacao {
   id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   politicoId    BigInt   @map("politico_id") @db.BigInt
-  cpfHash       String   @map("cpf_hash")
-  nota          Int
+  cpfHash       String   @map("cpf_hash") @db.VarChar(255)
+  nota          Int      @db.SmallInt
   dataAvaliacao DateTime? @default(now()) @map("data_avaliacao") @db.Timestamptz(6)
 
   politico Politico @relation(fields: [politicoId], references: [id], onDelete: Cascade)
