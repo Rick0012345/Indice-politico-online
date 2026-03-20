@@ -51,7 +51,7 @@
             },
             {
               "id": "v-6",
-              "name": "data_votacao",
+              "name": "data_hora_votacao",
               "value": "={{ $json.data }}",
               "type": "string"
             },

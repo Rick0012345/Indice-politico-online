@@ -38,14 +38,14 @@ services:
     environment:
       - HOST=0.0.0.0
       - PORT=4000
-      - APP_DB_HOST=app-db
+      - APP_DB_HOST=n8n-db
       - APP_DB_PORT=5432
-      - APP_DB_USER=app
-      - APP_DB_PASSWORD=app
-      - APP_DB_NAME=app
-      - DATABASE_URL=postgresql://app:app@app-db:5432/app?schema=public
+      - APP_DB_USER=n8n
+      - APP_DB_PASSWORD=n8n
+      - APP_DB_NAME=n8n
+      - DATABASE_URL=postgresql://n8n:n8n@n8n-db:5432/n8n?schema=public
     depends_on:
-      app-db:
+      n8n-db:
         condition: service_healthy
     env_file:
       - .env

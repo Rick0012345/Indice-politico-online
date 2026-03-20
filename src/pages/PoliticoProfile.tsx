@@ -85,6 +85,13 @@ export const PoliticoProfile = () => {
   const [votacoesAnosDisponiveis, setVotacoesAnosDisponiveis] = useState<number[]>([]);
   const [despesasAnosDisponiveis, setDespesasAnosDisponiveis] = useState<number[]>([]);
 
+  const formatarDataVotacao = (value: string | null) => {
+    if (!value) return null;
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return null;
+    return d.toLocaleDateString('pt-BR', { timeZone: 'UTC' });
+  };
+
   useEffect(() => {
     const politicoId = id?.trim();
     if (!politicoId) return;
@@ -686,7 +693,7 @@ export const PoliticoProfile = () => {
                       <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
                         <span className="flex items-center gap-1">
                           <Calendar size={12} />{' '}
-                          {v.dataVotacao ? new Date(v.dataVotacao).toLocaleDateString('pt-BR') : 'Data indisponível'}
+                          {formatarDataVotacao(v.dataVotacao) ?? 'Data indisponível'}
                         </span>
                         <span className={cn(
                           "font-bold uppercase tracking-wider",

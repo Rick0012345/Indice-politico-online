@@ -294,7 +294,7 @@
             },
             {
               "id": "id-6",
-              "name": "data_votacao",
+              "name": "data_hora_votacao",
               "value": "={{ $json.data }}",
               "type": "string"
             },
@@ -391,9 +391,9 @@
               "removed": false
             },
             {
-              "id": "data_votacao",
-              "displayName": "data_votacao",
-              "required": true,
+              "id": "data_hora_votacao",
+              "displayName": "data_hora_votacao",
+              "required": false,
               "defaultMatch": false,
               "display": true,
               "type": "dateTime",
