@@ -258,7 +258,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.4,
       "position": [
-        128,
+        96,
         432
       ]
     },
@@ -272,7 +272,7 @@
       "type": "n8n-nodes-base.splitOut",
       "typeVersion": 1,
       "position": [
-        352,
+        272,
         432
       ]
     },
@@ -313,7 +313,7 @@
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
       "position": [
-        528,
+        448,
         432
       ]
     },
@@ -451,7 +451,7 @@
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.6,
       "position": [
-        736,
+        624,
         432
       ],
       "credentials": {
@@ -487,7 +487,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.4,
       "position": [
-        944,
+        816,
         432
       ]
     },
@@ -501,7 +501,7 @@
       "type": "n8n-nodes-base.splitOut",
       "typeVersion": 1,
       "position": [
-        1216,
+        1008,
         432
       ]
     },
@@ -536,8 +536,8 @@
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
       "position": [
-        1104,
-        640
+        1184,
+        432
       ]
     },
     {
@@ -613,8 +613,8 @@
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.6,
       "position": [
-        1312,
-        640
+        1344,
+        432
       ],
       "credentials": {
         "postgres": {
@@ -790,7 +790,7 @@
     "binaryMode": "separate",
     "availableInMCP": false
   },
-  "versionId": "fe29dfcc-2fe9-489b-9a2f-cbba14e0d185",
+  "versionId": "8233f154-aa8b-40e3-8486-0b9ac5230b5a",
   "meta": {
     "templateCredsSetupCompleted": true,
     "instanceId": "7c72b99248d90384dd9122231bdcb69e79eb19b288f01e8691443edde47edc09"

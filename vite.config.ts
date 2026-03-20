@@ -232,7 +232,7 @@ export default defineConfig(({mode}) => {
                     d.tipo_despesa AS tipo,
                     d.valor_liquido::double precision AS valor,
                     d.url_documento AS "urlDocumento",
-                    d.fornecedor
+                    d.nome_fornecedor AS fornecedor
                   FROM despesas d
                   WHERE d.politico_id::text = $1
                   ORDER BY d.ano DESC, d.mes DESC
