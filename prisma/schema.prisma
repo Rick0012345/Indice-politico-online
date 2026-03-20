@@ -36,7 +36,7 @@ model Votacao {
   numero          Int?
   ano             Int?
   ementa          String?   @db.Text
-  dataHoraVotacao DateTime? @map("data_hora_votacao") @db.Timestamptz(6)
+  dataVotacao     DateTime? @map("data_hora_votacao") @db.Timestamptz(6)
   resultado       String?   @db.VarChar(255)
   aprovacao       Int?
 
