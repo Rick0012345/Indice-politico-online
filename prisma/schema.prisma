@@ -66,6 +66,7 @@ model Despesa {
   ano               Int       @db.SmallInt
   mes               Int       @db.SmallInt
   tipoDespesa       String    @map("tipo_despesa") @db.VarChar(255)
+  codDocumento      String?   @unique @map("cod_documento") @db.VarChar(100)
   cnpjCpfFornecedor String?   @map("cnpj_cpf_fornecedor") @db.VarChar(14)
   nomeFornecedor    String?   @map("nome_fornecedor") @db.VarChar(255)
   tipoDocumento     String?   @map("tipo_documento") @db.VarChar(50)

@@ -17,7 +17,8 @@ services:
       - APP_DB_PORT=5432
       - APP_DB_USER=n8n
       - APP_DB_PASSWORD=n8n
-      - APP_DB_NAME=n8n
+      - APP_DB_NAME=catalogo_politico
+      - DATABASE_URL=postgresql://n8n:n8n@n8n-db:5432/catalogo_politico?schema=public
     env_file:
       - .env
     stdin_open: true

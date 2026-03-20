@@ -61,6 +61,19 @@ export const PoliticoProfile = () => {
   const [despesas, setDespesas] = useState<DespesaItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [expandedVotoId, setExpandedVotoId] = useState<string | null>(null);
+  const [votacoesFiltro, setVotacoesFiltro] = useState({
+    texto: '',
+    voto: '',
+    tipo: '',
+    ano: '',
+  });
+  const [despesasFiltro, setDespesasFiltro] = useState({
+    tipo: '',
+    ano: '',
+    mes: '',
+    valorMin: '',
+    valorMax: '',
+  });
 
   useEffect(() => {
     const politicoId = id?.trim();
@@ -117,9 +130,93 @@ export const PoliticoProfile = () => {
     return () => controller.abort();
   }, [id]);
 
-  const despesasTotal = useMemo(() => {
-    return despesas.reduce((acc, curr) => acc + (Number.isFinite(curr.valor) ? curr.valor : 0), 0);
+  const votacoesHasFiltro = Boolean(
+    votacoesFiltro.texto.trim() || votacoesFiltro.voto || votacoesFiltro.tipo || votacoesFiltro.ano,
+  );
+  const despesasHasFiltro = Boolean(
+    despesasFiltro.tipo.trim() ||
+      despesasFiltro.ano ||
+      despesasFiltro.mes ||
+      despesasFiltro.valorMin.trim() ||
+      despesasFiltro.valorMax.trim(),
+  );
+
+  const votacoesOpcoesVoto = useMemo(() => {
+    const values: string[] = votacoes.map((v) => v.voto).filter((v) => typeof v === 'string' && v.trim().length > 0);
+    return Array.from(new Set<string>(values)).sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  }, [votacoes]);
+
+  const votacoesOpcoesTipo = useMemo(() => {
+    const values: string[] = votacoes
+      .map((v) => v.siglaTipo)
+      .filter((v): v is string => typeof v === 'string' && v.trim().length > 0);
+    return Array.from(new Set<string>(values)).sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  }, [votacoes]);
+
+  const votacoesOpcoesAno = useMemo(() => {
+    const values: number[] = votacoes
+      .map((v) => v.ano)
+      .filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
+    return Array.from(new Set<number>(values)).sort((a, b) => b - a);
+  }, [votacoes]);
+
+  const votacoesFiltradas = useMemo(() => {
+    const texto = votacoesFiltro.texto.trim().toLowerCase();
+    const ano = votacoesFiltro.ano ? Number(votacoesFiltro.ano) : null;
+
+    return votacoes.filter((v) => {
+      if (votacoesFiltro.voto && v.voto !== votacoesFiltro.voto) return false;
+      if (votacoesFiltro.tipo && v.siglaTipo !== votacoesFiltro.tipo) return false;
+      if (ano != null && Number.isFinite(ano) && v.ano !== ano) return false;
+      if (texto) {
+        const haystack = `${v.siglaTipo ?? ''} ${v.numero ?? ''}/${v.ano ?? ''} ${v.ementa ?? ''}`.toLowerCase();
+        if (!haystack.includes(texto)) return false;
+      }
+      return true;
+    });
+  }, [votacoes, votacoesFiltro]);
+
+  const despesasOpcoesTipo = useMemo(() => {
+    const values: string[] = despesas.map((d) => d.tipo).filter((v) => typeof v === 'string' && v.trim().length > 0);
+    return Array.from(new Set<string>(values)).sort((a, b) => a.localeCompare(b, 'pt-BR'));
   }, [despesas]);
+
+  const despesasOpcoesAno = useMemo(() => {
+    const values: number[] = despesas
+      .map((d) => d.ano)
+      .filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
+    return Array.from(new Set<number>(values)).sort((a, b) => b - a);
+  }, [despesas]);
+
+  const despesasOpcoesMes = useMemo(() => {
+    const values: number[] = despesas
+      .map((d) => d.mes)
+      .filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
+    return Array.from(new Set<number>(values)).sort((a, b) => a - b);
+  }, [despesas]);
+
+  const despesasFiltradas = useMemo(() => {
+    const tipo = despesasFiltro.tipo.trim().toLowerCase();
+    const ano = despesasFiltro.ano ? Number(despesasFiltro.ano) : null;
+    const mes = despesasFiltro.mes ? Number(despesasFiltro.mes) : null;
+    const valorMin = despesasFiltro.valorMin.trim() ? Number(despesasFiltro.valorMin) : null;
+    const valorMax = despesasFiltro.valorMax.trim() ? Number(despesasFiltro.valorMax) : null;
+
+    return despesas.filter((d) => {
+      if (tipo) {
+        if (!d.tipo?.toLowerCase().includes(tipo)) return false;
+      }
+      if (ano != null && Number.isFinite(ano) && d.ano !== ano) return false;
+      if (mes != null && Number.isFinite(mes) && d.mes !== mes) return false;
+      if (valorMin != null && Number.isFinite(valorMin) && d.valor < valorMin) return false;
+      if (valorMax != null && Number.isFinite(valorMax) && d.valor > valorMax) return false;
+      return true;
+    });
+  }, [despesas, despesasFiltro]);
+
+  const despesasTotal = useMemo(() => {
+    return despesasFiltradas.reduce((acc, curr) => acc + (Number.isFinite(curr.valor) ? curr.valor : 0), 0);
+  }, [despesasFiltradas]);
 
   const tabs = [
     { id: 'geral', label: 'Visão Geral', icon: BarChart3 },
@@ -230,7 +327,7 @@ export const PoliticoProfile = () => {
                   activeTab === tab.id ? "bg-blue-100 text-blue-700" : "bg-slate-100 text-slate-600",
                 )}
               >
-                {votacoes.length}
+                {votacoesHasFiltro ? `${votacoesFiltradas.length}/${votacoes.length}` : votacoes.length}
               </span>
             )}
           </button>
@@ -291,7 +388,78 @@ export const PoliticoProfile = () => {
 
         {activeTab === 'votacoes' && (
           <div className="space-y-4">
-            {votacoes.map((v) => {
+            <div className="rounded-2xl border border-slate-200 bg-white p-5">
+              <div className="flex flex-col gap-4 md:flex-row md:items-end">
+                <div className="flex-1">
+                  <label className="text-xs font-bold text-slate-600">Buscar</label>
+                  <input
+                    type="text"
+                    className="mt-1 block w-full rounded-2xl border-0 py-2 px-3 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:ring-2 focus:ring-inset focus:ring-blue-600 sm:text-sm sm:leading-6"
+                    placeholder="Ementa, tipo, número/ano…"
+                    value={votacoesFiltro.texto}
+                    onChange={(e) => setVotacoesFiltro((curr) => ({...curr, texto: e.target.value}))}
+                  />
+                </div>
+                <div className="w-full md:w-48">
+                  <label className="text-xs font-bold text-slate-600">Voto</label>
+                  <select
+                    className="mt-1 block w-full rounded-2xl border-0 py-2 px-3 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-200 focus:ring-2 focus:ring-inset focus:ring-blue-600 sm:text-sm sm:leading-6"
+                    value={votacoesFiltro.voto}
+                    onChange={(e) => setVotacoesFiltro((curr) => ({...curr, voto: e.target.value}))}
+                  >
+                    <option value="">Todos</option>
+                    {votacoesOpcoesVoto.map((voto) => (
+                      <option key={voto} value={voto}>{voto}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="w-full md:w-40">
+                  <label className="text-xs font-bold text-slate-600">Tipo</label>
+                  <select
+                    className="mt-1 block w-full rounded-2xl border-0 py-2 px-3 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-200 focus:ring-2 focus:ring-inset focus:ring-blue-600 sm:text-sm sm:leading-6"
+                    value={votacoesFiltro.tipo}
+                    onChange={(e) => setVotacoesFiltro((curr) => ({...curr, tipo: e.target.value}))}
+                  >
+                    <option value="">Todos</option>
+                    {votacoesOpcoesTipo.map((tipo) => (
+                      <option key={tipo} value={tipo}>{tipo}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="w-full md:w-32">
+                  <label className="text-xs font-bold text-slate-600">Ano</label>
+                  <select
+                    className="mt-1 block w-full rounded-2xl border-0 py-2 px-3 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-200 focus:ring-2 focus:ring-inset focus:ring-blue-600 sm:text-sm sm:leading-6"
+                    value={votacoesFiltro.ano}
+                    onChange={(e) => setVotacoesFiltro((curr) => ({...curr, ano: e.target.value}))}
+                  >
+                    <option value="">Todos</option>
+                    {votacoesOpcoesAno.map((ano) => (
+                      <option key={ano} value={String(ano)}>{ano}</option>
+                    ))}
+                  </select>
+                </div>
+                <button
+                  type="button"
+                  disabled={!votacoesHasFiltro}
+                  onClick={() => setVotacoesFiltro({texto: '', voto: '', tipo: '', ano: ''})}
+                  className="w-full rounded-2xl bg-slate-100 px-5 py-2 text-sm font-bold text-slate-700 hover:bg-slate-200 disabled:opacity-50 disabled:hover:bg-slate-100 md:w-auto"
+                >
+                  Limpar
+                </button>
+              </div>
+              <div className="mt-3 text-xs font-medium text-slate-500">
+                Mostrando {votacoesFiltradas.length} de {votacoes.length}
+              </div>
+            </div>
+
+            {votacoesFiltradas.length === 0 && (
+              <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center text-slate-600">
+                Nenhuma votação encontrada com esses filtros.
+              </div>
+            )}
+
+            {votacoesFiltradas.map((v) => {
               const titulo =
                 v.siglaTipo && v.numero && v.ano
                   ? `${v.siglaTipo} ${v.numero}/${v.ano}${v.ementa ? ` - ${v.ementa}` : ''}`
@@ -364,39 +532,127 @@ export const PoliticoProfile = () => {
         )}
 
         {activeTab === 'despesas' && (
-          <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="bg-slate-50 border-b border-slate-200">
-                  <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Data</th>
-                  <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Tipo de Despesa</th>
-                  <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider text-right">Valor</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {despesas.map((d) => (
-                  <tr key={d.id} className="hover:bg-slate-50/50 transition-colors">
-                    <td className="px-6 py-4 text-sm text-slate-600">
-                      {new Date(`${d.ano}-${String(d.mes).padStart(2, '0')}-01`).toLocaleDateString('pt-BR')}
-                    </td>
-                    <td className="px-6 py-4 text-sm font-medium text-slate-900">{d.tipo}</td>
-                    <td className="px-6 py-4 text-sm font-bold text-slate-900 text-right">
-                      {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(d.valor)}
+          <div className="space-y-4">
+            <div className="rounded-2xl border border-slate-200 bg-white p-5">
+              <div className="flex flex-col gap-4 md:flex-row md:items-end">
+                <div className="flex-1">
+                  <label className="text-xs font-bold text-slate-600">Tipo</label>
+                  <input
+                    type="text"
+                    className="mt-1 block w-full rounded-2xl border-0 py-2 px-3 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:ring-2 focus:ring-inset focus:ring-blue-600 sm:text-sm sm:leading-6"
+                    placeholder="Ex: Divulgação, Passagens…"
+                    value={despesasFiltro.tipo}
+                    onChange={(e) => setDespesasFiltro((curr) => ({...curr, tipo: e.target.value}))}
+                    list="despesas-tipos"
+                  />
+                  <datalist id="despesas-tipos">
+                    {despesasOpcoesTipo.map((tipo) => (
+                      <option key={tipo} value={tipo} />
+                    ))}
+                  </datalist>
+                </div>
+                <div className="w-full md:w-28">
+                  <label className="text-xs font-bold text-slate-600">Ano</label>
+                  <select
+                    className="mt-1 block w-full rounded-2xl border-0 py-2 px-3 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-200 focus:ring-2 focus:ring-inset focus:ring-blue-600 sm:text-sm sm:leading-6"
+                    value={despesasFiltro.ano}
+                    onChange={(e) => setDespesasFiltro((curr) => ({...curr, ano: e.target.value}))}
+                  >
+                    <option value="">Todos</option>
+                    {despesasOpcoesAno.map((ano) => (
+                      <option key={ano} value={String(ano)}>{ano}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="w-full md:w-28">
+                  <label className="text-xs font-bold text-slate-600">Mês</label>
+                  <select
+                    className="mt-1 block w-full rounded-2xl border-0 py-2 px-3 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-200 focus:ring-2 focus:ring-inset focus:ring-blue-600 sm:text-sm sm:leading-6"
+                    value={despesasFiltro.mes}
+                    onChange={(e) => setDespesasFiltro((curr) => ({...curr, mes: e.target.value}))}
+                  >
+                    <option value="">Todos</option>
+                    {despesasOpcoesMes.map((mes) => (
+                      <option key={mes} value={String(mes)}>{String(mes).padStart(2, '0')}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="w-full md:w-40">
+                  <label className="text-xs font-bold text-slate-600">Valor mín.</label>
+                  <input
+                    inputMode="decimal"
+                    className="mt-1 block w-full rounded-2xl border-0 py-2 px-3 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:ring-2 focus:ring-inset focus:ring-blue-600 sm:text-sm sm:leading-6"
+                    placeholder="0"
+                    value={despesasFiltro.valorMin}
+                    onChange={(e) => setDespesasFiltro((curr) => ({...curr, valorMin: e.target.value}))}
+                  />
+                </div>
+                <div className="w-full md:w-40">
+                  <label className="text-xs font-bold text-slate-600">Valor máx.</label>
+                  <input
+                    inputMode="decimal"
+                    className="mt-1 block w-full rounded-2xl border-0 py-2 px-3 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:ring-2 focus:ring-inset focus:ring-blue-600 sm:text-sm sm:leading-6"
+                    placeholder="0"
+                    value={despesasFiltro.valorMax}
+                    onChange={(e) => setDespesasFiltro((curr) => ({...curr, valorMax: e.target.value}))}
+                  />
+                </div>
+                <button
+                  type="button"
+                  disabled={!despesasHasFiltro}
+                  onClick={() => setDespesasFiltro({tipo: '', ano: '', mes: '', valorMin: '', valorMax: ''})}
+                  className="w-full rounded-2xl bg-slate-100 px-5 py-2 text-sm font-bold text-slate-700 hover:bg-slate-200 disabled:opacity-50 disabled:hover:bg-slate-100 md:w-auto"
+                >
+                  Limpar
+                </button>
+              </div>
+              <div className="mt-3 text-xs font-medium text-slate-500">
+                Mostrando {despesasFiltradas.length} de {despesas.length}
+              </div>
+            </div>
+
+            <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-slate-50 border-b border-slate-200">
+                    <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Data</th>
+                    <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Tipo de Despesa</th>
+                    <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider text-right">Valor</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {despesasFiltradas.length === 0 ? (
+                    <tr>
+                      <td colSpan={3} className="px-6 py-8 text-center text-sm text-slate-600">
+                        Nenhuma despesa encontrada com esses filtros.
+                      </td>
+                    </tr>
+                  ) : (
+                    despesasFiltradas.map((d) => (
+                      <tr key={d.id} className="hover:bg-slate-50/50 transition-colors">
+                        <td className="px-6 py-4 text-sm text-slate-600">
+                          {new Date(`${d.ano}-${String(d.mes).padStart(2, '0')}-01`).toLocaleDateString('pt-BR')}
+                        </td>
+                        <td className="px-6 py-4 text-sm font-medium text-slate-900">{d.tipo}</td>
+                        <td className="px-6 py-4 text-sm font-bold text-slate-900 text-right">
+                          {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(d.valor)}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+                <tfoot>
+                  <tr className="bg-slate-50 font-bold">
+                    <td colSpan={2} className="px-6 py-4 text-sm text-slate-900">Total no período</td>
+                    <td className="px-6 py-4 text-sm text-slate-900 text-right">
+                      {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(
+                        despesasTotal
+                      )}
                     </td>
                   </tr>
-                ))}
-              </tbody>
-              <tfoot>
-                <tr className="bg-slate-50 font-bold">
-                  <td colSpan={2} className="px-6 py-4 text-sm text-slate-900">Total no período</td>
-                  <td className="px-6 py-4 text-sm text-slate-900 text-right">
-                    {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(
-                      despesasTotal
-                    )}
-                  </td>
-                </tr>
-              </tfoot>
-            </table>
+                </tfoot>
+              </table>
+            </div>
           </div>
         )}
 
