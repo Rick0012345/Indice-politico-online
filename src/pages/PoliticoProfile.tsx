@@ -38,7 +38,7 @@ type VotacaoItem = {
   numero: number | null;
   ano: number | null;
   ementa: string | null;
-  dataVotacao: string;
+  dataVotacao: string | null;
   voto: string;
 };
 
@@ -483,7 +483,10 @@ export const PoliticoProfile = () => {
                     <div>
                       <h4 className="font-bold text-slate-900">{titulo}</h4>
                       <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
-                        <span className="flex items-center gap-1"><Calendar size={12} /> {new Date(v.dataVotacao).toLocaleDateString('pt-BR')}</span>
+                        <span className="flex items-center gap-1">
+                          <Calendar size={12} />{' '}
+                          {v.dataVotacao ? new Date(v.dataVotacao).toLocaleDateString('pt-BR') : 'Data indisponível'}
+                        </span>
                         <span className={cn(
                           "font-bold uppercase tracking-wider",
                           v.voto === 'Sim' ? "text-emerald-600" : 

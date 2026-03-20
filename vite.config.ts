@@ -83,11 +83,30 @@ export default defineConfig(({mode}) => {
               }
 
               if (url.pathname === '/api/politicos/ranking') {
-                const filter = url.searchParams.get('filter') ?? 'best';
+                const metricParam = url.searchParams.get('metric');
+                const directionParam = url.searchParams.get('direction');
+                const filter = url.searchParams.get('filter');
+
+                const metric =
+                  metricParam === 'despesas' || metricParam === 'votacoes' || metricParam === 'nota'
+                    ? metricParam
+                    : 'nota';
+
+                const direction =
+                  directionParam === 'asc' || directionParam === 'desc'
+                    ? directionParam
+                    : filter === 'worst'
+                      ? 'asc'
+                      : 'desc';
+
+                const dirSql = direction === 'asc' ? 'ASC' : 'DESC';
+
                 const orderBy =
-                  filter === 'worst'
-                    ? `"notaMedia" ASC, "totalAvaliacoes" DESC, "atualizadoEm" DESC`
-                    : `"notaMedia" DESC, "totalAvaliacoes" DESC, "atualizadoEm" DESC`;
+                  metric === 'despesas'
+                    ? `"totalDespesas" ${dirSql}, "notaMedia" DESC, "totalAvaliacoes" DESC, "atualizadoEm" DESC`
+                    : metric === 'votacoes'
+                      ? `"totalVotacoes" ${dirSql}, "notaMedia" DESC, "totalAvaliacoes" DESC, "atualizadoEm" DESC`
+                      : `"notaMedia" ${dirSql}, "totalAvaliacoes" DESC, "atualizadoEm" DESC`;
 
                 const result = await pool.query(
                   `
@@ -99,12 +118,32 @@ export default defineConfig(({mode}) => {
                     p.url_foto AS foto,
                     COALESCE(AVG(a.nota), 0)::double precision AS "notaMedia",
                     COUNT(a.id)::int AS "totalAvaliacoes",
+                    COALESCE(dsum.total_despesas, 0)::double precision AS "totalDespesas",
+                    COALESCE(vcnt.total_votacoes, 0)::int AS "totalVotacoes",
                     p.atualizado_em AS "atualizadoEm",
                     'Deputado Federal'::text AS cargo
                   FROM politicos p
                   LEFT JOIN avaliacoes a ON a.politico_id = p.id
+                  LEFT JOIN (
+                    SELECT politico_id, SUM(valor_liquido)::double precision AS total_despesas
+                    FROM despesas
+                    GROUP BY politico_id
+                  ) dsum ON dsum.politico_id = p.id
+                  LEFT JOIN (
+                    SELECT politico_id, COUNT(*)::int AS total_votacoes
+                    FROM votos_deputados
+                    GROUP BY politico_id
+                  ) vcnt ON vcnt.politico_id = p.id
                   WHERE p.ativo IS DISTINCT FROM false
-                  GROUP BY p.id, p.nome, p.sigla_partido, p.sigla_uf, p.url_foto, p.atualizado_em
+                  GROUP BY
+                    p.id,
+                    p.nome,
+                    p.sigla_partido,
+                    p.sigla_uf,
+                    p.url_foto,
+                    p.atualizado_em,
+                    dsum.total_despesas,
+                    vcnt.total_votacoes
                   ORDER BY ${orderBy}
                   LIMIT $1
                   `,
@@ -205,12 +244,12 @@ export default defineConfig(({mode}) => {
                     v.numero,
                     v.ano,
                     v.ementa,
-                    v.data_votacao AS "dataVotacao",
+                    v.data_hora_votacao AS "dataVotacao",
                     vd.voto
                   FROM votos_deputados vd
                   JOIN votacoes v ON v.id = vd.votacao_id
                   WHERE vd.politico_id::text = $1
-                  ORDER BY v.data_votacao DESC NULLS LAST
+                  ORDER BY v.data_hora_votacao DESC NULLS LAST
                   LIMIT $2
                   `,
                   [politicoId, limit],
