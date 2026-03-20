@@ -240,7 +240,8 @@ app.get('/api/politicos/:politicoId/votacoes/anos', async (req, res) => {
       `,
       [politicoId],
     );
-    sendJson(res, 200, {items: result.rows.map((r) => r.ano)});
+    const anos = result.rows.map((r) => Number(r.ano)).filter((v) => Number.isFinite(v));
+    sendJson(res, 200, {items: anos});
   } catch {
     sendJson(res, 500, {error: 'Erro ao processar requisição'});
   }
@@ -305,7 +306,8 @@ app.get('/api/politicos/:politicoId/despesas/anos', async (req, res) => {
       `,
       [politicoId],
     );
-    sendJson(res, 200, {items: result.rows.map((r) => r.ano)});
+    const anos = result.rows.map((r) => Number(r.ano)).filter((v) => Number.isFinite(v));
+    sendJson(res, 200, {items: anos});
   } catch {
     sendJson(res, 500, {error: 'Erro ao processar requisição'});
   }

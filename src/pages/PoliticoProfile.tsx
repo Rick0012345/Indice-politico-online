@@ -136,6 +136,17 @@ export const PoliticoProfile = () => {
 
     const run = async () => {
       try {
+        const normalizarAnos = (items?: unknown[]) => {
+          const parsed = (items ?? [])
+            .map((value) => {
+              if (typeof value === 'number') return value;
+              if (typeof value === 'string') return Number(value);
+              return Number.NaN;
+            })
+            .filter((v) => Number.isFinite(v));
+          return Array.from(new Set<number>(parsed)).sort((a, b) => b - a);
+        };
+
         const [votacoesAnosRes, despesasAnosRes] = await Promise.all([
           fetch(`/api/politicos/${encodeURIComponent(politicoId)}/votacoes/anos`, {signal: controller.signal}),
           fetch(`/api/politicos/${encodeURIComponent(politicoId)}/despesas/anos`, {signal: controller.signal}),
@@ -143,16 +154,14 @@ export const PoliticoProfile = () => {
 
         if (votacoesAnosRes.ok) {
           const data = (await votacoesAnosRes.json()) as {items?: unknown[]};
-          const anos = (data.items ?? []).filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
-          setVotacoesAnosDisponiveis(anos);
+          setVotacoesAnosDisponiveis(normalizarAnos(data.items));
         } else {
           setVotacoesAnosDisponiveis([]);
         }
 
         if (despesasAnosRes.ok) {
           const data = (await despesasAnosRes.json()) as {items?: unknown[]};
-          const anos = (data.items ?? []).filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
-          setDespesasAnosDisponiveis(anos);
+          setDespesasAnosDisponiveis(normalizarAnos(data.items));
         } else {
           setDespesasAnosDisponiveis([]);
         }
@@ -354,11 +363,10 @@ export const PoliticoProfile = () => {
   }, [votacoes]);
 
   const votacoesOpcoesAno = useMemo(() => {
-    if (votacoesAnosDisponiveis.length > 0) return votacoesAnosDisponiveis;
     const values: number[] = votacoes
       .map((v) => v.ano)
       .filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
-    return Array.from(new Set<number>(values)).sort((a, b) => b - a);
+    return Array.from(new Set<number>([...votacoesAnosDisponiveis, ...values])).sort((a, b) => b - a);
   }, [votacoes, votacoesAnosDisponiveis]);
 
   const votacoesFiltradas = useMemo(() => {
@@ -383,11 +391,10 @@ export const PoliticoProfile = () => {
   }, [despesas]);
 
   const despesasOpcoesAno = useMemo(() => {
-    if (despesasAnosDisponiveis.length > 0) return despesasAnosDisponiveis;
     const values: number[] = despesas
       .map((d) => d.ano)
       .filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
-    return Array.from(new Set<number>(values)).sort((a, b) => b - a);
+    return Array.from(new Set<number>([...despesasAnosDisponiveis, ...values])).sort((a, b) => b - a);
   }, [despesas, despesasAnosDisponiveis]);
 
   const despesasOpcoesMes = useMemo(() => {
