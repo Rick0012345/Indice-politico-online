@@ -59,7 +59,11 @@ export const PoliticoProfile = () => {
   const [politico, setPolitico] = useState<PoliticoDetail | null>(null);
   const [votacoes, setVotacoes] = useState<VotacaoItem[]>([]);
   const [despesas, setDespesas] = useState<DespesaItem[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingPolitico, setIsLoadingPolitico] = useState(true);
+  const [isLoadingVotacoes, setIsLoadingVotacoes] = useState(false);
+  const [isLoadingDespesas, setIsLoadingDespesas] = useState(false);
+  const [isLoadingMoreVotacoes, setIsLoadingMoreVotacoes] = useState(false);
+  const [isLoadingMoreDespesas, setIsLoadingMoreDespesas] = useState(false);
   const [expandedVotoId, setExpandedVotoId] = useState<string | null>(null);
   const [votacoesFiltro, setVotacoesFiltro] = useState({
     texto: '',
@@ -74,22 +78,25 @@ export const PoliticoProfile = () => {
     valorMin: '',
     valorMax: '',
   });
+  const [votacoesOffset, setVotacoesOffset] = useState(0);
+  const [despesasOffset, setDespesasOffset] = useState(0);
+  const [votacoesHasMore, setVotacoesHasMore] = useState(false);
+  const [despesasHasMore, setDespesasHasMore] = useState(false);
+  const [votacoesAnosDisponiveis, setVotacoesAnosDisponiveis] = useState<number[]>([]);
+  const [despesasAnosDisponiveis, setDespesasAnosDisponiveis] = useState<number[]>([]);
 
   useEffect(() => {
     const politicoId = id?.trim();
     if (!politicoId) return;
 
     const controller = new AbortController();
-    setIsLoading(true);
+    setIsLoadingPolitico(true);
 
     const run = async () => {
       try {
-        const [politicoRes, votacoesRes, despesasRes] = await Promise.all([
-          fetch(`/api/politicos/${encodeURIComponent(politicoId)}`, {signal: controller.signal}),
-          fetch(`/api/politicos/${encodeURIComponent(politicoId)}/votacoes?limit=50`, {signal: controller.signal}),
-          fetch(`/api/politicos/${encodeURIComponent(politicoId)}/despesas?limit=50`, {signal: controller.signal}),
-        ]);
-
+        const politicoRes = await fetch(`/api/politicos/${encodeURIComponent(politicoId)}`, {
+          signal: controller.signal,
+        });
         if (politicoRes.ok) {
           const data = (await politicoRes.json()) as {politico?: PoliticoDetail};
           if (data.politico) {
@@ -103,32 +110,218 @@ export const PoliticoProfile = () => {
         } else {
           setPolitico(null);
         }
-
-        if (votacoesRes.ok) {
-          const data = (await votacoesRes.json()) as {items?: VotacaoItem[]};
-          setVotacoes(data.items ?? []);
-        } else {
-          setVotacoes([]);
-        }
-
-        if (despesasRes.ok) {
-          const data = (await despesasRes.json()) as {items?: DespesaItem[]};
-          setDespesas(data.items ?? []);
-        } else {
-          setDespesas([]);
-        }
       } catch {
         setPolitico(null);
-        setVotacoes([]);
-        setDespesas([]);
       } finally {
-        setIsLoading(false);
+        setIsLoadingPolitico(false);
       }
     };
 
     run();
     return () => controller.abort();
   }, [id]);
+
+  useEffect(() => {
+    const politicoId = id?.trim();
+    if (!politicoId) return;
+
+    const controller = new AbortController();
+
+    const run = async () => {
+      try {
+        const [votacoesAnosRes, despesasAnosRes] = await Promise.all([
+          fetch(`/api/politicos/${encodeURIComponent(politicoId)}/votacoes/anos`, {signal: controller.signal}),
+          fetch(`/api/politicos/${encodeURIComponent(politicoId)}/despesas/anos`, {signal: controller.signal}),
+        ]);
+
+        if (votacoesAnosRes.ok) {
+          const data = (await votacoesAnosRes.json()) as {items?: unknown[]};
+          const anos = (data.items ?? []).filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
+          setVotacoesAnosDisponiveis(anos);
+        } else {
+          setVotacoesAnosDisponiveis([]);
+        }
+
+        if (despesasAnosRes.ok) {
+          const data = (await despesasAnosRes.json()) as {items?: unknown[]};
+          const anos = (data.items ?? []).filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
+          setDespesasAnosDisponiveis(anos);
+        } else {
+          setDespesasAnosDisponiveis([]);
+        }
+      } catch {
+        setVotacoesAnosDisponiveis([]);
+        setDespesasAnosDisponiveis([]);
+      }
+    };
+
+    run();
+    return () => controller.abort();
+  }, [id]);
+
+  useEffect(() => {
+    const politicoId = id?.trim();
+    if (!politicoId) return;
+
+    const controller = new AbortController();
+    const pageSize = 200;
+    const ano = votacoesFiltro.ano ? Number(votacoesFiltro.ano) : null;
+
+    setIsLoadingVotacoes(true);
+    setVotacoes([]);
+    setVotacoesOffset(0);
+    setVotacoesHasMore(false);
+
+    const run = async () => {
+      try {
+        const params = new URLSearchParams();
+        params.set('limit', String(pageSize));
+        params.set('offset', '0');
+        if (ano != null && Number.isFinite(ano)) params.set('ano', String(ano));
+
+        const res = await fetch(
+          `/api/politicos/${encodeURIComponent(politicoId)}/votacoes?${params.toString()}`,
+          {signal: controller.signal},
+        );
+        if (!res.ok) {
+          setVotacoes([]);
+          return;
+        }
+
+        const data = (await res.json()) as {items?: VotacaoItem[]};
+        const items = data.items ?? [];
+        setVotacoes(items);
+        setVotacoesHasMore(items.length === pageSize);
+      } catch {
+        setVotacoes([]);
+      } finally {
+        setIsLoadingVotacoes(false);
+      }
+    };
+
+    run();
+    return () => controller.abort();
+  }, [id, votacoesFiltro.ano]);
+
+  useEffect(() => {
+    const politicoId = id?.trim();
+    if (!politicoId) return;
+
+    const controller = new AbortController();
+    const pageSize = 200;
+    const ano = despesasFiltro.ano ? Number(despesasFiltro.ano) : null;
+    const mes = despesasFiltro.mes ? Number(despesasFiltro.mes) : null;
+
+    setIsLoadingDespesas(true);
+    setDespesas([]);
+    setDespesasOffset(0);
+    setDespesasHasMore(false);
+
+    const run = async () => {
+      try {
+        const params = new URLSearchParams();
+        params.set('limit', String(pageSize));
+        params.set('offset', '0');
+        if (ano != null && Number.isFinite(ano)) params.set('ano', String(ano));
+        if (mes != null && Number.isFinite(mes)) params.set('mes', String(mes));
+
+        const res = await fetch(
+          `/api/politicos/${encodeURIComponent(politicoId)}/despesas?${params.toString()}`,
+          {signal: controller.signal},
+        );
+        if (!res.ok) {
+          setDespesas([]);
+          return;
+        }
+
+        const data = (await res.json()) as {items?: DespesaItem[]};
+        const items = data.items ?? [];
+        setDespesas(items);
+        setDespesasHasMore(items.length === pageSize);
+      } catch {
+        setDespesas([]);
+      } finally {
+        setIsLoadingDespesas(false);
+      }
+    };
+
+    run();
+    return () => controller.abort();
+  }, [id, despesasFiltro.ano, despesasFiltro.mes]);
+
+  const loadMoreVotacoes = async () => {
+    const politicoId = id?.trim();
+    if (!politicoId) return;
+    if (isLoadingMoreVotacoes || isLoadingVotacoes || !votacoesHasMore) return;
+
+    const pageSize = 200;
+    const ano = votacoesFiltro.ano ? Number(votacoesFiltro.ano) : null;
+    const nextOffset = votacoesOffset + pageSize;
+
+    setIsLoadingMoreVotacoes(true);
+    try {
+      const params = new URLSearchParams();
+      params.set('limit', String(pageSize));
+      params.set('offset', String(nextOffset));
+      if (ano != null && Number.isFinite(ano)) params.set('ano', String(ano));
+
+      const res = await fetch(
+        `/api/politicos/${encodeURIComponent(politicoId)}/votacoes?${params.toString()}`,
+      );
+      if (!res.ok) return;
+
+      const data = (await res.json()) as {items?: VotacaoItem[]};
+      const items = data.items ?? [];
+
+      setVotacoes((curr) => {
+        const seen = new Set(curr.map((v) => v.votoId));
+        const appended = items.filter((v) => !seen.has(v.votoId));
+        return appended.length === 0 ? curr : [...curr, ...appended];
+      });
+      setVotacoesOffset(nextOffset);
+      setVotacoesHasMore(items.length === pageSize);
+    } finally {
+      setIsLoadingMoreVotacoes(false);
+    }
+  };
+
+  const loadMoreDespesas = async () => {
+    const politicoId = id?.trim();
+    if (!politicoId) return;
+    if (isLoadingMoreDespesas || isLoadingDespesas || !despesasHasMore) return;
+
+    const pageSize = 200;
+    const ano = despesasFiltro.ano ? Number(despesasFiltro.ano) : null;
+    const mes = despesasFiltro.mes ? Number(despesasFiltro.mes) : null;
+    const nextOffset = despesasOffset + pageSize;
+
+    setIsLoadingMoreDespesas(true);
+    try {
+      const params = new URLSearchParams();
+      params.set('limit', String(pageSize));
+      params.set('offset', String(nextOffset));
+      if (ano != null && Number.isFinite(ano)) params.set('ano', String(ano));
+      if (mes != null && Number.isFinite(mes)) params.set('mes', String(mes));
+
+      const res = await fetch(
+        `/api/politicos/${encodeURIComponent(politicoId)}/despesas?${params.toString()}`,
+      );
+      if (!res.ok) return;
+
+      const data = (await res.json()) as {items?: DespesaItem[]};
+      const items = data.items ?? [];
+
+      setDespesas((curr) => {
+        const seen = new Set(curr.map((d) => d.id));
+        const appended = items.filter((d) => !seen.has(d.id));
+        return appended.length === 0 ? curr : [...curr, ...appended];
+      });
+      setDespesasOffset(nextOffset);
+      setDespesasHasMore(items.length === pageSize);
+    } finally {
+      setIsLoadingMoreDespesas(false);
+    }
+  };
 
   const votacoesHasFiltro = Boolean(
     votacoesFiltro.texto.trim() || votacoesFiltro.voto || votacoesFiltro.tipo || votacoesFiltro.ano,
@@ -154,11 +347,12 @@ export const PoliticoProfile = () => {
   }, [votacoes]);
 
   const votacoesOpcoesAno = useMemo(() => {
+    if (votacoesAnosDisponiveis.length > 0) return votacoesAnosDisponiveis;
     const values: number[] = votacoes
       .map((v) => v.ano)
       .filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
     return Array.from(new Set<number>(values)).sort((a, b) => b - a);
-  }, [votacoes]);
+  }, [votacoes, votacoesAnosDisponiveis]);
 
   const votacoesFiltradas = useMemo(() => {
     const texto = votacoesFiltro.texto.trim().toLowerCase();
@@ -182,11 +376,12 @@ export const PoliticoProfile = () => {
   }, [despesas]);
 
   const despesasOpcoesAno = useMemo(() => {
+    if (despesasAnosDisponiveis.length > 0) return despesasAnosDisponiveis;
     const values: number[] = despesas
       .map((d) => d.ano)
       .filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
     return Array.from(new Set<number>(values)).sort((a, b) => b - a);
-  }, [despesas]);
+  }, [despesas, despesasAnosDisponiveis]);
 
   const despesasOpcoesMes = useMemo(() => {
     const values: number[] = despesas
@@ -225,7 +420,7 @@ export const PoliticoProfile = () => {
     { id: 'noticias', label: 'Notícias', icon: FileText },
   ];
 
-  if (isLoading) {
+  if (isLoadingPolitico) {
     return (
       <div className="mx-auto max-w-7xl px-4 py-12 sm:px-6 lg:px-8">
         <div className="rounded-3xl border border-slate-200 bg-white p-8 text-center text-slate-600">
@@ -453,7 +648,13 @@ export const PoliticoProfile = () => {
               </div>
             </div>
 
-            {votacoesFiltradas.length === 0 && (
+            {isLoadingVotacoes && (
+              <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center text-slate-600">
+                Carregando votações…
+              </div>
+            )}
+
+            {!isLoadingVotacoes && votacoesFiltradas.length === 0 && (
               <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center text-slate-600">
                 Nenhuma votação encontrada com esses filtros.
               </div>
@@ -531,6 +732,19 @@ export const PoliticoProfile = () => {
               </div>
               );
             })}
+
+            {votacoesHasMore && (
+              <div className="flex justify-center">
+                <button
+                  type="button"
+                  onClick={loadMoreVotacoes}
+                  disabled={isLoadingMoreVotacoes}
+                  className="rounded-2xl bg-slate-100 px-6 py-3 text-sm font-bold text-slate-700 hover:bg-slate-200 disabled:opacity-50"
+                >
+                  {isLoadingMoreVotacoes ? 'Carregando…' : 'Carregar mais'}
+                </button>
+              </div>
+            )}
           </div>
         )}
 
@@ -624,7 +838,13 @@ export const PoliticoProfile = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {despesasFiltradas.length === 0 ? (
+                  {isLoadingDespesas ? (
+                    <tr>
+                      <td colSpan={3} className="px-6 py-8 text-center text-sm text-slate-600">
+                        Carregando despesas…
+                      </td>
+                    </tr>
+                  ) : despesasFiltradas.length === 0 ? (
                     <tr>
                       <td colSpan={3} className="px-6 py-8 text-center text-sm text-slate-600">
                         Nenhuma despesa encontrada com esses filtros.
@@ -656,6 +876,19 @@ export const PoliticoProfile = () => {
                 </tfoot>
               </table>
             </div>
+
+            {despesasHasMore && (
+              <div className="flex justify-center">
+                <button
+                  type="button"
+                  onClick={loadMoreDespesas}
+                  disabled={isLoadingMoreDespesas}
+                  className="rounded-2xl bg-slate-100 px-6 py-3 text-sm font-bold text-slate-700 hover:bg-slate-200 disabled:opacity-50"
+                >
+                  {isLoadingMoreDespesas ? 'Carregando…' : 'Carregar mais'}
+                </button>
+              </div>
+            )}
           </div>
         )}
 

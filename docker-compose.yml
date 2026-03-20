@@ -13,16 +13,42 @@ services:
       - CHOKIDAR_USEPOLLING=true
       - CHOKIDAR_INTERVAL=100
       - VITE_USE_POLLING=true
+      - VITE_API_PROXY_TARGET=http://api:4000
       - APP_DB_HOST=n8n-db
       - APP_DB_PORT=5432
       - APP_DB_USER=n8n
       - APP_DB_PASSWORD=n8n
-      - APP_DB_NAME=catalogo_politico
-      - DATABASE_URL=postgresql://n8n:n8n@n8n-db:5432/catalogo_politico?schema=public
+      - APP_DB_NAME=n8n
+      - DATABASE_URL=postgresql://n8n:n8n@n8n-db:5432/n8n?schema=public
     env_file:
       - .env
     stdin_open: true
     tty: true
+
+  api:
+    build:
+      context: .
+      target: development
+    command: npm run api:dev
+    ports:
+      - "4000:4000"
+    volumes:
+      - .:/app
+      - api_node_modules:/app/node_modules
+    environment:
+      - HOST=0.0.0.0
+      - PORT=4000
+      - APP_DB_HOST=n8n-db
+      - APP_DB_PORT=5432
+      - APP_DB_USER=n8n
+      - APP_DB_PASSWORD=n8n
+      - APP_DB_NAME=n8n
+      - DATABASE_URL=postgresql://n8n:n8n@n8n-db:5432/n8n?schema=public
+    depends_on:
+      n8n-db:
+        condition: service_healthy
+    env_file:
+      - .env
 
   n8n-db:
     image: postgres:16-alpine
@@ -69,5 +95,6 @@ services:
 
 volumes:
   app_node_modules:
+  api_node_modules:
   n8n_data:
   n8n_db_data:
