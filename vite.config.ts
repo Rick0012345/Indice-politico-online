@@ -159,6 +159,34 @@ export default defineConfig(({mode}) => {
               return;
             }
 
+            if (url.pathname === '/api/partidos/gastos') {
+              const directionParam = url.searchParams.get('direction');
+              const direction =
+                directionParam === 'asc' || directionParam === 'desc' ? directionParam : 'desc';
+              const dirSql = direction === 'asc' ? 'ASC' : 'DESC';
+
+              const result = await pool!.query(
+                `
+                SELECT
+                  p.sigla_partido AS partido,
+                  COALESCE(SUM(d.valor_liquido), 0)::double precision AS "totalDespesas",
+                  COUNT(DISTINCT p.id)::int AS "totalPoliticos"
+                FROM politicos p
+                LEFT JOIN despesas d ON d.politico_id = p.id
+                WHERE p.ativo IS DISTINCT FROM false
+                  AND p.sigla_partido IS NOT NULL
+                  AND p.sigla_partido <> ''
+                GROUP BY p.sigla_partido
+                ORDER BY "totalDespesas" ${dirSql}, partido ASC
+                LIMIT $1
+                `,
+                [limit],
+              );
+
+              sendJson(res, 200, {items: result.rows});
+              return;
+            }
+
             if (url.pathname === '/api/politicos') {
               const search = (url.searchParams.get('search') ?? '').trim();
 

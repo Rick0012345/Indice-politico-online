@@ -142,6 +142,37 @@ app.get('/api/politicos/ranking', async (req, res) => {
   }
 });
 
+app.get('/api/partidos/gastos', async (req, res) => {
+  try {
+    const limit = parseLimit(req);
+    const directionParam = typeof req.query.direction === 'string' ? req.query.direction : undefined;
+    const direction = directionParam === 'asc' || directionParam === 'desc' ? directionParam : 'desc';
+    const dirSql = direction === 'asc' ? 'ASC' : 'DESC';
+
+    const result = await pool.query(
+      `
+      SELECT
+        p.sigla_partido AS partido,
+        COALESCE(SUM(d.valor_liquido), 0)::double precision AS "totalDespesas",
+        COUNT(DISTINCT p.id)::int AS "totalPoliticos"
+      FROM politicos p
+      LEFT JOIN despesas d ON d.politico_id = p.id
+      WHERE p.ativo IS DISTINCT FROM false
+        AND p.sigla_partido IS NOT NULL
+        AND p.sigla_partido <> ''
+      GROUP BY p.sigla_partido
+      ORDER BY "totalDespesas" ${dirSql}, partido ASC
+      LIMIT $1
+      `,
+      [limit],
+    );
+
+    sendJson(res, 200, {items: result.rows});
+  } catch {
+    sendJson(res, 500, {error: 'Erro ao processar requisição'});
+  }
+});
+
 app.get('/api/politicos', async (req, res) => {
   try {
     const limit = parseLimit(req);

@@ -38,6 +38,8 @@ services:
     environment:
       - HOST=0.0.0.0
       - PORT=4000
+      - CHOKIDAR_USEPOLLING=true
+      - CHOKIDAR_INTERVAL=100
       - APP_DB_HOST=n8n-db
       - APP_DB_PORT=5432
       - APP_DB_USER=n8n

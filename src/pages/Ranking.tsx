@@ -15,11 +15,19 @@ type PoliticoRankingItem = {
   totalVotacoes: number;
 };
 
+type PartidoGastosItem = {
+  partido: string;
+  totalDespesas: number;
+  totalPoliticos: number;
+};
+
 export const Ranking = () => {
   const [metric, setMetric] = useState<'nota' | 'despesas' | 'votacoes'>('nota');
   const [direction, setDirection] = useState<'desc' | 'asc'>('desc');
   const [cargo, setCargo] = useState('Todos');
   const [items, setItems] = useState<PoliticoRankingItem[]>([]);
+  const [partidos, setPartidos] = useState<PartidoGastosItem[]>([]);
+  const [isLoadingPartidos, setIsLoadingPartidos] = useState(false);
 
   const money = useMemo(
     () =>
@@ -64,6 +72,47 @@ export const Ranking = () => {
     run();
     return () => controller.abort();
   }, [metric, direction, cargo]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    const run = async () => {
+      const selectedCargo = cargo === 'Todos' || cargo === 'Todos os Cargos' ? '' : cargo;
+
+      if (selectedCargo && selectedCargo !== 'Deputado Federal') {
+        setPartidos([]);
+        return;
+      }
+
+      setIsLoadingPartidos(true);
+      try {
+        const response = await fetch(
+          `/api/partidos/gastos?limit=10&direction=${encodeURIComponent(direction)}`,
+          {signal: controller.signal},
+        );
+        if (!response.ok) return;
+        const data = (await response.json()) as {items?: PartidoGastosItem[]};
+        setPartidos(
+          (data.items ?? []).filter(
+            (p): p is PartidoGastosItem =>
+              typeof p.partido === 'string' &&
+              typeof p.totalDespesas === 'number' &&
+              typeof p.totalPoliticos === 'number',
+          ),
+        );
+      } catch {
+      } finally {
+        setIsLoadingPartidos(false);
+      }
+    };
+
+    run();
+    return () => controller.abort();
+  }, [cargo, direction]);
+
+  const maxDespesaPartido = useMemo(() => {
+    return partidos.length > 0 ? Math.max(0, ...partidos.map((p) => p.totalDespesas ?? 0)) : 0;
+  }, [partidos]);
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-12 sm:px-6 lg:px-8">
@@ -117,6 +166,65 @@ export const Ranking = () => {
           </select>
         </div>
       </div>
+
+      <section className="mb-10 overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
+        <div className="flex items-center justify-between gap-4 border-b border-slate-200 bg-slate-50 px-6 py-5">
+          <div>
+            <h2 className="text-lg font-extrabold text-slate-900">
+              {direction === 'desc' ? 'Partidos que mais gastam' : 'Partidos que menos gastam'}
+            </h2>
+            <p className="mt-1 text-sm text-slate-600">
+              Total de despesas somadas por partido (deputados federais).
+            </p>
+          </div>
+          <div className="text-sm font-semibold text-slate-500 tabular-nums">
+            Top {Math.max(0, partidos.length)}
+          </div>
+        </div>
+
+        <div className="px-6 py-6">
+          {isLoadingPartidos ? (
+            <div className="text-sm font-medium text-slate-500">Carregando…</div>
+          ) : partidos.length === 0 ? (
+            <div className="text-sm font-medium text-slate-500">Sem dados para exibir.</div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {partidos.map((p, index) => {
+                const pct =
+                  maxDespesaPartido > 0
+                    ? Math.max(0, Math.min(100, (p.totalDespesas / maxDespesaPartido) * 100))
+                    : 0;
+
+                return (
+                  <div key={`${p.partido}-${index}`} className="rounded-2xl border border-slate-200 p-4">
+                    <div className="flex items-center justify-between gap-4">
+                      <div className="flex items-baseline gap-3">
+                        <span className="text-xs font-black text-slate-400 tabular-nums">
+                          #{index + 1}
+                        </span>
+                        <span className="text-base font-extrabold text-slate-900">{p.partido}</span>
+                        <span className="text-xs font-semibold text-slate-500">
+                          {p.totalPoliticos.toLocaleString('pt-BR')} parlamentares
+                        </span>
+                      </div>
+                      <div className="text-sm font-extrabold text-slate-900 tabular-nums">
+                        {money.format(p.totalDespesas ?? 0)}
+                      </div>
+                    </div>
+
+                    <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-slate-100" aria-hidden="true">
+                      <div
+                        className="h-full rounded-full bg-blue-600"
+                        style={{width: `${pct}%`}}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </section>
 
       <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
         <div className="overflow-x-auto">
