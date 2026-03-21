@@ -223,7 +223,9 @@
       ],
       "settings": {
         "continueOnFail": true
-      }
+      },
+      "retryOnFail": true,
+      "onError": "continueRegularOutput"
     },
     {
       "parameters": {
@@ -289,7 +291,7 @@
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
       "position": [
-        1312,
+        1360,
         -144
       ]
     },
@@ -398,11 +400,11 @@
           "parameters": [
             {
               "name": "dataInicio",
-              "value": "2023-01-01"
+              "value": "2026-01-01"
             },
             {
               "name": "dataFim",
-              "value": "2023-03-30"
+              "value": "2026-03-21"
             },
             {
               "name": "itens",
@@ -419,7 +421,9 @@
       "position": [
         -208,
         192
-      ]
+      ],
+      "retryOnFail": true,
+      "waitBetweenTries": 3000
     },
     {
       "parameters": {
@@ -445,7 +449,7 @@
       "type": "n8n-nodes-base.splitOut",
       "typeVersion": 1,
       "position": [
-        1120,
+        1184,
         -144
       ]
     },
@@ -628,7 +632,7 @@
     "binaryMode": "separate",
     "availableInMCP": false
   },
-  "versionId": "ae531d46-746b-4e8b-8f85-9d9d9fac1401",
+  "versionId": "2d093c18-b734-4623-becc-37339d74e256",
   "meta": {
     "instanceId": "7c72b99248d90384dd9122231bdcb69e79eb19b288f01e8691443edde47edc09"
   },
