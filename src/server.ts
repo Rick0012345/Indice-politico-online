@@ -36,9 +36,25 @@ const parseOptionalInt = (raw: unknown) => {
   return Number.isFinite(num) ? num : null;
 };
 
+type PoliticoStatusFilter = 'ativo' | 'inativo' | 'todos';
+
+const parsePoliticoStatusFilter = (req: Request): PoliticoStatusFilter => {
+  const raw = typeof req.query.status === 'string' ? req.query.status : undefined;
+  if (raw === 'inativo' || raw === 'todos') return raw;
+  return 'ativo';
+};
+
+const buildPoliticoStatusWhereSql = (status: PoliticoStatusFilter) => {
+  if (status === 'todos') return '1 = 1';
+  if (status === 'inativo') return 'p.ativo = false';
+  return 'p.ativo IS DISTINCT FROM false';
+};
+
 app.get('/api/politicos/novos', async (req, res) => {
   try {
     const limit = parseLimit(req);
+    const status = parsePoliticoStatusFilter(req);
+    const statusWhere = buildPoliticoStatusWhereSql(status);
     const result = await pool.query(
       `
       SELECT
@@ -47,14 +63,24 @@ app.get('/api/politicos/novos', async (req, res) => {
         p.sigla_partido AS partido,
         p.sigla_uf AS estado,
         p.url_foto AS foto,
+        COALESCE(p.ativo, true) AS ativo,
+        p.situacao,
         COALESCE(AVG(a.nota), 0)::double precision AS "notaMedia",
         COUNT(a.id)::int AS "totalAvaliacoes",
         p.atualizado_em AS "atualizadoEm",
         'Deputado Federal'::text AS cargo
       FROM politicos p
       LEFT JOIN avaliacoes a ON a.politico_id = p.id
-      WHERE p.ativo IS DISTINCT FROM false
-      GROUP BY p.id, p.nome, p.sigla_partido, p.sigla_uf, p.url_foto, p.atualizado_em
+      WHERE ${statusWhere}
+      GROUP BY
+        p.id,
+        p.nome,
+        p.sigla_partido,
+        p.sigla_uf,
+        p.url_foto,
+        p.ativo,
+        p.situacao,
+        p.atualizado_em
       ORDER BY p.atualizado_em DESC
       LIMIT $1
       `,
@@ -72,6 +98,8 @@ app.get('/api/politicos/ranking', async (req, res) => {
     const metricParam = typeof req.query.metric === 'string' ? req.query.metric : undefined;
     const directionParam = typeof req.query.direction === 'string' ? req.query.direction : undefined;
     const filterParam = typeof req.query.filter === 'string' ? req.query.filter : undefined;
+    const status = parsePoliticoStatusFilter(req);
+    const statusWhere = buildPoliticoStatusWhereSql(status);
 
     const metric =
       metricParam === 'despesas' || metricParam === 'votacoes' || metricParam === 'nota'
@@ -102,6 +130,8 @@ app.get('/api/politicos/ranking', async (req, res) => {
         p.sigla_partido AS partido,
         p.sigla_uf AS estado,
         p.url_foto AS foto,
+        COALESCE(p.ativo, true) AS ativo,
+        p.situacao,
         COALESCE(AVG(a.nota), 0)::double precision AS "notaMedia",
         COUNT(a.id)::int AS "totalAvaliacoes",
         COALESCE(dsum.total_despesas, 0)::double precision AS "totalDespesas",
@@ -120,13 +150,15 @@ app.get('/api/politicos/ranking', async (req, res) => {
         FROM votos_deputados
         GROUP BY politico_id
       ) vcnt ON vcnt.politico_id = p.id
-      WHERE p.ativo IS DISTINCT FROM false
+      WHERE ${statusWhere}
       GROUP BY
         p.id,
         p.nome,
         p.sigla_partido,
         p.sigla_uf,
         p.url_foto,
+        p.ativo,
+        p.situacao,
         p.atualizado_em,
         dsum.total_despesas,
         vcnt.total_votacoes
@@ -148,6 +180,8 @@ app.get('/api/partidos/gastos', async (req, res) => {
     const directionParam = typeof req.query.direction === 'string' ? req.query.direction : undefined;
     const direction = directionParam === 'asc' || directionParam === 'desc' ? directionParam : 'desc';
     const dirSql = direction === 'asc' ? 'ASC' : 'DESC';
+    const status = parsePoliticoStatusFilter(req);
+    const statusWhere = buildPoliticoStatusWhereSql(status);
 
     const result = await pool.query(
       `
@@ -157,7 +191,7 @@ app.get('/api/partidos/gastos', async (req, res) => {
         COUNT(DISTINCT p.id)::int AS "totalPoliticos"
       FROM politicos p
       LEFT JOIN despesas d ON d.politico_id = p.id
-      WHERE p.ativo IS DISTINCT FROM false
+      WHERE ${statusWhere}
         AND p.sigla_partido IS NOT NULL
         AND p.sigla_partido <> ''
       GROUP BY p.sigla_partido
@@ -178,8 +212,9 @@ app.get('/api/politicos', async (req, res) => {
     const limit = parseLimit(req);
     const offset = parseOffset(req);
     const search = typeof req.query.search === 'string' ? req.query.search.trim() : '';
+    const status = parsePoliticoStatusFilter(req);
 
-    const where: string[] = ['p.ativo IS DISTINCT FROM false'];
+    const where: string[] = [buildPoliticoStatusWhereSql(status)];
     const params: Array<string | number> = [];
 
     if (search) {
@@ -200,6 +235,8 @@ app.get('/api/politicos', async (req, res) => {
         p.sigla_partido AS partido,
         p.sigla_uf AS estado,
         p.url_foto AS foto,
+        COALESCE(p.ativo, true) AS ativo,
+        p.situacao,
         COALESCE(AVG(a.nota), 0)::double precision AS "notaMedia",
         COUNT(a.id)::int AS "totalAvaliacoes",
         p.atualizado_em AS "atualizadoEm",
@@ -207,7 +244,15 @@ app.get('/api/politicos', async (req, res) => {
       FROM politicos p
       LEFT JOIN avaliacoes a ON a.politico_id = p.id
       WHERE ${where.join(' AND ')}
-      GROUP BY p.id, p.nome, p.sigla_partido, p.sigla_uf, p.url_foto, p.atualizado_em
+      GROUP BY
+        p.id,
+        p.nome,
+        p.sigla_partido,
+        p.sigla_uf,
+        p.url_foto,
+        p.ativo,
+        p.situacao,
+        p.atualizado_em
       ORDER BY p.nome ASC
       LIMIT $${params.length - 1}
       OFFSET $${params.length}
@@ -232,6 +277,8 @@ app.get('/api/politicos/:politicoId', async (req, res) => {
         p.sigla_partido AS partido,
         p.sigla_uf AS estado,
         p.url_foto AS foto,
+        COALESCE(p.ativo, true) AS ativo,
+        p.situacao,
         COALESCE(AVG(a.nota), 0)::double precision AS "notaMedia",
         COUNT(a.id)::int AS "totalAvaliacoes",
         p.atualizado_em AS "atualizadoEm",
@@ -239,7 +286,15 @@ app.get('/api/politicos/:politicoId', async (req, res) => {
       FROM politicos p
       LEFT JOIN avaliacoes a ON a.politico_id = p.id
       WHERE p.id::text = $1
-      GROUP BY p.id, p.nome, p.sigla_partido, p.sigla_uf, p.url_foto, p.atualizado_em
+      GROUP BY
+        p.id,
+        p.nome,
+        p.sigla_partido,
+        p.sigla_uf,
+        p.url_foto,
+        p.ativo,
+        p.situacao,
+        p.atualizado_em
       LIMIT 1
       `,
       [politicoId],

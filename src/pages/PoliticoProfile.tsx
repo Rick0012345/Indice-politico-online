@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { 
-  Star, 
+import {
+  Star,
   ChevronRight,
   ChevronLeft, 
   Calendar, 
@@ -15,6 +15,11 @@ import {
   BarChart3
 } from 'lucide-react';
 import { cn } from '../lib/utils';
+import {
+  getPoliticoSituacaoLabel,
+  getPoliticoStatusClasses,
+  getPoliticoStatusLabel,
+} from '../lib/politicoStatus';
 import { EvaluationModal } from '../components/EvaluationModal';
 
 type PoliticoDetail = {
@@ -26,6 +31,8 @@ type PoliticoDetail = {
   foto: string;
   notaMedia: number;
   totalAvaliacoes: number;
+  ativo?: boolean | null;
+  situacao?: string | null;
   presenca?: number | null;
   alinhamentoGoverno?: number | null;
 };
@@ -457,6 +464,7 @@ export const PoliticoProfile = () => {
   const presencaValue = politico.presenca ?? 0;
   const alinhamentoLabel = politico.alinhamentoGoverno == null ? '—' : `${politico.alinhamentoGoverno}%`;
   const alinhamentoValue = politico.alinhamentoGoverno ?? 0;
+  const situacaoLabel = getPoliticoSituacaoLabel(politico);
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
@@ -480,6 +488,21 @@ export const PoliticoProfile = () => {
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
               <div>
                 <h1 className="text-3xl font-extrabold text-slate-900">{politico.nome}</h1>
+                <div className="mt-3 flex flex-wrap items-center justify-center gap-2 md:justify-start">
+                  <span
+                    className={cn(
+                      'inline-flex rounded-full px-3 py-1 text-xs font-bold ring-1 ring-inset',
+                      getPoliticoStatusClasses(politico),
+                    )}
+                  >
+                    {getPoliticoStatusLabel(politico)}
+                  </span>
+                  {situacaoLabel && (
+                    <span className="inline-flex rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-700 ring-1 ring-inset ring-slate-200">
+                      Situacao: {situacaoLabel}
+                    </span>
+                  )}
+                </div>
                 <p className="text-lg font-medium text-slate-500">
                   {politico.partido} • {politico.estado} • {politico.cargo}
                 </p>
