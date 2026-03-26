@@ -1,3 +1,5 @@
+import 'dotenv/config';
+import {createHash} from 'node:crypto';
 import express, {type Request, type Response} from 'express';
 import {Pool} from 'pg';
 
@@ -5,13 +7,17 @@ const app = express();
 app.disable('x-powered-by');
 app.use(express.json({limit: '1mb'}));
 
-const pool = new Pool({
-  host: process.env.APP_DB_HOST ?? 'n8n-db',
-  port: Number(process.env.APP_DB_PORT ?? 5432),
-  user: process.env.APP_DB_USER ?? 'n8n',
-  password: process.env.APP_DB_PASSWORD ?? 'n8n',
-  database: process.env.APP_DB_NAME ?? 'n8n',
-});
+const databaseUrl = process.env.DATABASE_URL?.trim();
+
+const pool = databaseUrl
+  ? new Pool({connectionString: databaseUrl})
+  : new Pool({
+      host: process.env.APP_DB_HOST ?? 'n8n-db',
+      port: Number(process.env.APP_DB_PORT ?? 5432),
+      user: process.env.APP_DB_USER ?? 'n8n',
+      password: process.env.APP_DB_PASSWORD ?? 'n8n',
+      database: process.env.APP_DB_NAME ?? 'n8n',
+    });
 
 const sendJson = (res: Response, statusCode: number, body: unknown) => {
   res.status(statusCode).json(body);
@@ -49,6 +55,44 @@ const buildPoliticoStatusWhereSql = (status: PoliticoStatusFilter) => {
   if (status === 'inativo') return 'p.ativo = false';
   return 'p.ativo IS DISTINCT FROM false';
 };
+
+const normalizeCpf = (value: unknown) => {
+  if (typeof value !== 'string') return '';
+  return value.replace(/\D/g, '').slice(0, 11);
+};
+
+const calculateCpfCheckDigit = (baseDigits: string) => {
+  let sum = 0;
+  const startWeight = baseDigits.length + 1;
+
+  for (let index = 0; index < baseDigits.length; index += 1) {
+    sum += Number(baseDigits[index]) * (startWeight - index);
+  }
+
+  const remainder = sum % 11;
+  return remainder < 2 ? 0 : 11 - remainder;
+};
+
+const isValidCpf = (cpf: string) => {
+  if (cpf.length !== 11) return false;
+  if (/^(\d)\1{10}$/.test(cpf)) return false;
+
+  const firstDigit = calculateCpfCheckDigit(cpf.slice(0, 9));
+  const secondDigit = calculateCpfCheckDigit(cpf.slice(0, 10));
+
+  return firstDigit === Number(cpf[9]) && secondDigit === Number(cpf[10]);
+};
+
+const parseNota = (value: unknown) => {
+  const parsed =
+    typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : Number.NaN;
+
+  if (!Number.isInteger(parsed)) return null;
+  if (parsed < 1 || parsed > 5) return null;
+  return parsed;
+};
+
+const hashCpf = (cpf: string) => createHash('sha256').update(cpf).digest('hex');
 
 app.get('/api/politicos/novos', async (req, res) => {
   try {
@@ -309,6 +353,94 @@ app.get('/api/politicos/:politicoId', async (req, res) => {
     sendJson(res, 200, {politico});
   } catch {
     sendJson(res, 500, {error: 'Erro ao processar requisição'});
+  }
+});
+
+app.post('/api/politicos/:politicoId/avaliacoes', async (req, res) => {
+  try {
+    const {politicoId} = req.params;
+    const cpf = normalizeCpf(req.body?.cpf);
+    const nota = parseNota(req.body?.nota);
+
+    if (!isValidCpf(cpf)) {
+      sendJson(res, 400, {error: 'CPF invalido. Confira os numeros e tente novamente.'});
+      return;
+    }
+
+    if (nota == null) {
+      sendJson(res, 400, {error: 'A nota deve ser um numero inteiro entre 1 e 5.'});
+      return;
+    }
+
+    const politicoResult = await pool.query<{id: string}>(
+      `
+      SELECT p.id::text AS id
+      FROM politicos p
+      WHERE p.id::text = $1
+      LIMIT 1
+      `,
+      [politicoId],
+    );
+
+    const politico = politicoResult.rows[0];
+
+    if (!politico) {
+      sendJson(res, 404, {error: 'Politico nao encontrado.'});
+      return;
+    }
+
+    const cpfHash = hashCpf(cpf);
+    const existingResult = await pool.query(
+      `
+      SELECT a.id
+      FROM avaliacoes a
+      WHERE a.politico_id::text = $1
+        AND a.cpf_hash = $2
+      LIMIT 1
+      `,
+      [politico.id, cpfHash],
+    );
+
+    await pool.query(
+      `
+      INSERT INTO avaliacoes (politico_id, cpf_hash, nota)
+      VALUES ($1::bigint, $2, $3)
+      ON CONFLICT (politico_id, cpf_hash)
+      DO UPDATE SET
+        nota = EXCLUDED.nota,
+        data_avaliacao = NOW()
+      `,
+      [politico.id, cpfHash, nota],
+    );
+
+    const summaryResult = await pool.query<{
+      notaMedia: number;
+      totalAvaliacoes: number;
+    }>(
+      `
+      SELECT
+        COALESCE(AVG(a.nota), 0)::double precision AS "notaMedia",
+        COUNT(a.id)::int AS "totalAvaliacoes"
+      FROM avaliacoes a
+      WHERE a.politico_id::text = $1
+      `,
+      [politico.id],
+    );
+
+    const summary = summaryResult.rows[0] ?? {notaMedia: 0, totalAvaliacoes: 0};
+    const action = existingResult.rowCount > 0 ? 'updated' : 'created';
+
+    sendJson(res, 200, {
+      action,
+      notaMedia: summary.notaMedia,
+      totalAvaliacoes: summary.totalAvaliacoes,
+      message:
+        action === 'updated'
+          ? 'Avaliacao atualizada com sucesso.'
+          : 'Avaliacao registrada com sucesso.',
+    });
+  } catch {
+    sendJson(res, 500, {error: 'Erro ao registrar avaliacao.'});
   }
 });
 

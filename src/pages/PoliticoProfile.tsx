@@ -434,6 +434,18 @@ export const PoliticoProfile = () => {
     return despesasFiltradas.reduce((acc, curr) => acc + (Number.isFinite(curr.valor) ? curr.valor : 0), 0);
   }, [despesasFiltradas]);
 
+  const handleEvaluationSaved = (payload: {notaMedia: number; totalAvaliacoes: number}) => {
+    setPolitico((current) =>
+      current
+        ? {
+            ...current,
+            notaMedia: payload.notaMedia,
+            totalAvaliacoes: payload.totalAvaliacoes,
+          }
+        : current,
+    );
+  };
+
   const tabs = [
     { id: 'geral', label: 'Visão Geral', icon: BarChart3 },
     { id: 'votacoes', label: 'Votações', icon: CheckCircle2 },
@@ -518,6 +530,9 @@ export const PoliticoProfile = () => {
                   ))}
                 </div>
                 <span className="text-2xl font-black text-slate-900">{politico.notaMedia.toFixed(1)}</span>
+                <span className="text-xs font-semibold text-slate-500">
+                  {politico.totalAvaliacoes.toLocaleString('pt-BR')} avaliacoes
+                </span>
                 <span className="text-[10px] uppercase tracking-widest font-bold text-slate-400">Nota Média</span>
               </div>
             </div>
@@ -939,7 +954,9 @@ export const PoliticoProfile = () => {
       <EvaluationModal 
         isOpen={isModalOpen} 
         onClose={() => setIsModalOpen(false)} 
+        politicoId={politico.id}
         politicoName={politico.nome} 
+        onEvaluationSaved={handleEvaluationSaved}
       />
     </div>
   );
