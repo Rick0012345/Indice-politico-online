@@ -35,6 +35,7 @@ export const EvaluationModal = ({
   const [rating, setRating] = useState(0);
   const [hoveredRating, setHoveredRating] = useState(0);
   const [cpf, setCpf] = useState('');
+  const [comment, setComment] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
@@ -47,6 +48,7 @@ export const EvaluationModal = ({
     setRating(0);
     setHoveredRating(0);
     setCpf('');
+    setComment('');
     setIsSubmitting(false);
     setErrorMessage(null);
     setSuccessMessage(null);
@@ -76,11 +78,13 @@ export const EvaluationModal = ({
         body: JSON.stringify({
           cpf: cpfDigits,
           nota: rating,
+          comentario: comment.trim() || null,
         }),
       });
 
       const data = (await response.json()) as {
         action?: 'created' | 'updated';
+        comentario?: string | null;
         error?: string;
         message?: string;
         notaMedia?: number;
@@ -173,6 +177,28 @@ export const EvaluationModal = ({
                   />
                 </button>
               ))}
+            </div>
+
+            <div className="mb-6">
+              <label htmlFor="comentario" className="text-sm font-bold text-slate-700">
+                Comentario (opcional)
+              </label>
+              <textarea
+                id="comentario"
+                rows={4}
+                maxLength={500}
+                value={comment}
+                onChange={(event) => {
+                  setComment(event.target.value);
+                  if (errorMessage) setErrorMessage(null);
+                }}
+                className="mt-2 block w-full resize-none rounded-2xl border-0 px-4 py-3 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:ring-2 focus:ring-inset focus:ring-blue-600 sm:text-sm"
+                placeholder="Conte em poucas palavras o motivo da sua nota."
+              />
+              <div className="mt-2 flex items-center justify-between gap-2 text-xs text-slate-500">
+                <span>Seu comentario sera salvo junto com a avaliacao.</span>
+                <span>{comment.length}/500</span>
+              </div>
             </div>
 
             <div className="mb-6">

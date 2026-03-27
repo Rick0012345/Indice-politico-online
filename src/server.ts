@@ -92,6 +92,28 @@ const parseNota = (value: unknown) => {
   return parsed;
 };
 
+const parseComentario = (value: unknown) => {
+  if (value == null) {
+    return {comentario: null, error: null};
+  }
+
+  if (typeof value !== 'string') {
+    return {comentario: null, error: 'O comentario informado e invalido.'};
+  }
+
+  const comentario = value.trim();
+
+  if (comentario.length === 0) {
+    return {comentario: null, error: null};
+  }
+
+  if (comentario.length > 500) {
+    return {comentario: null, error: 'O comentario deve ter no maximo 500 caracteres.'};
+  }
+
+  return {comentario, error: null};
+};
+
 const hashCpf = (cpf: string) => createHash('sha256').update(cpf).digest('hex');
 
 app.get('/api/politicos/novos', async (req, res) => {
@@ -377,6 +399,7 @@ app.post('/api/politicos/:politicoId/avaliacoes', async (req, res) => {
     const {politicoId} = req.params;
     const cpf = normalizeCpf(req.body?.cpf);
     const nota = parseNota(req.body?.nota);
+    const {comentario, error: comentarioError} = parseComentario(req.body?.comentario);
 
     if (!isValidCpf(cpf)) {
       sendJson(res, 400, {error: 'CPF invalido. Confira os numeros e tente novamente.'});
@@ -385,6 +408,11 @@ app.post('/api/politicos/:politicoId/avaliacoes', async (req, res) => {
 
     if (nota == null) {
       sendJson(res, 400, {error: 'A nota deve ser um numero inteiro entre 1 e 5.'});
+      return;
+    }
+
+    if (comentarioError) {
+      sendJson(res, 400, {error: comentarioError});
       return;
     }
 
@@ -419,14 +447,15 @@ app.post('/api/politicos/:politicoId/avaliacoes', async (req, res) => {
 
     await pool.query(
       `
-      INSERT INTO avaliacoes (politico_id, cpf_hash, nota)
-      VALUES ($1::bigint, $2, $3)
+      INSERT INTO avaliacoes (politico_id, cpf_hash, nota, comentario)
+      VALUES ($1::bigint, $2, $3, $4)
       ON CONFLICT (politico_id, cpf_hash)
       DO UPDATE SET
         nota = EXCLUDED.nota,
+        comentario = EXCLUDED.comentario,
         data_avaliacao = NOW()
       `,
-      [politico.id, cpfHash, nota],
+      [politico.id, cpfHash, nota, comentario],
     );
 
     const summaryResult = await pool.query<{
@@ -448,6 +477,7 @@ app.post('/api/politicos/:politicoId/avaliacoes', async (req, res) => {
 
     sendJson(res, 200, {
       action,
+      comentario,
       notaMedia: summary.notaMedia,
       totalAvaliacoes: summary.totalAvaliacoes,
       message:

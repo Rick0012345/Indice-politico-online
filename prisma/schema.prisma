@@ -93,6 +93,7 @@ model Avaliacao {
   politicoId    BigInt   @map("politico_id") @db.BigInt
   cpfHash       String   @map("cpf_hash") @db.VarChar(255)
   nota          Int      @db.SmallInt
+  comentario    String?  @db.Text
   dataAvaliacao DateTime? @default(now()) @map("data_avaliacao") @db.Timestamptz(6)
 
   politico Politico @relation(fields: [politicoId], references: [id], onDelete: Cascade)
