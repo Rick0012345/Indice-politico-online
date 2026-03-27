@@ -119,6 +119,19 @@ export const Home = () => {
   const [bestPoliticos, setBestPoliticos] = useState<PoliticoCardModel[]>([]);
   const [worstPoliticos, setWorstPoliticos] = useState<PoliticoCardModel[]>([]);
   const [searchResults, setSearchResults] = useState<PoliticoCardModel[]>([]);
+  const trimmedSearch = search.trim();
+  const showSearchFeedback = trimmedSearch.length >= 2;
+  const topSearchSuggestion = searchResults[0] ?? null;
+  const secondarySearchSuggestions = searchResults.slice(1, 5);
+
+  const inlineSearchCompletion =
+    topSearchSuggestion &&
+    showSearchFeedback &&
+    topSearchSuggestion.nome.toLocaleLowerCase('pt-BR').startsWith(
+      trimmedSearch.toLocaleLowerCase('pt-BR'),
+    )
+      ? topSearchSuggestion.nome.slice(trimmedSearch.length)
+      : '';
 
   useEffect(() => {
     const controller = new AbortController();
@@ -208,7 +221,7 @@ export const Home = () => {
     const controller = new AbortController();
 
     const run = async () => {
-      const q = search.trim();
+      const q = trimmedSearch;
       if (q.length < 2) {
         setSearchResults([]);
         return;
@@ -239,11 +252,27 @@ export const Home = () => {
       clearTimeout(timeoutId);
       controller.abort();
     };
-  }, [search, status]);
+  }, [trimmedSearch, status]);
+
+  const handleSearchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    const isCursorAtEnd =
+      event.currentTarget.selectionStart === event.currentTarget.value.length &&
+      event.currentTarget.selectionEnd === event.currentTarget.value.length;
+
+    if (
+      topSearchSuggestion &&
+      inlineSearchCompletion &&
+      isCursorAtEnd &&
+      (event.key === 'Tab' || event.key === 'ArrowRight')
+    ) {
+      event.preventDefault();
+      setSearch(topSearchSuggestion.nome);
+    }
+  };
 
   return (
     <div className="flex flex-col gap-16 pb-20">
-      <section className="relative overflow-hidden bg-slate-50 py-24 sm:py-32">
+      <section className="relative overflow-hidden bg-slate-50 py-12 sm:py-16">
         <div className="absolute inset-0 -z-10 bg-[radial-gradient(45rem_50rem_at_top,theme(colors.blue.100),theme(colors.white))] opacity-20" />
         <div className="mx-auto max-w-7xl px-4 text-center sm:px-6 lg:px-8">
           <h1 className="text-4xl font-extrabold tracking-tight text-slate-900 sm:text-6xl">
@@ -259,14 +288,97 @@ export const Home = () => {
               <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-4">
                 <Search className="h-5 w-5 text-slate-400" />
               </div>
+              {inlineSearchCompletion ? (
+                <div className="pointer-events-none absolute inset-0 flex items-center pl-12 pr-24 text-left">
+                  <span className="truncate text-sm text-slate-400 sm:text-base">
+                    <span className="select-none text-transparent">{search}</span>
+                    <span className="select-none">{inlineSearchCompletion}</span>
+                  </span>
+                </div>
+              ) : null}
+              {topSearchSuggestion ? (
+                <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3">
+                  <div className="flex items-center gap-2 rounded-full bg-slate-900/5 px-2 py-1 text-xs font-semibold text-slate-600 ring-1 ring-inset ring-slate-200">
+                    <img
+                      src={topSearchSuggestion.foto}
+                      alt={topSearchSuggestion.nome}
+                      className="h-7 w-7 rounded-full object-cover"
+                      referrerPolicy="no-referrer"
+                    />
+                    <span className="hidden sm:inline">
+                      {topSearchSuggestion.nome.split(' ')[0]}
+                    </span>
+                  </div>
+                </div>
+              ) : null}
               <input
                 type="text"
-                className="block w-full rounded-2xl border-0 py-4 pl-12 pr-4 text-slate-900 shadow-xl ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:ring-2 focus:ring-inset focus:ring-blue-600 sm:text-sm sm:leading-6"
-                placeholder="Busque um politico por nome, cargo ou estado..."
+                className="block w-full rounded-2xl border-0 bg-white/95 py-4 pl-12 pr-24 text-slate-900 shadow-xl ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:ring-2 focus:ring-inset focus:ring-blue-600 sm:text-sm sm:leading-6"
+                placeholder="Digite o nome do deputado, partido ou estado..."
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
+                onKeyDown={handleSearchKeyDown}
               />
             </div>
+
+            {showSearchFeedback ? (
+              <div className="w-full max-w-2xl text-left">
+                {topSearchSuggestion ? (
+                  <div className="overflow-hidden rounded-3xl border border-slate-200/80 bg-white/95 shadow-xl ring-1 ring-inset ring-white/70 backdrop-blur">
+                    <button
+                      type="button"
+                      onClick={() => setSearch(topSearchSuggestion.nome)}
+                      className="flex w-full items-center gap-4 border-b border-slate-200/80 px-4 py-4 text-left transition-colors hover:bg-slate-50"
+                    >
+                      <img
+                        src={topSearchSuggestion.foto}
+                        alt={topSearchSuggestion.nome}
+                        className="h-14 w-14 rounded-2xl border border-slate-100 object-cover"
+                        referrerPolicy="no-referrer"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[11px] font-black uppercase tracking-[0.2em] text-blue-600">
+                          Sugestao em tempo real
+                        </p>
+                        <p className="truncate text-base font-black text-slate-900 sm:text-lg">
+                          {topSearchSuggestion.nome}
+                        </p>
+                        <p className="truncate text-sm text-slate-500">
+                          {topSearchSuggestion.partido} / {topSearchSuggestion.estado}
+                          {inlineSearchCompletion ? ' - Tab completa o nome' : ''}
+                        </p>
+                      </div>
+                      <ChevronRight className="h-5 w-5 text-slate-400" />
+                    </button>
+
+                    {secondarySearchSuggestions.length > 0 ? (
+                      <div className="flex flex-wrap gap-2 px-4 py-4">
+                        {secondarySearchSuggestions.map((politico) => (
+                          <button
+                            key={politico.id}
+                            type="button"
+                            onClick={() => setSearch(politico.nome)}
+                            className="flex min-w-0 max-w-full items-center gap-2 rounded-full bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-200"
+                          >
+                            <img
+                              src={politico.foto}
+                              alt={politico.nome}
+                              className="h-7 w-7 rounded-full object-cover"
+                              referrerPolicy="no-referrer"
+                            />
+                            <span className="truncate">{politico.nome}</span>
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : (
+                  <div className="rounded-2xl border border-slate-200 bg-white/90 px-4 py-3 text-sm font-medium text-slate-500 shadow-sm backdrop-blur">
+                    Nenhum deputado encontrado para "{trimmedSearch}".
+                  </div>
+                )}
+              </div>
+            ) : null}
 
             <div className="flex flex-wrap justify-center gap-2">
               <span className="py-2 text-sm font-medium text-slate-500">Status:</span>

@@ -260,12 +260,28 @@ app.get('/api/politicos', async (req, res) => {
 
     const where: string[] = [buildPoliticoStatusWhereSql(status)];
     const params: Array<string | number> = [];
+    let orderBy = 'p.nome ASC';
 
     if (search) {
       params.push(`%${search}%`);
+      const searchParamIndex = params.length;
+      params.push(search);
+      const searchExactParamIndex = params.length;
       where.push(
-        `(p.nome ILIKE $${params.length} OR p.sigla_partido ILIKE $${params.length} OR p.sigla_uf ILIKE $${params.length})`,
+        `(p.nome ILIKE $${searchParamIndex} OR p.sigla_partido ILIKE $${searchParamIndex} OR p.sigla_uf ILIKE $${searchParamIndex})`,
       );
+
+      orderBy = `
+        CASE
+          WHEN p.nome ILIKE $${searchExactParamIndex} THEN 0
+          WHEN p.nome ILIKE $${searchExactParamIndex} || '%' THEN 1
+          WHEN p.nome ILIKE '% ' || $${searchExactParamIndex} || '%' THEN 2
+          WHEN p.sigla_partido ILIKE $${searchExactParamIndex} || '%' THEN 3
+          WHEN p.sigla_uf ILIKE $${searchExactParamIndex} || '%' THEN 4
+          ELSE 5
+        END,
+        p.nome ASC
+      `;
     }
 
     params.push(limit);
@@ -297,7 +313,7 @@ app.get('/api/politicos', async (req, res) => {
         p.ativo,
         p.situacao,
         p.atualizado_em
-      ORDER BY p.nome ASC
+      ORDER BY ${orderBy}
       LIMIT $${params.length - 1}
       OFFSET $${params.length}
       `,
