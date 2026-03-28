@@ -59,6 +59,59 @@ type DespesaItem = {
   fornecedor: string | null;
 };
 
+const ResponsiveExpenseCard: React.FC<{
+  despesa: DespesaItem;
+  currencyFormatter: Intl.NumberFormat;
+}> = ({despesa, currencyFormatter}) => {
+  const data = new Date(
+    `${despesa.ano}-${String(despesa.mes).padStart(2, '0')}-01`,
+  ).toLocaleDateString('pt-BR');
+
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Data</div>
+          <div className="mt-1 text-sm font-semibold text-slate-900">{data}</div>
+        </div>
+        <div className="text-right">
+          <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Valor</div>
+          <div className="mt-1 text-sm font-bold text-slate-900">
+            {currencyFormatter.format(despesa.valor)}
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-4">
+        <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Tipo</div>
+        <div className="mt-1 break-words text-sm font-semibold text-slate-900">
+          {despesa.tipo}
+        </div>
+      </div>
+
+      {despesa.fornecedor && (
+        <div className="mt-4">
+          <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
+            Fornecedor
+          </div>
+          <div className="mt-1 break-words text-sm text-slate-600">{despesa.fornecedor}</div>
+        </div>
+      )}
+
+      {despesa.urlDocumento && (
+        <a
+          href={despesa.urlDocumento}
+          target="_blank"
+          rel="noreferrer"
+          className="mt-4 inline-flex items-center gap-1 text-sm font-bold text-blue-600 hover:underline"
+        >
+          Abrir documento <ExternalLink size={14} />
+        </a>
+      )}
+    </div>
+  );
+};
+
 export const PoliticoProfile = () => {
   const { id } = useParams();
   const [activeTab, setActiveTab] = useState('geral');
@@ -434,6 +487,15 @@ export const PoliticoProfile = () => {
     return despesasFiltradas.reduce((acc, curr) => acc + (Number.isFinite(curr.valor) ? curr.valor : 0), 0);
   }, [despesasFiltradas]);
 
+  const currencyFormatter = useMemo(
+    () =>
+      new Intl.NumberFormat('pt-BR', {
+        style: 'currency',
+        currency: 'BRL',
+      }),
+    [],
+  );
+
   const handleEvaluationSaved = (payload: {notaMedia: number; totalAvaliacoes: number}) => {
     setPolitico((current) =>
       current
@@ -480,15 +542,15 @@ export const PoliticoProfile = () => {
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-      <Link to="/" className="mb-8 flex items-center gap-2 text-sm font-medium text-slate-500 hover:text-blue-600 transition-colors">
+      <Link to="/" className="mb-6 flex items-center gap-2 text-sm font-medium text-slate-500 transition-colors hover:text-blue-600 sm:mb-8">
         <ChevronLeft size={16} />
         Voltar para a busca
       </Link>
 
       {/* Header Section */}
-      <div className="relative mb-12 overflow-hidden rounded-3xl border border-slate-200 bg-white p-6 sm:p-10 shadow-sm">
-        <div className="flex flex-col md:flex-row gap-8 items-center md:items-start">
-          <div className="relative h-40 w-40 shrink-0 overflow-hidden rounded-2xl border-4 border-slate-50 shadow-md">
+      <div className="relative mb-10 overflow-hidden rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:mb-12 sm:p-10">
+        <div className="flex flex-col items-center gap-6 md:flex-row md:items-start md:gap-8">
+          <div className="relative h-28 w-28 shrink-0 overflow-hidden rounded-2xl border-4 border-slate-50 shadow-md sm:h-40 sm:w-40">
             <img 
               src={politico.foto} 
               alt={politico.nome} 
@@ -499,7 +561,7 @@ export const PoliticoProfile = () => {
           <div className="flex-1 text-center md:text-left">
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
               <div>
-                <h1 className="text-3xl font-extrabold text-slate-900">{politico.nome}</h1>
+                <h1 className="text-2xl font-extrabold text-slate-900 sm:text-3xl">{politico.nome}</h1>
                 <div className="mt-3 flex flex-wrap items-center justify-center gap-2 md:justify-start">
                   <span
                     className={cn(
@@ -515,7 +577,7 @@ export const PoliticoProfile = () => {
                     </span>
                   )}
                 </div>
-                <p className="text-lg font-medium text-slate-500">
+                <p className="text-base font-medium text-slate-500 sm:text-lg">
                   {politico.partido} • {politico.estado} • {politico.cargo}
                 </p>
               </div>
@@ -537,14 +599,14 @@ export const PoliticoProfile = () => {
               </div>
             </div>
             
-            <div className="mt-8 flex flex-wrap justify-center md:justify-start gap-4">
+            <div className="mt-8 flex flex-col justify-center gap-3 sm:flex-row sm:flex-wrap md:justify-start">
               <button 
                 onClick={() => setIsModalOpen(true)}
-                className="rounded-2xl bg-blue-600 px-8 py-3 text-sm font-bold text-white shadow-lg shadow-blue-200 hover:bg-blue-700 transition-all"
+                className="w-full rounded-2xl bg-blue-600 px-8 py-3 text-sm font-bold text-white shadow-lg shadow-blue-200 transition-all hover:bg-blue-700 sm:w-auto"
               >
                 Avalie este político
               </button>
-              <button className="rounded-2xl bg-slate-100 px-8 py-3 text-sm font-bold text-slate-600 hover:bg-slate-200 transition-all">
+              <button className="w-full rounded-2xl bg-slate-100 px-8 py-3 text-sm font-bold text-slate-600 transition-all hover:bg-slate-200 sm:w-auto">
                 Seguir atualizações
               </button>
             </div>
@@ -553,13 +615,13 @@ export const PoliticoProfile = () => {
       </div>
 
       {/* Tabs Section */}
-      <div className="mb-8 flex border-b border-slate-200 overflow-x-auto no-scrollbar">
+      <div className="mb-8 -mx-4 flex overflow-x-auto border-b border-slate-200 px-4 no-scrollbar sm:mx-0 sm:px-0">
         {tabs.map((tab) => (
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
             className={cn(
-              "flex items-center gap-2 border-b-2 px-6 py-4 text-sm font-bold transition-all whitespace-nowrap",
+              "flex items-center gap-2 whitespace-nowrap border-b-2 px-4 py-3 text-sm font-bold transition-all sm:px-6 sm:py-4",
               activeTab === tab.id 
                 ? "border-blue-600 text-blue-600" 
                 : "border-transparent text-slate-400 hover:text-slate-600"
@@ -584,8 +646,8 @@ export const PoliticoProfile = () => {
       {/* Tab Content */}
       <div className="min-h-[400px]">
         {activeTab === 'geral' && (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-            <div className="rounded-3xl border border-slate-200 bg-white p-8">
+          <div className="grid grid-cols-1 gap-6 md:grid-cols-2 md:gap-8">
+            <div className="rounded-3xl border border-slate-200 bg-white p-5 sm:p-8">
               <h3 className="text-lg font-bold text-slate-900 mb-6">Desempenho Parlamentar</h3>
               <div className="space-y-8">
                 <div>
@@ -613,7 +675,7 @@ export const PoliticoProfile = () => {
                   </div>
                 </div>
               </div>
-              <div className="mt-10 p-4 rounded-2xl bg-blue-50 border border-blue-100 flex gap-3">
+              <div className="mt-10 flex gap-3 rounded-2xl border border-blue-100 bg-blue-50 p-4">
                 <Info size={20} className="text-blue-600 shrink-0" />
                 <p className="text-xs text-blue-800 leading-relaxed">
                   O alinhamento é calculado com base na convergência dos votos do parlamentar com a orientação da liderança do governo no Congresso.
@@ -621,7 +683,7 @@ export const PoliticoProfile = () => {
               </div>
             </div>
             
-            <div className="rounded-3xl border border-slate-200 bg-white p-8 flex flex-col items-center justify-center text-center">
+            <div className="flex flex-col items-center justify-center rounded-3xl border border-slate-200 bg-white p-5 text-center sm:p-8">
               <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-yellow-50 text-yellow-600">
                 <AlertCircle size={32} />
               </div>
@@ -635,7 +697,7 @@ export const PoliticoProfile = () => {
 
         {activeTab === 'votacoes' && (
           <div className="space-y-4">
-            <div className="rounded-2xl border border-slate-200 bg-white p-5">
+            <div className="rounded-2xl border border-slate-200 bg-white p-4 sm:p-5">
               <div className="flex flex-col gap-4 md:flex-row md:items-end">
                 <div className="flex-1">
                   <label className="text-xs font-bold text-slate-600">Buscar</label>
@@ -722,9 +784,9 @@ export const PoliticoProfile = () => {
               <div key={v.votoId} className="rounded-2xl border border-slate-200 bg-white transition-all hover:border-slate-300">
                 <button
                   onClick={() => setExpandedVotoId((curr) => (curr === v.votoId ? null : v.votoId))}
-                  className="flex w-full items-center justify-between p-6 text-left"
+                  className="flex w-full items-start justify-between gap-4 p-4 text-left sm:p-6"
                 >
-                  <div className="flex gap-4 items-start">
+                  <div className="flex min-w-0 gap-4 items-start">
                     <div className={cn(
                       "mt-1 flex h-10 w-10 shrink-0 items-center justify-center rounded-full",
                       v.voto === 'Sim' ? "bg-emerald-50 text-emerald-600" : 
@@ -733,8 +795,8 @@ export const PoliticoProfile = () => {
                       {v.voto === 'Sim' ? <CheckCircle2 size={20} /> : 
                        v.voto === 'Não' ? <XCircle size={20} /> : <MinusCircle size={20} />}
                     </div>
-                    <div>
-                      <h4 className="font-bold text-slate-900">{titulo}</h4>
+                    <div className="min-w-0">
+                      <h4 className="break-words font-bold text-slate-900">{titulo}</h4>
                       <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
                         <span className="flex items-center gap-1">
                           <Calendar size={12} />{' '}
@@ -754,7 +816,7 @@ export const PoliticoProfile = () => {
                 </button>
 
                 {isExpanded && (
-                  <div className="border-t border-slate-100 px-6 py-5">
+                  <div className="border-t border-slate-100 px-4 py-5 sm:px-6">
                     <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                       <div className="rounded-2xl bg-slate-50 p-4">
                         <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Ementa</div>
@@ -802,7 +864,7 @@ export const PoliticoProfile = () => {
 
         {activeTab === 'despesas' && (
           <div className="space-y-4">
-            <div className="rounded-2xl border border-slate-200 bg-white p-5">
+            <div className="rounded-2xl border border-slate-200 bg-white p-4 sm:p-5">
               <div className="flex flex-col gap-4 md:flex-row md:items-end">
                 <div className="flex-1">
                   <label className="text-xs font-bold text-slate-600">Tipo</label>
@@ -880,7 +942,37 @@ export const PoliticoProfile = () => {
               </div>
             </div>
 
-            <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white">
+            <div className="space-y-3 md:hidden">
+              {isLoadingDespesas ? (
+                <div className="rounded-3xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-600">
+                  Carregando despesas...
+                </div>
+              ) : despesasFiltradas.length === 0 ? (
+                <div className="rounded-3xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-600">
+                  Nenhuma despesa encontrada com esses filtros.
+                </div>
+              ) : (
+                <>
+                  {despesasFiltradas.map((d) => (
+                    <ResponsiveExpenseCard
+                      key={d.id}
+                      despesa={d}
+                      currencyFormatter={currencyFormatter}
+                    />
+                  ))}
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                      Total no periodo
+                    </div>
+                    <div className="mt-1 text-lg font-black text-slate-900">
+                      {currencyFormatter.format(despesasTotal)}
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+
+            <div className="hidden overflow-hidden rounded-3xl border border-slate-200 bg-white md:block">
               <table className="w-full text-left border-collapse">
                 <thead>
                   <tr className="bg-slate-50 border-b border-slate-200">

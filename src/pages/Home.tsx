@@ -38,11 +38,11 @@ const PoliticoCard: React.FC<{politico: PoliticoCardModel; type: 'best' | 'worst
             referrerPolicy="no-referrer"
           />
         </div>
-        <div className="flex-1">
-          <h3 className="font-bold text-slate-900 transition-colors group-hover:text-blue-600">
+        <div className="min-w-0 flex-1">
+          <h3 className="break-words font-bold text-slate-900 transition-colors group-hover:text-blue-600">
             {politico.nome}
           </h3>
-          <p className="text-xs text-slate-500">
+          <p className="truncate text-xs text-slate-500">
             {politico.partido} / {politico.estado}
           </p>
           <div className="mt-1 flex items-center gap-1">
@@ -86,9 +86,9 @@ const NovoPoliticoCard: React.FC<{politico: PoliticoCardModel}> = ({politico}) =
             referrerPolicy="no-referrer"
           />
         </div>
-        <div className="flex-1">
-          <h3 className="font-bold text-slate-900 transition-colors">{politico.nome}</h3>
-          <p className="text-xs text-slate-500">
+        <div className="min-w-0 flex-1">
+          <h3 className="break-words font-bold text-slate-900 transition-colors">{politico.nome}</h3>
+          <p className="truncate text-xs text-slate-500">
             {politico.partido} / {politico.estado}
           </p>
           <div className="mt-1 flex items-center gap-1">
@@ -289,7 +289,7 @@ export const Home = () => {
                 <Search className="h-5 w-5 text-slate-400" />
               </div>
               {inlineSearchCompletion ? (
-                <div className="pointer-events-none absolute inset-0 flex items-center pl-12 pr-24 text-left">
+                <div className="pointer-events-none absolute inset-0 flex items-center pl-12 pr-5 text-left sm:pr-24">
                   <span className="truncate text-sm text-slate-400 sm:text-base">
                     <span className="select-none text-transparent">{search}</span>
                     <span className="select-none">{inlineSearchCompletion}</span>
@@ -297,7 +297,7 @@ export const Home = () => {
                 </div>
               ) : null}
               {topSearchSuggestion ? (
-                <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3">
+                <div className="pointer-events-none absolute inset-y-0 right-0 hidden items-center pr-3 sm:flex">
                   <div className="flex items-center gap-2 rounded-full bg-slate-900/5 px-2 py-1 text-xs font-semibold text-slate-600 ring-1 ring-inset ring-slate-200">
                     <img
                       src={topSearchSuggestion.foto}
@@ -313,8 +313,8 @@ export const Home = () => {
               ) : null}
               <input
                 type="text"
-                className="block w-full rounded-2xl border-0 bg-white/95 py-4 pl-12 pr-24 text-slate-900 shadow-xl ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:ring-2 focus:ring-inset focus:ring-blue-600 sm:text-sm sm:leading-6"
-                placeholder="Digite o nome do deputado, partido ou estado..."
+                className="block w-full rounded-2xl border-0 bg-white/95 py-4 pl-12 pr-5 text-slate-900 shadow-xl ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:ring-2 focus:ring-inset focus:ring-blue-600 sm:pr-24 sm:text-sm sm:leading-6"
+                placeholder="Busque por nome, partido ou estado"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 onKeyDown={handleSearchKeyDown}
@@ -437,13 +437,13 @@ export const Home = () => {
       <section className="mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8">
         <div className="grid grid-cols-1 gap-12 lg:grid-cols-2">
           <div>
-            <div className="mb-6 flex items-center justify-between">
+            <div className="mb-6 flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex items-center gap-2">
                 <TrendingUp className="text-emerald-600" />
                 <h2 className="text-2xl font-bold text-slate-900">Mais bem avaliados</h2>
               </div>
               <Link
-                to="#"
+                to="/ranking"
                 className="flex items-center gap-1 text-sm font-semibold text-blue-600 hover:underline"
               >
                 Ver ranking completo <ChevronRight size={16} />
@@ -457,16 +457,16 @@ export const Home = () => {
           </div>
 
           <div>
-            <div className="mb-6 flex items-center justify-between">
+            <div className="mb-6 flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex items-center gap-2">
                 <TrendingDown className="text-rose-600" />
                 <h2 className="text-2xl font-bold text-slate-900">Piores da semana</h2>
               </div>
               <Link
-                to="#"
+                to="/ranking"
                 className="flex items-center gap-1 text-sm font-semibold text-blue-600 hover:underline"
               >
-                Ver todos <ChevronRight size={16} />
+                Ver ranking completo <ChevronRight size={16} />
               </Link>
             </div>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
