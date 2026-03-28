@@ -14,11 +14,24 @@ model Politico {
   nomeCivil      String?   @map("nome_civil")
   siglaPartido   String    @map("sigla_partido") @db.VarChar(50)
   siglaUf        String    @map("sigla_uf") @db.VarChar(2)
+  idLegislatura  Int?      @map("id_legislatura") @db.SmallInt
   dataNascimento DateTime? @map("data_nascimento") @db.Date
+  dataUltimoStatus DateTime? @map("data_ultimo_status") @db.Date
   sexo           String?   @db.VarChar(1)
   urlFoto        String?   @map("url_foto")
+  nomeEleitoral  String?   @map("nome_eleitoral") @db.VarChar(255)
+  condicaoEleitoral String? @map("condicao_eleitoral") @db.VarChar(100)
   email          String?   @db.VarChar(100)
   telefone       String?   @db.VarChar(50)
+  urlWebsite     String?   @map("url_website") @db.Text
+  redesSociais   String?   @map("redes_sociais") @db.Text
+  escolaridade   String?   @db.VarChar(100)
+  municipioNascimento String? @map("municipio_nascimento") @db.VarChar(100)
+  ufNascimento   String?   @map("uf_nascimento") @db.VarChar(2)
+  gabineteNome   String?   @map("gabinete_nome") @db.VarChar(50)
+  gabinetePredio String?   @map("gabinete_predio") @db.VarChar(20)
+  gabineteSala   String?   @map("gabinete_sala") @db.VarChar(20)
+  gabineteAndar  String?   @map("gabinete_andar") @db.VarChar(20)
   situacao       String?   @default("Exercício") @db.VarChar(50)
   ativo          Boolean?  @default(true)
   atualizadoEm   DateTime? @default(now()) @map("atualizado_em") @db.Timestamptz(6)

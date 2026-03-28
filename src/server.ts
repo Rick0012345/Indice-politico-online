@@ -116,12 +116,57 @@ const parseComentario = (value: unknown) => {
 
 const hashCpf = (cpf: string) => createHash('sha256').update(cpf).digest('hex');
 
+const parseJsonStringArray = (value: unknown) => {
+  const normalize = (items: unknown[]) =>
+    items.filter((item): item is string => typeof item === 'string' && item.trim().length > 0);
+
+  if (Array.isArray(value)) return normalize(value);
+  if (typeof value !== 'string' || value.trim().length === 0) return [];
+
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? normalize(parsed) : [];
+  } catch {
+    return [];
+  }
+};
+
 app.get('/api/politicos/novos', async (req, res) => {
   try {
     const limit = parseLimit(req);
     const status = parsePoliticoStatusFilter(req);
     const statusWhere = buildPoliticoStatusWhereSql(status);
-    const result = await pool.query(
+    const result = await pool.query<{
+      id: string;
+      nome: string;
+      partido: string;
+      estado: string;
+      foto: string | null;
+      ativo: boolean;
+      situacao: string | null;
+      notaMedia: number;
+      totalAvaliacoes: number;
+      atualizadoEm: string | Date | null;
+      cargo: string;
+      nomeCivil: string | null;
+      dataNascimento: string | Date | null;
+      sexo: string | null;
+      email: string | null;
+      telefone: string | null;
+      idLegislatura: number | null;
+      dataUltimoStatus: string | Date | null;
+      nomeEleitoral: string | null;
+      condicaoEleitoral: string | null;
+      urlWebsite: string | null;
+      redesSociaisRaw: string | null;
+      escolaridade: string | null;
+      municipioNascimento: string | null;
+      ufNascimento: string | null;
+      gabineteNome: string | null;
+      gabinetePredio: string | null;
+      gabineteSala: string | null;
+      gabineteAndar: string | null;
+    }>(
       `
       SELECT
         p.id::text AS id,
@@ -134,7 +179,25 @@ app.get('/api/politicos/novos', async (req, res) => {
         COALESCE(AVG(a.nota), 0)::double precision AS "notaMedia",
         COUNT(a.id)::int AS "totalAvaliacoes",
         p.atualizado_em AS "atualizadoEm",
-        'Deputado Federal'::text AS cargo
+        'Deputado Federal'::text AS cargo,
+        p.nome_civil AS "nomeCivil",
+        p.data_nascimento AS "dataNascimento",
+        p.sexo,
+        p.email,
+        p.telefone,
+        p.id_legislatura AS "idLegislatura",
+        p.data_ultimo_status AS "dataUltimoStatus",
+        p.nome_eleitoral AS "nomeEleitoral",
+        p.condicao_eleitoral AS "condicaoEleitoral",
+        p.url_website AS "urlWebsite",
+        p.redes_sociais AS "redesSociaisRaw",
+        p.escolaridade,
+        p.municipio_nascimento AS "municipioNascimento",
+        p.uf_nascimento AS "ufNascimento",
+        p.gabinete_nome AS "gabineteNome",
+        p.gabinete_predio AS "gabinetePredio",
+        p.gabinete_sala AS "gabineteSala",
+        p.gabinete_andar AS "gabineteAndar"
       FROM politicos p
       LEFT JOIN avaliacoes a ON a.politico_id = p.id
       WHERE ${statusWhere}
@@ -188,7 +251,37 @@ app.get('/api/politicos/ranking', async (req, res) => {
           ? `"totalVotacoes" ${dirSql}, "notaMedia" DESC, "totalAvaliacoes" DESC, "atualizadoEm" DESC`
           : `"notaMedia" ${dirSql}, "totalAvaliacoes" DESC, "atualizadoEm" DESC`;
 
-    const result = await pool.query(
+    const result = await pool.query<{
+      id: string;
+      nome: string;
+      partido: string;
+      estado: string;
+      foto: string | null;
+      ativo: boolean;
+      situacao: string | null;
+      notaMedia: number;
+      totalAvaliacoes: number;
+      atualizadoEm: string | Date | null;
+      cargo: string;
+      nomeCivil: string | null;
+      dataNascimento: string | Date | null;
+      sexo: string | null;
+      email: string | null;
+      telefone: string | null;
+      idLegislatura: number | null;
+      dataUltimoStatus: string | Date | null;
+      nomeEleitoral: string | null;
+      condicaoEleitoral: string | null;
+      urlWebsite: string | null;
+      redesSociaisRaw: string | null;
+      escolaridade: string | null;
+      municipioNascimento: string | null;
+      ufNascimento: string | null;
+      gabineteNome: string | null;
+      gabinetePredio: string | null;
+      gabineteSala: string | null;
+      gabineteAndar: string | null;
+    }>(
       `
       SELECT
         p.id::text AS id,
@@ -203,7 +296,25 @@ app.get('/api/politicos/ranking', async (req, res) => {
         COALESCE(dsum.total_despesas, 0)::double precision AS "totalDespesas",
         COALESCE(vcnt.total_votacoes, 0)::int AS "totalVotacoes",
         p.atualizado_em AS "atualizadoEm",
-        'Deputado Federal'::text AS cargo
+        'Deputado Federal'::text AS cargo,
+        p.nome_civil AS "nomeCivil",
+        p.data_nascimento AS "dataNascimento",
+        p.sexo,
+        p.email,
+        p.telefone,
+        p.id_legislatura AS "idLegislatura",
+        p.data_ultimo_status AS "dataUltimoStatus",
+        p.nome_eleitoral AS "nomeEleitoral",
+        p.condicao_eleitoral AS "condicaoEleitoral",
+        p.url_website AS "urlWebsite",
+        p.redes_sociais AS "redesSociaisRaw",
+        p.escolaridade,
+        p.municipio_nascimento AS "municipioNascimento",
+        p.uf_nascimento AS "ufNascimento",
+        p.gabinete_nome AS "gabineteNome",
+        p.gabinete_predio AS "gabinetePredio",
+        p.gabinete_sala AS "gabineteSala",
+        p.gabinete_andar AS "gabineteAndar"
       FROM politicos p
       LEFT JOIN avaliacoes a ON a.politico_id = p.id
       LEFT JOIN (
@@ -322,7 +433,25 @@ app.get('/api/politicos', async (req, res) => {
         COALESCE(AVG(a.nota), 0)::double precision AS "notaMedia",
         COUNT(a.id)::int AS "totalAvaliacoes",
         p.atualizado_em AS "atualizadoEm",
-        'Deputado Federal'::text AS cargo
+        'Deputado Federal'::text AS cargo,
+        p.nome_civil AS "nomeCivil",
+        p.data_nascimento AS "dataNascimento",
+        p.sexo,
+        p.email,
+        p.telefone,
+        p.id_legislatura AS "idLegislatura",
+        p.data_ultimo_status AS "dataUltimoStatus",
+        p.nome_eleitoral AS "nomeEleitoral",
+        p.condicao_eleitoral AS "condicaoEleitoral",
+        p.url_website AS "urlWebsite",
+        p.redes_sociais AS "redesSociaisRaw",
+        p.escolaridade,
+        p.municipio_nascimento AS "municipioNascimento",
+        p.uf_nascimento AS "ufNascimento",
+        p.gabinete_nome AS "gabineteNome",
+        p.gabinete_predio AS "gabinetePredio",
+        p.gabinete_sala AS "gabineteSala",
+        p.gabinete_andar AS "gabineteAndar"
       FROM politicos p
       LEFT JOIN avaliacoes a ON a.politico_id = p.id
       WHERE ${where.join(' AND ')}
@@ -334,7 +463,25 @@ app.get('/api/politicos', async (req, res) => {
         p.url_foto,
         p.ativo,
         p.situacao,
-        p.atualizado_em
+        p.atualizado_em,
+        p.nome_civil,
+        p.data_nascimento,
+        p.sexo,
+        p.email,
+        p.telefone,
+        p.id_legislatura,
+        p.data_ultimo_status,
+        p.nome_eleitoral,
+        p.condicao_eleitoral,
+        p.url_website,
+        p.redes_sociais,
+        p.escolaridade,
+        p.municipio_nascimento,
+        p.uf_nascimento,
+        p.gabinete_nome,
+        p.gabinete_predio,
+        p.gabinete_sala,
+        p.gabinete_andar
       ORDER BY ${orderBy}
       LIMIT $${params.length - 1}
       OFFSET $${params.length}
@@ -351,7 +498,37 @@ app.get('/api/politicos', async (req, res) => {
 app.get('/api/politicos/:politicoId', async (req, res) => {
   try {
     const {politicoId} = req.params;
-    const result = await pool.query(
+    const result = await pool.query<{
+      id: string;
+      nome: string;
+      partido: string;
+      estado: string;
+      foto: string | null;
+      ativo: boolean;
+      situacao: string | null;
+      notaMedia: number;
+      totalAvaliacoes: number;
+      atualizadoEm: string | Date | null;
+      cargo: string;
+      nomeCivil: string | null;
+      dataNascimento: string | Date | null;
+      sexo: string | null;
+      email: string | null;
+      telefone: string | null;
+      idLegislatura: number | null;
+      dataUltimoStatus: string | Date | null;
+      nomeEleitoral: string | null;
+      condicaoEleitoral: string | null;
+      urlWebsite: string | null;
+      redesSociaisRaw: string | null;
+      escolaridade: string | null;
+      municipioNascimento: string | null;
+      ufNascimento: string | null;
+      gabineteNome: string | null;
+      gabinetePredio: string | null;
+      gabineteSala: string | null;
+      gabineteAndar: string | null;
+    }>(
       `
       SELECT
         p.id::text AS id,
@@ -364,7 +541,25 @@ app.get('/api/politicos/:politicoId', async (req, res) => {
         COALESCE(AVG(a.nota), 0)::double precision AS "notaMedia",
         COUNT(a.id)::int AS "totalAvaliacoes",
         p.atualizado_em AS "atualizadoEm",
-        'Deputado Federal'::text AS cargo
+        'Deputado Federal'::text AS cargo,
+        p.nome_civil AS "nomeCivil",
+        p.data_nascimento AS "dataNascimento",
+        p.sexo,
+        p.email,
+        p.telefone,
+        p.id_legislatura AS "idLegislatura",
+        p.data_ultimo_status AS "dataUltimoStatus",
+        p.nome_eleitoral AS "nomeEleitoral",
+        p.condicao_eleitoral AS "condicaoEleitoral",
+        p.url_website AS "urlWebsite",
+        p.redes_sociais AS "redesSociaisRaw",
+        p.escolaridade,
+        p.municipio_nascimento AS "municipioNascimento",
+        p.uf_nascimento AS "ufNascimento",
+        p.gabinete_nome AS "gabineteNome",
+        p.gabinete_predio AS "gabinetePredio",
+        p.gabinete_sala AS "gabineteSala",
+        p.gabinete_andar AS "gabineteAndar"
       FROM politicos p
       LEFT JOIN avaliacoes a ON a.politico_id = p.id
       WHERE p.id::text = $1
@@ -376,17 +571,41 @@ app.get('/api/politicos/:politicoId', async (req, res) => {
         p.url_foto,
         p.ativo,
         p.situacao,
-        p.atualizado_em
+        p.atualizado_em,
+        p.nome_civil,
+        p.data_nascimento,
+        p.sexo,
+        p.email,
+        p.telefone,
+        p.id_legislatura,
+        p.data_ultimo_status,
+        p.nome_eleitoral,
+        p.condicao_eleitoral,
+        p.url_website,
+        p.redes_sociais,
+        p.escolaridade,
+        p.municipio_nascimento,
+        p.uf_nascimento,
+        p.gabinete_nome,
+        p.gabinete_predio,
+        p.gabinete_sala,
+        p.gabinete_andar
       LIMIT 1
       `,
       [politicoId],
     );
 
-    const politico = result.rows[0];
-    if (!politico) {
+    const politicoRow = result.rows[0];
+    if (!politicoRow) {
       sendJson(res, 404, {error: 'Político não encontrado'});
       return;
     }
+
+    const {redesSociaisRaw, ...politicoBase} = politicoRow;
+    const politico = {
+      ...politicoBase,
+      redesSociais: parseJsonStringArray(redesSociaisRaw),
+    };
 
     sendJson(res, 200, {politico});
   } catch {

@@ -1,0 +1,711 @@
+{
+  "name": "UPSERT DEPUTADOS",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "seconds",
+              "secondsInterval": 10
+            }
+          ]
+        }
+      },
+      "id": "b1340777-c8bd-43c0-8725-7499ad9896c3",
+      "name": "Every Sunday 03:00 AM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        64,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://dadosabertos.camara.leg.br/api/v2/deputados",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "idLegislatura",
+              "value": "57"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "130b0b07-94e2-4676-b911-88c4784b62e1",
+      "name": "Fetch Deputies from API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        512,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "dados",
+        "options": {}
+      },
+      "id": "249fefb0-25c2-47f4-9c22-a26dcd479092",
+      "name": "Split Deputies Array",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        736,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://dadosabertos.camara.leg.br/api/v2/deputados/{{ $('Split Deputies Array').item.json.id }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "61307634-fa22-4556-a56d-ba27454f5759",
+      "name": "Fetch Deputy Details",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        960,
+        160
+      ],
+      "retryOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "upsert",
+        "schema": {
+          "__rl": true,
+          "mode": "name",
+          "value": "public"
+        },
+        "table": {
+          "__rl": true,
+          "value": "politicos",
+          "mode": "list",
+          "cachedResultName": "politicos"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {
+            "id": "={{ $json.id }}",
+            "nome": "={{ $json.nome }}",
+            "sigla_partido": "={{ $json.sigla_partido }}",
+            "sigla_uf": "={{ $json.sigla_uf }}",
+            "url_foto": "={{ $json.url_foto }}",
+            "ativo": "={{ $json.ativo }}",
+            "data_nascimento": "={{ $json.data_nascimento }}",
+            "email": "={{ $json.email }}",
+            "nome_civil": "={{ $json.nome_civil }}",
+            "sexo": "={{ $json.sexo }}",
+            "situacao": "={{ $json.situacao }}",
+            "telefone": "={{ $json.telefone }}",
+            "id_legislatura": "={{ $json.id_legislatura }}",
+            "data_ultimo_status": "={{ $json.data_ultimo_status }}",
+            "nome_eleitoral": "={{ $json.nome_eleitoral }}",
+            "condicao_eleitoral": "={{ $json.condicao_eleitoral }}",
+            "url_website": "={{ $json.url_website }}",
+            "redes_sociais": "={{ $json.redes_sociais }}",
+            "escolaridade": "={{ $json.escolaridade }}",
+            "municipio_nascimento": "={{ $json.municipio_nascimento }}",
+            "uf_nascimento": "={{ $json.uf_nascimento }}",
+            "gabinete_nome": "={{ $json.gabinete_nome }}",
+            "gabinete_predio": "={{ $json.gabinete_predio }}",
+            "gabinete_sala": "={{ $json.gabinete_sala }}",
+            "gabinete_andar": "={{ $json.gabinete_andar }}"
+          },
+          "matchingColumns": [
+            "id"
+          ],
+          "schema": [
+            {
+              "id": "id",
+              "displayName": "id",
+              "required": true,
+              "defaultMatch": true,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "nome",
+              "displayName": "nome",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "sigla_partido",
+              "displayName": "sigla_partido",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "sigla_uf",
+              "displayName": "sigla_uf",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "url_foto",
+              "displayName": "url_foto",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "ativo",
+              "displayName": "ativo",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "boolean",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "atualizado_em",
+              "displayName": "atualizado_em",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "dateTime",
+              "canBeUsedToMatch": false,
+              "removed": true
+            },
+            {
+              "id": "cpf",
+              "displayName": "cpf",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "data_nascimento",
+              "displayName": "data_nascimento",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "dateTime",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "email",
+              "displayName": "email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "nome_civil",
+              "displayName": "nome_civil",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "sexo",
+              "displayName": "sexo",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "situacao",
+              "displayName": "situacao",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "telefone",
+              "displayName": "telefone",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "id_legislatura",
+              "displayName": "id_legislatura",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "data_ultimo_status",
+              "displayName": "data_ultimo_status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "dateTime",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "nome_eleitoral",
+              "displayName": "nome_eleitoral",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "condicao_eleitoral",
+              "displayName": "condicao_eleitoral",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "url_website",
+              "displayName": "url_website",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "redes_sociais",
+              "displayName": "redes_sociais",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "escolaridade",
+              "displayName": "escolaridade",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "municipio_nascimento",
+              "displayName": "municipio_nascimento",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "uf_nascimento",
+              "displayName": "uf_nascimento",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "gabinete_nome",
+              "displayName": "gabinete_nome",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "gabinete_predio",
+              "displayName": "gabinete_predio",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "gabinete_sala",
+              "displayName": "gabinete_sala",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            },
+            {
+              "id": "gabinete_andar",
+              "displayName": "gabinete_andar",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "a6fee099-d412-49a0-a46b-6c535e0ef628",
+      "name": "Upsert to Politicos Table",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1408,
+        160
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "YLVCMMsG43hwaUPk",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "f48018c2-9f4c-48ac-b173-99081c778907",
+              "name": "id",
+              "value": "={{ $('Split Deputies Array').item.json.id }}",
+              "type": "number"
+            },
+            {
+              "id": "dd4b2261-5050-4e87-b6e9-7784bec1881e",
+              "name": "nome",
+              "value": "={{ $json.dados?.ultimoStatus?.nome || $('Split Deputies Array').item.json.nome }}",
+              "type": "string"
+            },
+            {
+              "id": "feb979a7-1438-4079-820a-44c79a31eeea",
+              "name": "sigla_partido",
+              "value": "={{ $json.dados?.ultimoStatus?.siglaPartido || $('Split Deputies Array').item.json.siglaPartido }}",
+              "type": "string"
+            },
+            {
+              "id": "d2e26e64-ace1-42a3-b510-0d3cc77abba6",
+              "name": "sigla_uf",
+              "value": "={{ $json.dados?.ultimoStatus?.siglaUf || $('Split Deputies Array').item.json.siglaUf }}",
+              "type": "string"
+            },
+            {
+              "id": "02939408-7f36-4001-85d7-ea9989e276c4",
+              "name": "url_foto",
+              "value": "={{ $json.dados?.ultimoStatus?.urlFoto || $('Split Deputies Array').item.json.urlFoto }}",
+              "type": "string"
+            },
+            {
+              "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+              "name": "ativo",
+              "value": true,
+              "type": "boolean"
+            },
+            {
+              "id": "ca2e4c56-7c45-4557-bd1c-f742061ba16c",
+              "name": "nome_civil",
+              "value": "={{ $json.dados?.nomeCivil || null }}",
+              "type": "string"
+            },
+            {
+              "id": "be452d7b-e050-4b2e-b98a-76a1cc7a1478",
+              "name": "data_nascimento",
+              "value": "={{ $json.dados?.dataNascimento || null }}",
+              "type": "string"
+            },
+            {
+              "id": "5b7ff42d-e60e-4335-992c-f843cf314be7",
+              "name": "sexo",
+              "value": "={{ $json.dados?.sexo || null }}",
+              "type": "string"
+            },
+            {
+              "id": "dc16a7c4-63cd-4b5a-a13c-341e84c74a31",
+              "name": "situacao",
+              "value": "={{ $json.dados?.ultimoStatus?.situacao || null }}",
+              "type": "string"
+            },
+            {
+              "id": "890f6a0b-c4aa-4906-a93d-67455220b847",
+              "name": "email",
+              "value": "={{ $json.dados?.ultimoStatus?.gabinete?.email || $json.dados?.ultimoStatus?.email || $('Split Deputies Array').item.json.email || null }}",
+              "type": "string"
+            },
+            {
+              "id": "e29c4daa-bccd-496a-a6ed-8f8b8e41ab80",
+              "name": "telefone",
+              "value": "={{ $json.dados?.ultimoStatus?.gabinete?.telefone || null }}",
+              "type": "string"
+            },
+            {
+              "id": "0fc27e9e-33b8-475e-bb75-61f6f0ad061f",
+              "name": "id_legislatura",
+              "value": "={{ $json.dados?.ultimoStatus?.idLegislatura || $('Split Deputies Array').item.json.idLegislatura || null }}",
+              "type": "number"
+            },
+            {
+              "id": "7631e3bf-4c39-4e2c-a660-927824fb8c87",
+              "name": "data_ultimo_status",
+              "value": "={{ $json.dados?.ultimoStatus?.data || null }}",
+              "type": "string"
+            },
+            {
+              "id": "c9168cdb-9e11-4b48-b251-7d385f2f0753",
+              "name": "nome_eleitoral",
+              "value": "={{ $json.dados?.ultimoStatus?.nomeEleitoral || null }}",
+              "type": "string"
+            },
+            {
+              "id": "41be7fe0-3fd8-49b8-b8a0-c9c1a0f4adbb",
+              "name": "condicao_eleitoral",
+              "value": "={{ $json.dados?.ultimoStatus?.condicaoEleitoral || null }}",
+              "type": "string"
+            },
+            {
+              "id": "a11aa40c-2e1e-4bd5-9fa5-8ef1b5ec3e34",
+              "name": "url_website",
+              "value": "={{ $json.dados?.urlWebsite || null }}",
+              "type": "string"
+            },
+            {
+              "id": "2842f03b-8a25-4e12-9632-48c4c7c2b197",
+              "name": "redes_sociais",
+              "value": "={{ JSON.stringify($json.dados?.redeSocial || []) }}",
+              "type": "string"
+            },
+            {
+              "id": "57690e24-9e34-4d56-bfa3-85e4da4d6530",
+              "name": "escolaridade",
+              "value": "={{ $json.dados?.escolaridade || null }}",
+              "type": "string"
+            },
+            {
+              "id": "3500f61a-d5cc-41f8-ab9e-17c4e88e064b",
+              "name": "municipio_nascimento",
+              "value": "={{ $json.dados?.municipioNascimento || null }}",
+              "type": "string"
+            },
+            {
+              "id": "24d2e919-0bd9-46b3-9659-f828d8f73a99",
+              "name": "uf_nascimento",
+              "value": "={{ $json.dados?.ufNascimento || null }}",
+              "type": "string"
+            },
+            {
+              "id": "197b2771-d260-4f51-a53c-d4b8a1c2648d",
+              "name": "gabinete_nome",
+              "value": "={{ $json.dados?.ultimoStatus?.gabinete?.nome || null }}",
+              "type": "string"
+            },
+            {
+              "id": "7d970898-6adb-4420-ae30-5bcce5d0d4bf",
+              "name": "gabinete_predio",
+              "value": "={{ $json.dados?.ultimoStatus?.gabinete?.predio || null }}",
+              "type": "string"
+            },
+            {
+              "id": "6c418b8d-2e77-47da-aeb1-c01fe4f7d17a",
+              "name": "gabinete_sala",
+              "value": "={{ $json.dados?.ultimoStatus?.gabinete?.sala || null }}",
+              "type": "string"
+            },
+            {
+              "id": "155d9840-f429-48f9-a4c3-23a1f34f2478",
+              "name": "gabinete_andar",
+              "value": "={{ $json.dados?.ultimoStatus?.gabinete?.andar || null }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1184,
+        160
+      ],
+      "id": "c41d9d47-3d74-47e5-85c6-8b0cbb01b261",
+      "name": "Edit Fields"
+    },
+    {
+      "parameters": {
+        "content": "# UPSERT DEPUTADOS",
+        "height": 368,
+        "width": 1360
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "a2d34ac1-0ae5-489a-8d96-18af897d5e21",
+      "name": "Sticky Note2"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE politicos SET ativo = false;",
+        "options": {}
+      },
+      "id": "220b2261-ddb5-4099-98af-fde6276f000d",
+      "name": "Reset Active Status",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        288,
+        160
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "YLVCMMsG43hwaUPk",
+          "name": "Postgres account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Every Sunday 03:00 AM": {
+      "main": [
+        [
+          {
+            "node": "Reset Active Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Deputies from API": {
+      "main": [
+        [
+          {
+            "node": "Split Deputies Array",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Deputies Array": {
+      "main": [
+        [
+          {
+            "node": "Fetch Deputy Details",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Deputy Details": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields": {
+      "main": [
+        [
+          {
+            "node": "Upsert to Politicos Table",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reset Active Status": {
+      "main": [
+        [
+          {
+            "node": "Fetch Deputies from API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "f362abcb-ca4f-4be7-bd39-026cf9fd94ff",
+  "meta": {
+    "instanceId": "7c72b99248d90384dd9122231bdcb69e79eb19b288f01e8691443edde47edc09"
+  },
+  "id": "MQCR69MMwrrQ58htYCZKJ",
+  "tags": []
+}

@@ -35,6 +35,24 @@ type PoliticoDetail = {
   situacao?: string | null;
   presenca?: number | null;
   alinhamentoGoverno?: number | null;
+  nomeCivil?: string | null;
+  dataNascimento?: string | null;
+  sexo?: string | null;
+  email?: string | null;
+  telefone?: string | null;
+  idLegislatura?: number | null;
+  dataUltimoStatus?: string | null;
+  nomeEleitoral?: string | null;
+  condicaoEleitoral?: string | null;
+  urlWebsite?: string | null;
+  redesSociais?: string[];
+  escolaridade?: string | null;
+  municipioNascimento?: string | null;
+  ufNascimento?: string | null;
+  gabineteNome?: string | null;
+  gabinetePredio?: string | null;
+  gabineteSala?: string | null;
+  gabineteAndar?: string | null;
 };
 
 type VotacaoItem = {
@@ -145,11 +163,21 @@ export const PoliticoProfile = () => {
   const [votacoesAnosDisponiveis, setVotacoesAnosDisponiveis] = useState<number[]>([]);
   const [despesasAnosDisponiveis, setDespesasAnosDisponiveis] = useState<number[]>([]);
 
-  const formatarDataVotacao = (value: string | null) => {
+  const formatarData = (value: string | null | undefined) => {
     if (!value) return null;
     const d = new Date(value);
     if (Number.isNaN(d.getTime())) return null;
     return d.toLocaleDateString('pt-BR', { timeZone: 'UTC' });
+  };
+
+  const formatarDataVotacao = (value: string | null) => formatarData(value);
+
+  const formatarLinkLabel = (value: string, fallback: string) => {
+    try {
+      return new URL(value).hostname.replace(/^www\./, '');
+    } catch {
+      return fallback;
+    }
   };
 
   useEffect(() => {
@@ -170,6 +198,11 @@ export const PoliticoProfile = () => {
             setPolitico({
               ...data.politico,
               foto: data.politico.foto || `https://picsum.photos/seed/${data.politico.id}/400/400`,
+              redesSociais: Array.isArray(data.politico.redesSociais)
+                ? data.politico.redesSociais.filter(
+                    (item): item is string => typeof item === 'string' && item.trim().length > 0,
+                  )
+                : [],
             });
           } else {
             setPolitico(null);
@@ -539,6 +572,50 @@ export const PoliticoProfile = () => {
   const alinhamentoLabel = politico.alinhamentoGoverno == null ? '—' : `${politico.alinhamentoGoverno}%`;
   const alinhamentoValue = politico.alinhamentoGoverno ?? 0;
   const situacaoLabel = getPoliticoSituacaoLabel(politico);
+  const sexoLabel =
+    politico.sexo === 'M' ? 'Masculino' : politico.sexo === 'F' ? 'Feminino' : politico.sexo;
+  const localNascimento = [politico.municipioNascimento, politico.ufNascimento]
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    .join(' - ');
+  const nascimentoLabel = [formatarData(politico.dataNascimento), localNascimento]
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    .join(' - ');
+  const contatoLabel = [politico.email, politico.telefone]
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    .join(' • ');
+  const gabineteLabel = [
+    politico.gabineteNome,
+    politico.gabinetePredio ? `Predio ${politico.gabinetePredio}` : null,
+    politico.gabineteSala ? `Sala ${politico.gabineteSala}` : null,
+    politico.gabineteAndar ? `Andar ${politico.gabineteAndar}` : null,
+  ]
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    .join(' - ');
+  const redesSociais = (politico.redesSociais ?? []).filter(
+    (value): value is string => typeof value === 'string' && value.trim().length > 0,
+  );
+  const dadosOficiais = [
+    {label: 'Nome civil', value: politico.nomeCivil},
+    {label: 'Nome eleitoral', value: politico.nomeEleitoral},
+    {label: 'Sexo', value: sexoLabel},
+    {label: 'Nascimento', value: nascimentoLabel || null},
+    {label: 'Escolaridade', value: politico.escolaridade},
+    {label: 'Condição eleitoral', value: politico.condicaoEleitoral},
+    {
+      label: 'Legislatura',
+      value: politico.idLegislatura != null ? String(politico.idLegislatura) : null,
+    },
+    {
+      label: 'Ultimo status oficial',
+      value: formatarData(politico.dataUltimoStatus),
+    },
+    {label: 'Contato', value: contatoLabel || null},
+    {label: 'Gabinete', value: gabineteLabel || null},
+  ].filter(
+    (item): item is {label: string; value: string} =>
+      typeof item.value === 'string' && item.value.trim().length > 0,
+  );
+  const temDadosOficiais = dadosOficiais.length > 0 || Boolean(politico.urlWebsite) || redesSociais.length > 0;
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
@@ -683,14 +760,73 @@ export const PoliticoProfile = () => {
               </div>
             </div>
             
-            <div className="flex flex-col items-center justify-center rounded-3xl border border-slate-200 bg-white p-5 text-center sm:p-8">
-              <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-yellow-50 text-yellow-600">
-                <AlertCircle size={32} />
+            <div className="rounded-3xl border border-slate-200 bg-white p-5 sm:p-8">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h3 className="text-lg font-bold text-slate-900">Dados oficiais</h3>
+                  <p className="mt-2 max-w-md text-sm text-slate-500">
+                    Dados enriquecidos a partir da API oficial da Câmara dos Deputados.
+                  </p>
+                </div>
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
+                  <FileText size={22} />
+                </div>
               </div>
-              <h3 className="text-lg font-bold text-slate-900">Histórico de Escândalos</h3>
-              <p className="mt-2 text-sm text-slate-500 max-w-xs">
-                Nenhum processo judicial ou escândalo grave registrado recentemente para este parlamentar em fontes oficiais.
-              </p>
+
+              {temDadosOficiais ? (
+                <>
+                  <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    {dadosOficiais.map((item) => (
+                      <div key={item.label} className="rounded-2xl bg-slate-50 p-4">
+                        <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                          {item.label}
+                        </div>
+                        <div className="mt-1 break-words text-sm font-semibold text-slate-900">
+                          {item.value}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {(politico.urlWebsite || redesSociais.length > 0) && (
+                    <div className="mt-6 rounded-2xl border border-slate-200 p-4">
+                      <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                        Links institucionais
+                      </div>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {politico.urlWebsite && (
+                          <a
+                            href={politico.urlWebsite}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-3 py-2 text-xs font-bold text-slate-700 transition-colors hover:bg-slate-200"
+                          >
+                            Site oficial <ExternalLink size={12} />
+                          </a>
+                        )}
+                        {redesSociais.map((link, index) => (
+                          <a
+                            key={link}
+                            href={link}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700 transition-colors hover:bg-blue-100"
+                          >
+                            {formatarLinkLabel(link, `Rede ${index + 1}`)} <ExternalLink size={12} />
+                          </a>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="mt-6 flex gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                  <AlertCircle size={20} className="shrink-0 text-slate-500" />
+                  <p className="text-sm leading-relaxed text-slate-600">
+                    Ainda não há dados oficiais detalhados disponíveis para este parlamentar.
+                  </p>
+                </div>
+              )}
             </div>
           </div>
         )}
