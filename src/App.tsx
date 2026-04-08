@@ -6,6 +6,7 @@ import { PoliticoProfile } from './pages/PoliticoProfile';
 import { Ranking } from './pages/Ranking';
 import { Methodology } from './pages/Methodology';
 import { About } from './pages/About';
+import { SalesDashboard } from './pages/SalesDashboard';
 
 export default function App() {
   return (
@@ -17,6 +18,8 @@ export default function App() {
             <Route path="/" element={<Home />} />
             <Route path="/politico/:id" element={<PoliticoProfile />} />
             <Route path="/ranking" element={<Ranking />} />
+            <Route path="/vendas" element={<SalesDashboard />} />
+            <Route path="/dashboard" element={<SalesDashboard />} />
             <Route path="/metodologia" element={<Methodology />} />
             <Route path="/sobre" element={<About />} />
           </Routes>

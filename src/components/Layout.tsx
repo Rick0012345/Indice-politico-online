@@ -4,6 +4,7 @@ import {Menu, User, X} from 'lucide-react';
 
 const navItems = [
   {to: '/', label: 'Início'},
+  {to: '/vendas', label: 'Vendas'},
   {to: '/ranking', label: 'Ranking'},
   {to: '/sobre', label: 'Sobre'},
   {to: '/metodologia', label: 'Metodologia'},
@@ -168,3 +169,4 @@ export const Footer = () => {
     </footer>
   );
 };
+

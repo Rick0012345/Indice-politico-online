@@ -9,17 +9,19 @@ services:
       - .:/app
       - app_node_modules:/app/node_modules
     environment:
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
       - CHOKIDAR_USEPOLLING=true
       - CHOKIDAR_INTERVAL=100
       - VITE_USE_POLLING=true
       - VITE_API_PROXY_TARGET=http://api:4000
-      - APP_DB_HOST=app-db
+      - APP_DB_HOST=db
       - APP_DB_PORT=5432
       - APP_DB_USER=app
       - APP_DB_PASSWORD=app
       - APP_DB_NAME=app
-      - DATABASE_URL=postgresql://app:app@app-db:5432/app?schema=public
+      - DATABASE_URL=postgresql://app:app@db:5432/app?schema=public
+    depends_on:
+      db:
+        condition: service_healthy
     env_file:
       - .env
     stdin_open: true
@@ -40,19 +42,19 @@ services:
       - PORT=4000
       - CHOKIDAR_USEPOLLING=true
       - CHOKIDAR_INTERVAL=100
-      - APP_DB_HOST=n8n-db
+      - APP_DB_HOST=db
       - APP_DB_PORT=5432
-      - APP_DB_USER=n8n
-      - APP_DB_PASSWORD=n8n
-      - APP_DB_NAME=n8n
-      - DATABASE_URL=postgresql://n8n:n8n@n8n-db:5432/n8n?schema=public
+      - APP_DB_USER=app
+      - APP_DB_PASSWORD=app
+      - APP_DB_NAME=app
+      - DATABASE_URL=postgresql://app:app@db:5432/app?schema=public
     depends_on:
-      n8n-db:
+      db:
         condition: service_healthy
     env_file:
       - .env
 
-  app-db:
+  db:
     image: postgres:16-alpine
     ports:
       - "5434:5432"
@@ -62,25 +64,8 @@ services:
       - POSTGRES_DB=app
     volumes:
       - app_db_data:/var/lib/postgresql/data
-      - ./prisma/migrations/20240101000000_initial_schema/migration.sql:/docker-entrypoint-initdb.d/001_app_schema.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U app -d app"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
-
-  n8n-db:
-    image: postgres:16-alpine
-    ports:
-      - "5433:5432"
-    environment:
-      - POSTGRES_USER=n8n
-      - POSTGRES_PASSWORD=n8n
-      - POSTGRES_DB=n8n
-    volumes:
-      - catlogo-poltico_n8n_db_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U n8n -d n8n"]
       interval: 5s
       timeout: 5s
       retries: 20
@@ -90,15 +75,15 @@ services:
     ports:
       - "${N8N_HOST_PORT:-5679}:5678"
     depends_on:
-      n8n-db:
+      db:
         condition: service_healthy
     environment:
       - DB_TYPE=postgresdb
-      - DB_POSTGRESDB_HOST=n8n-db
+      - DB_POSTGRESDB_HOST=db
       - DB_POSTGRESDB_PORT=5432
-      - DB_POSTGRESDB_DATABASE=n8n
-      - DB_POSTGRESDB_USER=n8n
-      - DB_POSTGRESDB_PASSWORD=${N8N_DB_PASSWORD:-n8n}
+      - DB_POSTGRESDB_DATABASE=app
+      - DB_POSTGRESDB_USER=app
+      - DB_POSTGRESDB_PASSWORD=app
       - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY:-local-development-encryption-key-change-me}
       - N8N_HOST=localhost
       - N8N_PORT=5678
@@ -115,7 +100,4 @@ volumes:
   app_node_modules:
   api_node_modules:
   n8n_data:
-  n8n_db_data:
   app_db_data:
-  catlogo-poltico_n8n_db_data:
-    external: true

@@ -39,6 +39,7 @@ model Politico {
   votos      VotoDeputado[]
   despesas   Despesa[]
   avaliacoes Avaliacao[]
+  noticias   NoticiaPolitico[]
 
   @@map("politicos")
 }
@@ -114,4 +115,32 @@ model Avaliacao {
   @@unique([politicoId, cpfHash])
   @@index([politicoId], map: "idx_avaliacoes_politico")
   @@map("avaliacoes")
+}
+
+model NoticiaPolitico {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  politicoId     BigInt    @map("politico_id") @db.BigInt
+  titulo         String    @db.Text
+  resumo         String?   @db.Text
+  url            String    @db.Text
+  veiculo        String?   @db.VarChar(255)
+  dominio        String?   @db.VarChar(255)
+  dataPublicacao DateTime? @map("data_publicacao") @db.Timestamptz(6)
+  imagemUrl      String?   @map("imagem_url") @db.Text
+  idioma         String?   @db.VarChar(20)
+  paisOrigem     String?   @map("pais_origem") @db.VarChar(10)
+  fonteColeta    String    @default("gdelt_doc_2") @map("fonte_coleta") @db.VarChar(50)
+  periodoTipo    String?   @map("periodo_tipo") @db.VarChar(20)
+  janelaConsulta String?   @map("janela_consulta") @db.VarChar(20)
+  queryUsada     String?   @map("query_usada") @db.Text
+  criadoEm       DateTime? @default(now()) @map("criado_em") @db.Timestamptz(6)
+  atualizadoEm   DateTime? @updatedAt @map("atualizado_em") @db.Timestamptz(6)
+
+  politico Politico @relation(fields: [politicoId], references: [id], onDelete: Cascade)
+
+  @@unique([politicoId, url])
+  @@index([politicoId], map: "idx_noticias_politico")
+  @@index([dataPublicacao], map: "idx_noticias_data_publicacao")
+  @@index([periodoTipo], map: "idx_noticias_periodo_tipo")
+  @@map("noticias_politicos")
 }

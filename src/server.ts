@@ -12,11 +12,11 @@ const databaseUrl = process.env.DATABASE_URL?.trim();
 const pool = databaseUrl
   ? new Pool({connectionString: databaseUrl})
   : new Pool({
-      host: process.env.APP_DB_HOST ?? 'n8n-db',
+      host: process.env.APP_DB_HOST ?? 'db',
       port: Number(process.env.APP_DB_PORT ?? 5432),
-      user: process.env.APP_DB_USER ?? 'n8n',
-      password: process.env.APP_DB_PASSWORD ?? 'n8n',
-      database: process.env.APP_DB_NAME ?? 'n8n',
+      user: process.env.APP_DB_USER ?? 'app',
+      password: process.env.APP_DB_PASSWORD ?? 'app',
+      database: process.env.APP_DB_NAME ?? 'app',
     });
 
 const sendJson = (res: Response, statusCode: number, body: unknown) => {
