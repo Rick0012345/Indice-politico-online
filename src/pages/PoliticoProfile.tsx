@@ -21,6 +21,7 @@ import {
   getPoliticoStatusLabel,
 } from '../lib/politicoStatus';
 import { EvaluationModal } from '../components/EvaluationModal';
+import { SpendingChart } from '../components/SpendingChart';
 
 type PoliticoDetail = {
   id: string;
@@ -162,6 +163,8 @@ export const PoliticoProfile = () => {
   const [despesasHasMore, setDespesasHasMore] = useState(false);
   const [votacoesAnosDisponiveis, setVotacoesAnosDisponiveis] = useState<number[]>([]);
   const [despesasAnosDisponiveis, setDespesasAnosDisponiveis] = useState<number[]>([]);
+  const [despesasResumo, setDespesasResumo] = useState<{ano: number; mes: number; total: number}[]>([]);
+  const [despesasMedia, setDespesasMedia] = useState<{ano: number; mes: number; media: number}[]>([]);
 
   const formatarData = (value: string | null | undefined) => {
     if (!value) return null;
@@ -357,6 +360,51 @@ export const PoliticoProfile = () => {
     run();
     return () => controller.abort();
   }, [id, despesasFiltro.ano, despesasFiltro.mes]);
+
+  useEffect(() => {
+    const politicoId = id?.trim();
+    if (!politicoId) return;
+
+    const controller = new AbortController();
+    const ano = despesasFiltro.ano ? Number(despesasFiltro.ano) : null;
+
+    const run = async () => {
+      try {
+        const resumoParams = new URLSearchParams();
+        if (ano != null && Number.isFinite(ano)) resumoParams.set('ano', String(ano));
+
+        const mediaParams = new URLSearchParams();
+        if (ano != null && Number.isFinite(ano)) mediaParams.set('ano', String(ano));
+
+        const [resumoRes, mediaRes] = await Promise.all([
+          fetch(`/api/politicos/${encodeURIComponent(politicoId)}/despesas/resumo?${resumoParams}`, {
+            signal: controller.signal,
+          }),
+          fetch(`/api/despesas/media?${mediaParams}`, {signal: controller.signal}),
+        ]);
+
+        if (resumoRes.ok) {
+          const data = (await resumoRes.json()) as {items?: {ano: number; mes: number; total: number}[]};
+          setDespesasResumo(data.items ?? []);
+        } else {
+          setDespesasResumo([]);
+        }
+
+        if (mediaRes.ok) {
+          const data = (await mediaRes.json()) as {items?: {ano: number; mes: number; media: number}[]};
+          setDespesasMedia(data.items ?? []);
+        } else {
+          setDespesasMedia([]);
+        }
+      } catch {
+        setDespesasResumo([]);
+        setDespesasMedia([]);
+      }
+    };
+
+    run();
+    return () => controller.abort();
+  }, [id, despesasFiltro.ano]);
 
   const loadMoreVotacoes = async () => {
     const politicoId = id?.trim();
@@ -1008,6 +1056,12 @@ export const PoliticoProfile = () => {
 
         {activeTab === 'despesas' && (
           <div className="space-y-4">
+            <SpendingChart
+              resumo={despesasResumo}
+              media={despesasMedia}
+              nomePolitico={politico.nome}
+            />
+
             <div className="rounded-2xl border border-slate-200 bg-white p-4 sm:p-5 dark:border-slate-700 dark:bg-slate-900">
               <div className="flex flex-col gap-4 md:flex-row md:items-end">
                 <div className="flex-1">

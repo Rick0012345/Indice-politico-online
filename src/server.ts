@@ -845,6 +845,77 @@ app.get('/api/politicos/:politicoId/despesas', async (req, res) => {
   }
 });
 
+app.get('/api/politicos/:politicoId/despesas/resumo', async (req, res) => {
+  try {
+    const {politicoId} = req.params;
+    const ano = parseOptionalInt(req.query.ano);
+
+    const where: string[] = ['d.politico_id::text = $1'];
+    const params: Array<string | number> = [politicoId];
+
+    if (ano != null) {
+      params.push(ano);
+      where.push(`d.ano = $${params.length}`);
+    }
+
+    const result = await pool.query(
+      `
+      SELECT
+        d.ano,
+        d.mes,
+        SUM(d.valor_liquido)::double precision AS total
+      FROM despesas d
+      WHERE ${where.join(' AND ')}
+      GROUP BY d.ano, d.mes
+      ORDER BY d.ano ASC, d.mes ASC
+      `,
+      params,
+    );
+
+    sendJson(res, 200, {items: result.rows});
+  } catch {
+    sendJson(res, 500, {error: 'Erro ao processar requisição'});
+  }
+});
+
+app.get('/api/despesas/media', async (req, res) => {
+  try {
+    const ano = parseOptionalInt(req.query.ano);
+
+    const where: string[] = [];
+    const params: Array<string | number> = [];
+
+    if (ano != null) {
+      params.push(ano);
+      where.push(`d.ano = $${params.length}`);
+    }
+
+    const whereClause = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
+
+    const result = await pool.query(
+      `
+      SELECT
+        sub.ano,
+        sub.mes,
+        AVG(sub.total_mes)::double precision AS media
+      FROM (
+        SELECT politico_id, ano, mes, SUM(valor_liquido) AS total_mes
+        FROM despesas d
+        ${whereClause}
+        GROUP BY politico_id, ano, mes
+      ) sub
+      GROUP BY sub.ano, sub.mes
+      ORDER BY sub.ano ASC, sub.mes ASC
+      `,
+      params,
+    );
+
+    sendJson(res, 200, {items: result.rows});
+  } catch {
+    sendJson(res, 500, {error: 'Erro ao processar requisição'});
+  }
+});
+
 app.use((req, res) => {
   if (req.path.startsWith('/api/')) {
     sendJson(res, 404, {error: 'Endpoint não encontrado'});
