@@ -5,8 +5,8 @@ import {useTheme} from '../context/ThemeContext';
 
 const navItems = [
   {to: '/', label: 'Início'},
-  {to: '/vendas', label: 'Vendas'},
   {to: '/ranking', label: 'Ranking'},
+  {to: '/admin', label: 'Admin'},
   {to: '/sobre', label: 'Sobre'},
   {to: '/metodologia', label: 'Metodologia'},
 ];

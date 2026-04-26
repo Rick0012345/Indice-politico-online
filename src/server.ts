@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import {createHash} from 'node:crypto';
+import {spawn} from 'node:child_process';
 import express, {type Request, type Response} from 'express';
 import {Pool} from 'pg';
 
@@ -129,6 +130,48 @@ const parseJsonStringArray = (value: unknown) => {
   } catch {
     return [];
   }
+};
+
+const ensureIngestionCheckpointTable = async () => {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ingestion_checkpoints (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      source VARCHAR(50) NOT NULL,
+      dataset VARCHAR(50) NOT NULL,
+      entity_id TEXT NOT NULL DEFAULT '',
+      period_start DATE NOT NULL,
+      period_end DATE NOT NULL,
+      status VARCHAR(20) NOT NULL DEFAULT 'pending',
+      attempts INTEGER NOT NULL DEFAULT 0,
+      items_count INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT,
+      locked_at TIMESTAMPTZ(6),
+      started_at TIMESTAMPTZ(6),
+      finished_at TIMESTAMPTZ(6),
+      created_at TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS ingestion_checkpoints_unique_window
+    ON ingestion_checkpoints(source, dataset, entity_id, period_start, period_end)
+  `);
+};
+
+const parseIsoDateInput = (value: unknown, fallback: string) => {
+  if (typeof value !== 'string') return fallback;
+  return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : fallback;
+};
+
+const parseDatasetList = (value: unknown) => {
+  const raw = Array.isArray(value) ? value : typeof value === 'string' ? value.split(',') : [];
+  const allowed = new Set(['deputados', 'despesas', 'votacoes']);
+  return raw.filter((item): item is string => typeof item === 'string' && allowed.has(item));
+};
+
+const parseCheckpointStatus = (value: unknown) => {
+  const allowed = new Set(['pending', 'running', 'failed']);
+  return typeof value === 'string' && allowed.has(value) ? value : null;
 };
 
 app.get('/api/politicos/novos', async (req, res) => {
@@ -913,6 +956,156 @@ app.get('/api/despesas/media', async (req, res) => {
     sendJson(res, 200, {items: result.rows});
   } catch {
     sendJson(res, 500, {error: 'Erro ao processar requisição'});
+  }
+});
+
+app.get('/api/admin/ingestion/summary', async (_req, res) => {
+  try {
+    await ensureIngestionCheckpointTable();
+
+    const checkpointResult = await pool.query(
+      `
+      SELECT
+        dataset,
+        status,
+        MIN(period_start)::text AS "periodStart",
+        MAX(period_end)::text AS "periodEnd",
+        COUNT(*)::int AS total,
+        SUM(items_count)::int AS "itemsCount",
+        MAX(updated_at)::text AS "updatedAt"
+      FROM ingestion_checkpoints
+      WHERE source = 'camara'
+      GROUP BY dataset, status
+      ORDER BY dataset ASC, status ASC
+      `,
+    );
+
+    const periodResult = await pool.query(
+      `
+      WITH despesas_periodos AS (
+        SELECT
+          'despesas'::text AS dataset,
+          make_date(ano::int, mes::int, 1) AS period_start,
+          (make_date(ano::int, mes::int, 1) + INTERVAL '1 month - 1 day')::date AS period_end,
+          COUNT(*)::int AS total
+        FROM despesas
+        GROUP BY ano, mes
+      ),
+      votacoes_periodos AS (
+        SELECT
+          'votacoes'::text AS dataset,
+          date_trunc('month', data_hora_votacao)::date AS period_start,
+          (date_trunc('month', data_hora_votacao)::date + INTERVAL '1 month - 1 day')::date AS period_end,
+          COUNT(*)::int AS total
+        FROM votacoes
+        WHERE data_hora_votacao IS NOT NULL
+        GROUP BY date_trunc('month', data_hora_votacao)::date
+      )
+      SELECT dataset, period_start::text AS "periodStart", period_end::text AS "periodEnd", total
+      FROM despesas_periodos
+      UNION ALL
+      SELECT dataset, period_start::text AS "periodStart", period_end::text AS "periodEnd", total
+      FROM votacoes_periodos
+      ORDER BY dataset ASC, "periodStart" DESC
+      `,
+    );
+
+    sendJson(res, 200, {
+      checkpoints: checkpointResult.rows,
+      periods: periodResult.rows,
+    });
+  } catch {
+    sendJson(res, 500, {error: 'Erro ao carregar resumo de ingestao.'});
+  }
+});
+
+app.post('/api/admin/ingestion/run', async (req, res) => {
+  try {
+    const from = parseIsoDateInput(req.body?.from, '2016-01-01');
+    const to = parseIsoDateInput(req.body?.to, '2020-12-31');
+    const datasets = parseDatasetList(req.body?.datasets);
+    const window = ['month', 'quarter', 'year'].includes(req.body?.window)
+      ? String(req.body.window)
+      : 'month';
+    const concurrency = Math.max(1, Math.min(6, Number(req.body?.concurrency) || 2));
+
+    if (datasets.length === 0) {
+      sendJson(res, 400, {error: 'Selecione pelo menos um conjunto de dados.'});
+      return;
+    }
+
+    const child = spawn(
+      process.execPath,
+      [
+        '--import',
+        'tsx',
+        'src/ingest-agent.ts',
+        `--from=${from}`,
+        `--to=${to}`,
+        `--datasets=${datasets.join(',')}`,
+        `--window=${window}`,
+        `--concurrency=${concurrency}`,
+        '--reset-failed',
+      ],
+      {
+        cwd: process.cwd(),
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true,
+      },
+    );
+
+    child.unref();
+
+    sendJson(res, 202, {
+      message: 'Ingestao iniciada em segundo plano.',
+      pid: child.pid,
+      from,
+      to,
+      datasets,
+      window,
+      concurrency,
+    });
+  } catch {
+    sendJson(res, 500, {error: 'Erro ao iniciar ingestao.'});
+  }
+});
+
+app.post('/api/admin/ingestion/cancel', async (req, res) => {
+  try {
+    await ensureIngestionCheckpointTable();
+
+    const dataset = parseDatasetList(req.body?.dataset)[0] ?? null;
+    const status = parseCheckpointStatus(req.body?.status);
+
+    if (!dataset || !status) {
+      sendJson(res, 400, {error: 'Informe dataset e status validos para cancelar.'});
+      return;
+    }
+
+    const result = await pool.query(
+      `
+      UPDATE ingestion_checkpoints
+      SET status = 'cancelled',
+          locked_at = NULL,
+          last_error = COALESCE(last_error, 'Cancelado pelo administrador.'),
+          updated_at = CURRENT_TIMESTAMP
+      WHERE source = 'camara'
+        AND dataset = $1
+        AND status = $2
+      RETURNING id
+      `,
+      [dataset, status],
+    );
+
+    sendJson(res, 200, {
+      message: 'Tarefas canceladas.',
+      cancelled: result.rowCount,
+      dataset,
+      status,
+    });
+  } catch {
+    sendJson(res, 500, {error: 'Erro ao cancelar tarefas.'});
   }
 });
 

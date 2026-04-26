@@ -6,7 +6,7 @@ import { PoliticoProfile } from './pages/PoliticoProfile';
 import { Ranking } from './pages/Ranking';
 import { Methodology } from './pages/Methodology';
 import { About } from './pages/About';
-import { SalesDashboard } from './pages/SalesDashboard';
+import { Admin } from './pages/Admin';
 import { ThemeProvider } from './context/ThemeContext';
 
 export default function App() {
@@ -20,8 +20,7 @@ export default function App() {
               <Route path="/" element={<Home />} />
               <Route path="/politico/:id" element={<PoliticoProfile />} />
               <Route path="/ranking" element={<Ranking />} />
-              <Route path="/vendas" element={<SalesDashboard />} />
-              <Route path="/dashboard" element={<SalesDashboard />} />
+              <Route path="/admin" element={<Admin />} />
               <Route path="/metodologia" element={<Methodology />} />
               <Route path="/sobre" element={<About />} />
             </Routes>

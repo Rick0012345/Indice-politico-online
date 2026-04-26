@@ -9,6 +9,7 @@ services:
       - .:/app
       - app_node_modules:/app/node_modules
     environment:
+      - RUN_PRISMA_MIGRATIONS=false
       - CHOKIDAR_USEPOLLING=true
       - CHOKIDAR_INTERVAL=100
       - VITE_USE_POLLING=true
