@@ -25,6 +25,6 @@ export const getPoliticoSituacaoLabel = ({situacao}: PoliticoStatusSnapshot) => 
 
 export const getPoliticoStatusClasses = ({ativo}: PoliticoStatusSnapshot) => {
   return ativo === false
-    ? 'bg-slate-100 text-slate-700 ring-slate-200'
-    : 'bg-emerald-50 text-emerald-700 ring-emerald-200';
+    ? 'bg-slate-100 text-slate-700 ring-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:ring-slate-600'
+    : 'bg-emerald-50 text-emerald-700 ring-emerald-200 dark:bg-emerald-950 dark:text-emerald-400 dark:ring-emerald-900';
 };

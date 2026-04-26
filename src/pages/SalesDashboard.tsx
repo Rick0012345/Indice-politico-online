@@ -85,16 +85,16 @@ export const SalesDashboard = () => {
 
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-4 py-10 sm:px-6 lg:px-8">
-      <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
+      <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8 dark:border-slate-700 dark:bg-slate-900">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <p className="text-xs font-black uppercase tracking-[0.18em] text-blue-600">
               Dashboard de vendas
             </p>
-            <h1 className="mt-1 text-3xl font-black tracking-tight text-slate-900">
+            <h1 className="mt-1 text-3xl font-black tracking-tight text-slate-900 dark:text-slate-50">
               Visao comercial exclusiva
             </h1>
-            <p className="mt-2 text-sm text-slate-500">
+            <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
               Acompanhe receita, conversao e desempenho por canal em tempo real.
             </p>
           </div>
@@ -107,11 +107,11 @@ export const SalesDashboard = () => {
           </button>
         </div>
 
-        <div className="mt-6 grid grid-cols-1 gap-3 rounded-2xl bg-slate-50 p-4 sm:grid-cols-[1fr_auto] sm:items-end">
+        <div className="mt-6 grid grid-cols-1 gap-3 rounded-2xl bg-slate-50 p-4 sm:grid-cols-[1fr_auto] sm:items-end dark:bg-slate-800">
           <div className="space-y-2">
             <label
               htmlFor="quick-product-search"
-              className="text-xs font-bold uppercase tracking-wide text-slate-500"
+              className="text-xs font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400"
             >
               Registro rapido: buscar produto
             </label>
@@ -126,67 +126,67 @@ export const SalesDashboard = () => {
                 value={productSearch}
                 onChange={(event) => setProductSearch(event.target.value)}
                 placeholder="Pesquisar produto para registrar venda"
-                className="w-full rounded-2xl border border-slate-200 bg-white py-2.5 pl-10 pr-3 text-sm text-slate-800 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                className="w-full rounded-2xl border border-slate-200 bg-white py-2.5 pl-10 pr-3 text-sm text-slate-800 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:focus:ring-blue-900"
               />
             </div>
           </div>
-          <p className="text-xs font-semibold text-slate-500">
+          <p className="text-xs font-semibold text-slate-500 dark:text-slate-400">
             {filteredProducts.length} resultado(s) encontrado(s)
           </p>
         </div>
       </section>
 
       <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-900">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">
+            <span className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500 dark:text-slate-400">
               Faturamento
             </span>
             <DollarSign className="text-emerald-600" size={18} />
           </div>
-          <p className="mt-4 text-2xl font-black text-slate-900">R$ 195.100</p>
+          <p className="mt-4 text-2xl font-black text-slate-900 dark:text-slate-50">R$ 195.100</p>
           <p className="mt-2 flex items-center gap-1 text-xs font-semibold text-emerald-600">
             <ArrowUpRight size={14} />
             +16% vs mes anterior
           </p>
         </article>
 
-        <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-900">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">
+            <span className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500 dark:text-slate-400">
               Pedidos
             </span>
             <ShoppingCart className="text-blue-600" size={18} />
           </div>
-          <p className="mt-4 text-2xl font-black text-slate-900">1.016</p>
+          <p className="mt-4 text-2xl font-black text-slate-900 dark:text-slate-50">1.016</p>
           <p className="mt-2 flex items-center gap-1 text-xs font-semibold text-blue-600">
             <ArrowUpRight size={14} />
             +8% no ciclo atual
           </p>
         </article>
 
-        <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-900">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">
+            <span className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500 dark:text-slate-400">
               Ticket medio
             </span>
             <Package className="text-violet-600" size={18} />
           </div>
-          <p className="mt-4 text-2xl font-black text-slate-900">R$ 192,03</p>
+          <p className="mt-4 text-2xl font-black text-slate-900 dark:text-slate-50">R$ 192,03</p>
           <p className="mt-2 flex items-center gap-1 text-xs font-semibold text-violet-600">
             <ArrowUpRight size={14} />
             +6,2% de incremento
           </p>
         </article>
 
-        <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-900">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500">
+            <span className="text-xs font-bold uppercase tracking-[0.12em] text-slate-500 dark:text-slate-400">
               Conversao
             </span>
             <Users className="text-amber-600" size={18} />
           </div>
-          <p className="mt-4 text-2xl font-black text-slate-900">4,8%</p>
+          <p className="mt-4 text-2xl font-black text-slate-900 dark:text-slate-50">4,8%</p>
           <p className="mt-2 flex items-center gap-1 text-xs font-semibold text-amber-600">
             <ArrowUpRight size={14} />
             +0,9 p.p. no funil
@@ -195,20 +195,20 @@ export const SalesDashboard = () => {
       </section>
 
       <section className="grid grid-cols-1 gap-6 xl:grid-cols-3">
-        <article className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm xl:col-span-2">
-          <h2 className="text-lg font-black text-slate-900">Performance por canal</h2>
-          <p className="mt-1 text-sm text-slate-500">Receita e pedidos no periodo selecionado</p>
+        <article className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm xl:col-span-2 dark:border-slate-700 dark:bg-slate-900">
+          <h2 className="text-lg font-black text-slate-900 dark:text-slate-50">Performance por canal</h2>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Receita e pedidos no periodo selecionado</p>
 
           <div className="mt-6 space-y-5">
             {channelPerformance.map((channel) => (
               <div key={channel.channel} className="space-y-2">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <p className="text-sm font-bold text-slate-700">{channel.channel}</p>
-                  <p className="text-xs font-semibold text-slate-500">
+                  <p className="text-sm font-bold text-slate-700 dark:text-slate-300">{channel.channel}</p>
+                  <p className="text-xs font-semibold text-slate-500 dark:text-slate-400">
                     {channel.revenue} | {channel.orders} pedidos | {channel.growth}
                   </p>
                 </div>
-                <div className="h-2 rounded-full bg-slate-100">
+                <div className="h-2 rounded-full bg-slate-100 dark:bg-slate-700">
                   <div
                     className="h-2 rounded-full bg-gradient-to-r from-blue-600 to-cyan-400"
                     style={{width: channel.width}}
@@ -219,41 +219,41 @@ export const SalesDashboard = () => {
           </div>
         </article>
 
-        <article className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+        <article className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-900">
           <div className="flex items-center gap-2">
             <Target className="text-emerald-600" size={18} />
-            <h2 className="text-lg font-black text-slate-900">Meta mensal</h2>
+            <h2 className="text-lg font-black text-slate-900 dark:text-slate-50">Meta mensal</h2>
           </div>
-          <p className="mt-1 text-sm text-slate-500">Objetivo: R$ 220.000</p>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Objetivo: R$ 220.000</p>
 
           <div className="mt-6">
             <div className="flex items-end justify-between">
-              <p className="text-3xl font-black text-slate-900">88,6%</p>
+              <p className="text-3xl font-black text-slate-900 dark:text-slate-50">88,6%</p>
               <p className="text-xs font-bold uppercase tracking-wide text-emerald-600">
                 R$ 195.100 atingidos
               </p>
             </div>
-            <div className="mt-3 h-3 rounded-full bg-slate-100">
+            <div className="mt-3 h-3 rounded-full bg-slate-100 dark:bg-slate-700">
               <div className="h-3 w-[88.6%] rounded-full bg-emerald-500" />
             </div>
-            <p className="mt-3 text-xs font-semibold text-slate-500">
+            <p className="mt-3 text-xs font-semibold text-slate-500 dark:text-slate-400">
               Faltam R$ 24.900 para fechar a meta deste mes.
             </p>
           </div>
         </article>
       </section>
 
-      <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+      <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-900">
         <div className="mb-6">
-          <h2 className="text-lg font-black text-slate-900">Registrar venda</h2>
-          <p className="mt-1 text-sm text-slate-500">
+          <h2 className="text-lg font-black text-slate-900 dark:text-slate-50">Registrar venda</h2>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
             Preencha os dados da venda e use a pesquisa para localizar o produto rapidamente.
           </p>
         </div>
 
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           <div className="space-y-2">
-            <label htmlFor="product-search" className="text-xs font-bold uppercase tracking-wide text-slate-500">
+            <label htmlFor="product-search" className="text-xs font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">
               Buscar produto
             </label>
             <div className="relative">
@@ -267,7 +267,7 @@ export const SalesDashboard = () => {
                 value={productSearch}
                 onChange={(event) => setProductSearch(event.target.value)}
                 placeholder="Digite nome ou categoria do produto"
-                className="w-full rounded-2xl border border-slate-200 bg-white py-2.5 pl-10 pr-3 text-sm text-slate-800 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                className="w-full rounded-2xl border border-slate-200 bg-white py-2.5 pl-10 pr-3 text-sm text-slate-800 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:focus:ring-blue-900"
               />
             </div>
           </div>
@@ -275,7 +275,7 @@ export const SalesDashboard = () => {
           <div className="space-y-2">
             <label
               htmlFor="product-search-register"
-              className="text-xs font-bold uppercase tracking-wide text-slate-500"
+              className="text-xs font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400"
             >
               Produto (com pesquisa)
             </label>
@@ -295,24 +295,24 @@ export const SalesDashboard = () => {
                   setIsProductDropdownOpen(true);
                 }}
                 placeholder="Pesquise e selecione um produto"
-                className="w-full rounded-2xl border border-slate-200 bg-white py-2.5 pl-10 pr-3 text-sm text-slate-800 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                className="w-full rounded-2xl border border-slate-200 bg-white py-2.5 pl-10 pr-3 text-sm text-slate-800 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:focus:ring-blue-900"
               />
               {isProductDropdownOpen && (
-                <div className="absolute z-20 mt-2 max-h-56 w-full overflow-auto rounded-2xl border border-slate-200 bg-white p-1 shadow-lg">
+                <div className="absolute z-20 mt-2 max-h-56 w-full overflow-auto rounded-2xl border border-slate-200 bg-white p-1 shadow-lg dark:border-slate-700 dark:bg-slate-900">
                   {filteredProducts.length > 0 ? (
                     filteredProducts.map((product) => (
                       <button
                         key={product.id}
                         type="button"
                         onClick={() => handlePickProduct(product)}
-                        className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm transition-colors hover:bg-slate-50"
+                        className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm transition-colors hover:bg-slate-50 dark:hover:bg-slate-800"
                       >
-                        <span className="font-semibold text-slate-800">{product.name}</span>
-                        <span className="text-xs text-slate-500">{product.category}</span>
+                        <span className="font-semibold text-slate-800 dark:text-slate-200">{product.name}</span>
+                        <span className="text-xs text-slate-500 dark:text-slate-400">{product.category}</span>
                       </button>
                     ))
                   ) : (
-                    <p className="px-3 py-2 text-sm text-slate-500">Nenhum produto encontrado.</p>
+                    <p className="px-3 py-2 text-sm text-slate-500 dark:text-slate-400">Nenhum produto encontrado.</p>
                   )}
                 </div>
               )}
@@ -320,7 +320,7 @@ export const SalesDashboard = () => {
           </div>
 
           <div className="space-y-2">
-            <label htmlFor="customer-name" className="text-xs font-bold uppercase tracking-wide text-slate-500">
+            <label htmlFor="customer-name" className="text-xs font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">
               Cliente
             </label>
             <input
@@ -329,12 +329,12 @@ export const SalesDashboard = () => {
               value={customerName}
               onChange={(event) => setCustomerName(event.target.value)}
               placeholder="Nome do cliente"
-              className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-800 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+              className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-800 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:focus:ring-blue-900"
             />
           </div>
 
           <div className="space-y-2">
-            <label htmlFor="quantity" className="text-xs font-bold uppercase tracking-wide text-slate-500">
+            <label htmlFor="quantity" className="text-xs font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">
               Quantidade
             </label>
             <input
@@ -346,15 +346,15 @@ export const SalesDashboard = () => {
                 const parsed = Number(event.target.value);
                 setQuantity(Number.isFinite(parsed) && parsed > 0 ? parsed : 1);
               }}
-              className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-800 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+              className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-800 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:focus:ring-blue-900"
             />
           </div>
         </div>
 
-        <div className="mt-6 flex flex-col gap-3 rounded-2xl bg-slate-50 p-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="mt-6 flex flex-col gap-3 rounded-2xl bg-slate-50 p-4 sm:flex-row sm:items-center sm:justify-between dark:bg-slate-800">
           <div>
-            <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Total estimado</p>
-            <p className="text-xl font-black text-slate-900">
+            <p className="text-xs font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">Total estimado</p>
+            <p className="text-xl font-black text-slate-900 dark:text-slate-50">
               {estimatedTotal.toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'})}
             </p>
           </div>
@@ -368,27 +368,27 @@ export const SalesDashboard = () => {
         </div>
       </section>
 
-      <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-        <h2 className="text-lg font-black text-slate-900">Top produtos</h2>
-        <p className="mt-1 text-sm text-slate-500">Itens com maior impacto em receita</p>
+      <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-900">
+        <h2 className="text-lg font-black text-slate-900 dark:text-slate-50">Top produtos</h2>
+        <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Itens com maior impacto em receita</p>
 
         <div className="mt-5 overflow-x-auto">
-          <table className="min-w-full divide-y divide-slate-200 text-sm">
+          <table className="min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-700">
             <thead>
-              <tr className="text-left text-xs font-bold uppercase tracking-wide text-slate-500">
+              <tr className="text-left text-xs font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">
                 <th className="px-2 py-3">Produto</th>
                 <th className="px-2 py-3">Categoria</th>
                 <th className="px-2 py-3 text-right">Unidades</th>
                 <th className="px-2 py-3 text-right">Receita</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
+            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
               {topProducts.map((product) => (
                 <tr key={product.name}>
-                  <td className="px-2 py-3 font-semibold text-slate-800">{product.name}</td>
-                  <td className="px-2 py-3 text-slate-600">{product.category}</td>
-                  <td className="px-2 py-3 text-right text-slate-700">{product.units}</td>
-                  <td className="px-2 py-3 text-right font-bold text-slate-900">{product.revenue}</td>
+                  <td className="px-2 py-3 font-semibold text-slate-800 dark:text-slate-200">{product.name}</td>
+                  <td className="px-2 py-3 text-slate-600 dark:text-slate-400">{product.category}</td>
+                  <td className="px-2 py-3 text-right text-slate-700 dark:text-slate-300">{product.units}</td>
+                  <td className="px-2 py-3 text-right font-bold text-slate-900 dark:text-slate-50">{product.revenue}</td>
                 </tr>
               ))}
             </tbody>
