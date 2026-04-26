@@ -135,23 +135,23 @@ export const EvaluationModal = ({
             initial={{opacity: 0, scale: 0.95, y: 20}}
             animate={{opacity: 1, scale: 1, y: 0}}
             exit={{opacity: 0, scale: 0.95, y: 20}}
-            className="relative w-full max-w-md overflow-hidden rounded-3xl bg-white p-8 shadow-2xl"
+            className="relative w-full max-w-md overflow-hidden rounded-3xl bg-white p-8 shadow-2xl dark:bg-slate-900"
           >
             <button
               onClick={onClose}
-              className="absolute right-4 top-4 text-slate-400 hover:text-slate-600"
+              className="absolute right-4 top-4 text-slate-400 hover:text-slate-600 dark:text-slate-500 dark:hover:text-slate-300"
             >
               <X size={24} />
             </button>
 
             <div className="text-center">
-              <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-blue-50 text-blue-600">
-                <Star size={24} className="fill-blue-600" />
+              <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-blue-50 text-blue-600 dark:bg-blue-950 dark:text-blue-400">
+                <Star size={24} className="fill-blue-600 dark:fill-blue-400" />
               </div>
-              <h2 className="text-2xl font-bold text-slate-900">Avaliar Politico</h2>
-              <p className="mt-2 text-slate-500">
+              <h2 className="text-2xl font-bold text-slate-900 dark:text-slate-50">Avaliar Politico</h2>
+              <p className="mt-2 text-slate-500 dark:text-slate-400">
                 Como voce avalia a atuacao de{' '}
-                <span className="font-semibold text-slate-900">{politicoName}</span>?
+                <span className="font-semibold text-slate-900 dark:text-slate-50">{politicoName}</span>?
               </p>
             </div>
 
@@ -172,7 +172,7 @@ export const EvaluationModal = ({
                     className={
                       (hoveredRating || rating) >= star
                         ? 'fill-yellow-400 text-yellow-400'
-                        : 'text-slate-200'
+                        : 'text-slate-200 dark:text-slate-700'
                     }
                   />
                 </button>
@@ -180,7 +180,7 @@ export const EvaluationModal = ({
             </div>
 
             <div className="mb-6">
-              <label htmlFor="comentario" className="text-sm font-bold text-slate-700">
+              <label htmlFor="comentario" className="text-sm font-bold text-slate-700 dark:text-slate-300">
                 Comentario (opcional)
               </label>
               <textarea
@@ -192,17 +192,17 @@ export const EvaluationModal = ({
                   setComment(event.target.value);
                   if (errorMessage) setErrorMessage(null);
                 }}
-                className="mt-2 block w-full resize-none rounded-2xl border-0 px-4 py-3 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:ring-2 focus:ring-inset focus:ring-blue-600 sm:text-sm"
+                className="mt-2 block w-full resize-none rounded-2xl border-0 px-4 py-3 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:ring-2 focus:ring-inset focus:ring-blue-600 sm:text-sm dark:bg-slate-800 dark:text-slate-50 dark:ring-slate-700 dark:placeholder:text-slate-500"
                 placeholder="Conte em poucas palavras o motivo da sua nota."
               />
-              <div className="mt-2 flex items-center justify-between gap-2 text-xs text-slate-500">
+              <div className="mt-2 flex items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400">
                 <span>Seu comentario sera salvo junto com a avaliacao.</span>
                 <span>{comment.length}/500</span>
               </div>
             </div>
 
             <div className="mb-6">
-              <label htmlFor="cpf" className="text-sm font-bold text-slate-700">
+              <label htmlFor="cpf" className="text-sm font-bold text-slate-700 dark:text-slate-300">
                 CPF para validar o voto
               </label>
               <input
@@ -216,20 +216,20 @@ export const EvaluationModal = ({
                   setCpf(formatCpf(event.target.value));
                   if (errorMessage) setErrorMessage(null);
                 }}
-                className="mt-2 block w-full rounded-2xl border-0 px-4 py-3 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:ring-2 focus:ring-inset focus:ring-blue-600 sm:text-sm"
+                className="mt-2 block w-full rounded-2xl border-0 px-4 py-3 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:ring-2 focus:ring-inset focus:ring-blue-600 sm:text-sm dark:bg-slate-800 dark:text-slate-50 dark:ring-slate-700 dark:placeholder:text-slate-500"
                 placeholder="000.000.000-00"
               />
-              <p className="mt-2 text-xs text-slate-500">
+              <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
                 O CPF e processado em hash para impedir votos duplicados no mesmo politico.
               </p>
             </div>
 
-            <div className="mb-6 rounded-2xl bg-slate-50 p-4">
+            <div className="mb-6 rounded-2xl bg-slate-50 p-4 dark:bg-slate-800">
               <div className="flex gap-3">
-                <ShieldCheck className="shrink-0 text-blue-600" size={20} />
+                <ShieldCheck className="shrink-0 text-blue-600 dark:text-blue-400" size={20} />
                 <div>
-                  <h4 className="text-sm font-bold text-slate-900">Validacao unica por CPF</h4>
-                  <p className="mt-1 text-xs text-slate-500">
+                  <h4 className="text-sm font-bold text-slate-900 dark:text-slate-50">Validacao unica por CPF</h4>
+                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
                     Se este CPF ja avaliou este politico, a nota anterior sera substituida pela nova.
                   </p>
                 </div>
@@ -258,13 +258,13 @@ export const EvaluationModal = ({
               </button>
               <button
                 onClick={onClose}
-                className="w-full py-2 text-sm font-semibold text-slate-500 hover:text-slate-700"
+                className="w-full py-2 text-sm font-semibold text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
               >
                 Cancelar
               </button>
             </div>
 
-            <div className="mt-6 flex items-center justify-center gap-1 text-[10px] font-bold uppercase tracking-widest text-slate-400">
+            <div className="mt-6 flex items-center justify-center gap-1 text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">
               <Info size={12} />
               Seus dados estao protegidos pela LGPD
             </div>

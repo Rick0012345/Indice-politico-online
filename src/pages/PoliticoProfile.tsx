@@ -3,13 +3,13 @@ import { useParams, Link } from 'react-router-dom';
 import {
   Star,
   ChevronRight,
-  ChevronLeft, 
-  Calendar, 
-  FileText, 
-  DollarSign, 
-  AlertCircle, 
-  CheckCircle2, 
-  XCircle, 
+  ChevronLeft,
+  Calendar,
+  FileText,
+  DollarSign,
+  AlertCircle,
+  CheckCircle2,
+  XCircle,
   MinusCircle,
   ExternalLink,
   BarChart3
@@ -86,33 +86,33 @@ const ResponsiveExpenseCard: React.FC<{
   ).toLocaleDateString('pt-BR');
 
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900">
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
-          <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Data</div>
-          <div className="mt-1 text-sm font-semibold text-slate-900">{data}</div>
+          <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">Data</div>
+          <div className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-50">{data}</div>
         </div>
         <div className="text-right">
-          <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Valor</div>
-          <div className="mt-1 text-sm font-bold text-slate-900">
+          <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">Valor</div>
+          <div className="mt-1 text-sm font-bold text-slate-900 dark:text-slate-50">
             {currencyFormatter.format(despesa.valor)}
           </div>
         </div>
       </div>
 
       <div className="mt-4">
-        <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Tipo</div>
-        <div className="mt-1 break-words text-sm font-semibold text-slate-900">
+        <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">Tipo</div>
+        <div className="mt-1 break-words text-sm font-semibold text-slate-900 dark:text-slate-50">
           {despesa.tipo}
         </div>
       </div>
 
       {despesa.fornecedor && (
         <div className="mt-4">
-          <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
+          <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">
             Fornecedor
           </div>
-          <div className="mt-1 break-words text-sm text-slate-600">{despesa.fornecedor}</div>
+          <div className="mt-1 break-words text-sm text-slate-600 dark:text-slate-400">{despesa.fornecedor}</div>
         </div>
       )}
 
@@ -121,7 +121,7 @@ const ResponsiveExpenseCard: React.FC<{
           href={despesa.urlDocumento}
           target="_blank"
           rel="noreferrer"
-          className="mt-4 inline-flex items-center gap-1 text-sm font-bold text-blue-600 hover:underline"
+          className="mt-4 inline-flex items-center gap-1 text-sm font-bold text-blue-600 hover:underline dark:text-blue-400"
         >
           Abrir documento <ExternalLink size={14} />
         </a>
@@ -551,7 +551,7 @@ export const PoliticoProfile = () => {
   if (isLoadingPolitico) {
     return (
       <div className="mx-auto max-w-7xl px-4 py-12 sm:px-6 lg:px-8">
-        <div className="rounded-3xl border border-slate-200 bg-white p-8 text-center text-slate-600">
+        <div className="rounded-3xl border border-slate-200 bg-white p-8 text-center text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
           Carregando perfil…
         </div>
       </div>
@@ -561,8 +561,8 @@ export const PoliticoProfile = () => {
   if (!politico) {
     return (
       <div className="flex h-[60vh] flex-col items-center justify-center gap-4">
-        <h2 className="text-2xl font-bold text-slate-900">Político não encontrado</h2>
-        <Link to="/" className="text-blue-600 hover:underline">Voltar para o início</Link>
+        <h2 className="text-2xl font-bold text-slate-900 dark:text-slate-50">Político não encontrado</h2>
+        <Link to="/" className="text-blue-600 hover:underline dark:text-blue-400">Voltar para o início</Link>
       </div>
     );
   }
@@ -619,18 +619,18 @@ export const PoliticoProfile = () => {
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-      <Link to="/" className="mb-6 flex items-center gap-2 text-sm font-medium text-slate-500 transition-colors hover:text-blue-600 sm:mb-8">
+      <Link to="/" className="mb-6 flex items-center gap-2 text-sm font-medium text-slate-500 transition-colors hover:text-blue-600 sm:mb-8 dark:text-slate-400 dark:hover:text-blue-400">
         <ChevronLeft size={16} />
         Voltar para a busca
       </Link>
 
       {/* Header Section */}
-      <div className="relative mb-10 overflow-hidden rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:mb-12 sm:p-10">
+      <div className="relative mb-10 overflow-hidden rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:mb-12 sm:p-10 dark:border-slate-700 dark:bg-slate-900">
         <div className="flex flex-col items-center gap-6 md:flex-row md:items-start md:gap-8">
-          <div className="relative h-28 w-28 shrink-0 overflow-hidden rounded-2xl border-4 border-slate-50 shadow-md sm:h-40 sm:w-40">
-            <img 
-              src={politico.foto} 
-              alt={politico.nome} 
+          <div className="relative h-28 w-28 shrink-0 overflow-hidden rounded-2xl border-4 border-slate-50 shadow-md sm:h-40 sm:w-40 dark:border-slate-800">
+            <img
+              src={politico.foto}
+              alt={politico.nome}
               className="h-full w-full object-cover"
               referrerPolicy="no-referrer"
             />
@@ -638,7 +638,7 @@ export const PoliticoProfile = () => {
           <div className="flex-1 text-center md:text-left">
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
               <div>
-                <h1 className="text-2xl font-extrabold text-slate-900 sm:text-3xl">{politico.nome}</h1>
+                <h1 className="text-2xl font-extrabold text-slate-900 sm:text-3xl dark:text-slate-50">{politico.nome}</h1>
                 <div className="mt-3 flex flex-wrap items-center justify-center gap-2 md:justify-start">
                   <span
                     className={cn(
@@ -649,41 +649,41 @@ export const PoliticoProfile = () => {
                     {getPoliticoStatusLabel(politico)}
                   </span>
                   {situacaoLabel && (
-                    <span className="inline-flex rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-700 ring-1 ring-inset ring-slate-200">
+                    <span className="inline-flex rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-700 ring-1 ring-inset ring-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:ring-slate-700">
                       Situacao: {situacaoLabel}
                     </span>
                   )}
                 </div>
-                <p className="text-base font-medium text-slate-500 sm:text-lg">
+                <p className="text-base font-medium text-slate-500 sm:text-lg dark:text-slate-400">
                   {politico.partido} • {politico.estado} • {politico.cargo}
                 </p>
               </div>
               <div className="flex flex-col items-center md:items-end gap-1">
                 <div className="flex items-center gap-1">
                   {[1, 2, 3, 4, 5].map((s) => (
-                    <Star 
-                      key={s} 
-                      size={20} 
-                      className={s <= Math.round(politico.notaMedia) ? "fill-yellow-400 text-yellow-400" : "text-slate-200"} 
+                    <Star
+                      key={s}
+                      size={20}
+                      className={s <= Math.round(politico.notaMedia) ? "fill-yellow-400 text-yellow-400" : "text-slate-200 dark:text-slate-700"}
                     />
                   ))}
                 </div>
-                <span className="text-2xl font-black text-slate-900">{politico.notaMedia.toFixed(1)}</span>
-                <span className="text-xs font-semibold text-slate-500">
+                <span className="text-2xl font-black text-slate-900 dark:text-slate-50">{politico.notaMedia.toFixed(1)}</span>
+                <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">
                   {politico.totalAvaliacoes.toLocaleString('pt-BR')} avaliacoes
                 </span>
-                <span className="text-[10px] uppercase tracking-widest font-bold text-slate-400">Nota Média</span>
+                <span className="text-[10px] uppercase tracking-widest font-bold text-slate-400 dark:text-slate-500">Nota Média</span>
               </div>
             </div>
-            
+
             <div className="mt-8 flex flex-col justify-center gap-3 sm:flex-row sm:flex-wrap md:justify-start">
-              <button 
+              <button
                 onClick={() => setIsModalOpen(true)}
                 className="w-full rounded-2xl bg-blue-600 px-8 py-3 text-sm font-bold text-white shadow-lg shadow-blue-200 transition-all hover:bg-blue-700 sm:w-auto"
               >
                 Avalie este político
               </button>
-              <button className="w-full rounded-2xl bg-slate-100 px-8 py-3 text-sm font-bold text-slate-600 transition-all hover:bg-slate-200 sm:w-auto">
+              <button className="w-full rounded-2xl bg-slate-100 px-8 py-3 text-sm font-bold text-slate-600 transition-all hover:bg-slate-200 sm:w-auto dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
                 Seguir atualizações
               </button>
             </div>
@@ -692,16 +692,16 @@ export const PoliticoProfile = () => {
       </div>
 
       {/* Tabs Section */}
-      <div className="mb-8 -mx-4 flex overflow-x-auto border-b border-slate-200 px-4 no-scrollbar sm:mx-0 sm:px-0">
+      <div className="mb-8 -mx-4 flex overflow-x-auto border-b border-slate-200 px-4 no-scrollbar sm:mx-0 sm:px-0 dark:border-slate-700">
         {tabs.map((tab) => (
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
             className={cn(
               "flex items-center gap-2 whitespace-nowrap border-b-2 px-4 py-3 text-sm font-bold transition-all sm:px-6 sm:py-4",
-              activeTab === tab.id 
-                ? "border-blue-600 text-blue-600" 
-                : "border-transparent text-slate-400 hover:text-slate-600"
+              activeTab === tab.id
+                ? "border-blue-600 text-blue-600 dark:text-blue-400"
+                : "border-transparent text-slate-400 hover:text-slate-600 dark:text-slate-500 dark:hover:text-slate-300"
             )}
           >
             <tab.icon size={18} />
@@ -710,7 +710,9 @@ export const PoliticoProfile = () => {
               <span
                 className={cn(
                   "ml-1 inline-flex min-w-6 items-center justify-center rounded-full px-2 py-0.5 text-[11px] font-black",
-                  activeTab === tab.id ? "bg-blue-100 text-blue-700" : "bg-slate-100 text-slate-600",
+                  activeTab === tab.id
+                    ? "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300"
+                    : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400",
                 )}
               >
                 {votacoesHasFiltro ? `${votacoesFiltradas.length}/${votacoes.length}` : votacoes.length}
@@ -724,51 +726,51 @@ export const PoliticoProfile = () => {
       <div className="min-h-[400px]">
         {activeTab === 'geral' && (
           <div className="grid grid-cols-1 gap-6 md:grid-cols-2 md:gap-8">
-            <div className="rounded-3xl border border-slate-200 bg-white p-5 sm:p-8">
-              <h3 className="text-lg font-bold text-slate-900 mb-6">Desempenho Parlamentar</h3>
+            <div className="rounded-3xl border border-slate-200 bg-white p-5 sm:p-8 dark:border-slate-700 dark:bg-slate-900">
+              <h3 className="text-lg font-bold text-slate-900 mb-6 dark:text-slate-50">Desempenho Parlamentar</h3>
               <div className="space-y-8">
                 <div>
                   <div className="flex justify-between mb-2">
-                    <span className="text-sm font-medium text-slate-600">Presença em Sessões</span>
-                    <span className="text-sm font-bold text-slate-900">{presencaLabel}</span>
+                    <span className="text-sm font-medium text-slate-600 dark:text-slate-400">Presença em Sessões</span>
+                    <span className="text-sm font-bold text-slate-900 dark:text-slate-50">{presencaLabel}</span>
                   </div>
-                  <div className="h-3 w-full rounded-full bg-slate-100 overflow-hidden">
-                    <div 
-                      className="h-full bg-emerald-500 rounded-full transition-all duration-1000" 
+                  <div className="h-3 w-full rounded-full bg-slate-100 overflow-hidden dark:bg-slate-700">
+                    <div
+                      className="h-full bg-emerald-500 rounded-full transition-all duration-1000"
                       style={{ width: `${presencaValue}%` }}
                     />
                   </div>
                 </div>
                 <div>
                   <div className="flex justify-between mb-2">
-                    <span className="text-sm font-medium text-slate-600">Alinhamento com o Governo</span>
-                    <span className="text-sm font-bold text-slate-900">{alinhamentoLabel}</span>
+                    <span className="text-sm font-medium text-slate-600 dark:text-slate-400">Alinhamento com o Governo</span>
+                    <span className="text-sm font-bold text-slate-900 dark:text-slate-50">{alinhamentoLabel}</span>
                   </div>
-                  <div className="h-3 w-full rounded-full bg-slate-100 overflow-hidden">
-                    <div 
-                      className="h-full bg-blue-500 rounded-full transition-all duration-1000" 
+                  <div className="h-3 w-full rounded-full bg-slate-100 overflow-hidden dark:bg-slate-700">
+                    <div
+                      className="h-full bg-blue-500 rounded-full transition-all duration-1000"
                       style={{ width: `${alinhamentoValue}%` }}
                     />
                   </div>
                 </div>
               </div>
-              <div className="mt-10 flex gap-3 rounded-2xl border border-blue-100 bg-blue-50 p-4">
-                <Info size={20} className="text-blue-600 shrink-0" />
-                <p className="text-xs text-blue-800 leading-relaxed">
+              <div className="mt-10 flex gap-3 rounded-2xl border border-blue-100 bg-blue-50 p-4 dark:border-blue-900 dark:bg-blue-950">
+                <Info size={20} className="text-blue-600 shrink-0 dark:text-blue-400" />
+                <p className="text-xs text-blue-800 leading-relaxed dark:text-blue-300">
                   O alinhamento é calculado com base na convergência dos votos do parlamentar com a orientação da liderança do governo no Congresso.
                 </p>
               </div>
             </div>
-            
-            <div className="rounded-3xl border border-slate-200 bg-white p-5 sm:p-8">
+
+            <div className="rounded-3xl border border-slate-200 bg-white p-5 sm:p-8 dark:border-slate-700 dark:bg-slate-900">
               <div className="flex items-start justify-between gap-4">
                 <div>
-                  <h3 className="text-lg font-bold text-slate-900">Dados oficiais</h3>
-                  <p className="mt-2 max-w-md text-sm text-slate-500">
+                  <h3 className="text-lg font-bold text-slate-900 dark:text-slate-50">Dados oficiais</h3>
+                  <p className="mt-2 max-w-md text-sm text-slate-500 dark:text-slate-400">
                     Dados enriquecidos a partir da API oficial da Câmara dos Deputados.
                   </p>
                 </div>
-                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-blue-50 text-blue-600 dark:bg-blue-950 dark:text-blue-400">
                   <FileText size={22} />
                 </div>
               </div>
@@ -777,11 +779,11 @@ export const PoliticoProfile = () => {
                 <>
                   <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2">
                     {dadosOficiais.map((item) => (
-                      <div key={item.label} className="rounded-2xl bg-slate-50 p-4">
-                        <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                      <div key={item.label} className="rounded-2xl bg-slate-50 p-4 dark:bg-slate-800">
+                        <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">
                           {item.label}
                         </div>
-                        <div className="mt-1 break-words text-sm font-semibold text-slate-900">
+                        <div className="mt-1 break-words text-sm font-semibold text-slate-900 dark:text-slate-50">
                           {item.value}
                         </div>
                       </div>
@@ -789,8 +791,8 @@ export const PoliticoProfile = () => {
                   </div>
 
                   {(politico.urlWebsite || redesSociais.length > 0) && (
-                    <div className="mt-6 rounded-2xl border border-slate-200 p-4">
-                      <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                    <div className="mt-6 rounded-2xl border border-slate-200 p-4 dark:border-slate-700">
+                      <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">
                         Links institucionais
                       </div>
                       <div className="mt-3 flex flex-wrap gap-2">
@@ -799,7 +801,7 @@ export const PoliticoProfile = () => {
                             href={politico.urlWebsite}
                             target="_blank"
                             rel="noreferrer"
-                            className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-3 py-2 text-xs font-bold text-slate-700 transition-colors hover:bg-slate-200"
+                            className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-3 py-2 text-xs font-bold text-slate-700 transition-colors hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
                           >
                             Site oficial <ExternalLink size={12} />
                           </a>
@@ -810,7 +812,7 @@ export const PoliticoProfile = () => {
                             href={link}
                             target="_blank"
                             rel="noreferrer"
-                            className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700 transition-colors hover:bg-blue-100"
+                            className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700 transition-colors hover:bg-blue-100 dark:bg-blue-950 dark:text-blue-300 dark:hover:bg-blue-900"
                           >
                             {formatarLinkLabel(link, `Rede ${index + 1}`)} <ExternalLink size={12} />
                           </a>
@@ -820,9 +822,9 @@ export const PoliticoProfile = () => {
                   )}
                 </>
               ) : (
-                <div className="mt-6 flex gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                  <AlertCircle size={20} className="shrink-0 text-slate-500" />
-                  <p className="text-sm leading-relaxed text-slate-600">
+                <div className="mt-6 flex gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800">
+                  <AlertCircle size={20} className="shrink-0 text-slate-500 dark:text-slate-400" />
+                  <p className="text-sm leading-relaxed text-slate-600 dark:text-slate-400">
                     Ainda não há dados oficiais detalhados disponíveis para este parlamentar.
                   </p>
                 </div>
@@ -833,22 +835,22 @@ export const PoliticoProfile = () => {
 
         {activeTab === 'votacoes' && (
           <div className="space-y-4">
-            <div className="rounded-2xl border border-slate-200 bg-white p-4 sm:p-5">
+            <div className="rounded-2xl border border-slate-200 bg-white p-4 sm:p-5 dark:border-slate-700 dark:bg-slate-900">
               <div className="flex flex-col gap-4 md:flex-row md:items-end">
                 <div className="flex-1">
-                  <label className="text-xs font-bold text-slate-600">Buscar</label>
+                  <label className="text-xs font-bold text-slate-600 dark:text-slate-400">Buscar</label>
                   <input
                     type="text"
-                    className="mt-1 block w-full rounded-2xl border-0 py-2 px-3 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:ring-2 focus:ring-inset focus:ring-blue-600 sm:text-sm sm:leading-6"
+                    className="mt-1 block w-full rounded-2xl border-0 py-2 px-3 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:ring-2 focus:ring-inset focus:ring-blue-600 sm:text-sm sm:leading-6 dark:bg-slate-800 dark:text-slate-50 dark:ring-slate-700 dark:placeholder:text-slate-500"
                     placeholder="Ementa, tipo, número/ano…"
                     value={votacoesFiltro.texto}
                     onChange={(e) => setVotacoesFiltro((curr) => ({...curr, texto: e.target.value}))}
                   />
                 </div>
                 <div className="w-full md:w-48">
-                  <label className="text-xs font-bold text-slate-600">Voto</label>
+                  <label className="text-xs font-bold text-slate-600 dark:text-slate-400">Voto</label>
                   <select
-                    className="mt-1 block w-full rounded-2xl border-0 py-2 px-3 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-200 focus:ring-2 focus:ring-inset focus:ring-blue-600 sm:text-sm sm:leading-6"
+                    className="mt-1 block w-full rounded-2xl border-0 py-2 px-3 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-200 focus:ring-2 focus:ring-inset focus:ring-blue-600 sm:text-sm sm:leading-6 dark:bg-slate-800 dark:text-slate-50 dark:ring-slate-700"
                     value={votacoesFiltro.voto}
                     onChange={(e) => setVotacoesFiltro((curr) => ({...curr, voto: e.target.value}))}
                   >
@@ -859,9 +861,9 @@ export const PoliticoProfile = () => {
                   </select>
                 </div>
                 <div className="w-full md:w-40">
-                  <label className="text-xs font-bold text-slate-600">Tipo</label>
+                  <label className="text-xs font-bold text-slate-600 dark:text-slate-400">Tipo</label>
                   <select
-                    className="mt-1 block w-full rounded-2xl border-0 py-2 px-3 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-200 focus:ring-2 focus:ring-inset focus:ring-blue-600 sm:text-sm sm:leading-6"
+                    className="mt-1 block w-full rounded-2xl border-0 py-2 px-3 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-200 focus:ring-2 focus:ring-inset focus:ring-blue-600 sm:text-sm sm:leading-6 dark:bg-slate-800 dark:text-slate-50 dark:ring-slate-700"
                     value={votacoesFiltro.tipo}
                     onChange={(e) => setVotacoesFiltro((curr) => ({...curr, tipo: e.target.value}))}
                   >
@@ -872,9 +874,9 @@ export const PoliticoProfile = () => {
                   </select>
                 </div>
                 <div className="w-full md:w-32">
-                  <label className="text-xs font-bold text-slate-600">Ano</label>
+                  <label className="text-xs font-bold text-slate-600 dark:text-slate-400">Ano</label>
                   <select
-                    className="mt-1 block w-full rounded-2xl border-0 py-2 px-3 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-200 focus:ring-2 focus:ring-inset focus:ring-blue-600 sm:text-sm sm:leading-6"
+                    className="mt-1 block w-full rounded-2xl border-0 py-2 px-3 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-200 focus:ring-2 focus:ring-inset focus:ring-blue-600 sm:text-sm sm:leading-6 dark:bg-slate-800 dark:text-slate-50 dark:ring-slate-700"
                     value={votacoesFiltro.ano}
                     onChange={(e) => setVotacoesFiltro((curr) => ({...curr, ano: e.target.value}))}
                   >
@@ -888,24 +890,24 @@ export const PoliticoProfile = () => {
                   type="button"
                   disabled={!votacoesHasFiltro}
                   onClick={() => setVotacoesFiltro({texto: '', voto: '', tipo: '', ano: ''})}
-                  className="w-full rounded-2xl bg-slate-100 px-5 py-2 text-sm font-bold text-slate-700 hover:bg-slate-200 disabled:opacity-50 disabled:hover:bg-slate-100 md:w-auto"
+                  className="w-full rounded-2xl bg-slate-100 px-5 py-2 text-sm font-bold text-slate-700 hover:bg-slate-200 disabled:opacity-50 disabled:hover:bg-slate-100 md:w-auto dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700 dark:disabled:hover:bg-slate-800"
                 >
                   Limpar
                 </button>
               </div>
-              <div className="mt-3 text-xs font-medium text-slate-500">
+              <div className="mt-3 text-xs font-medium text-slate-500 dark:text-slate-400">
                 Mostrando {votacoesFiltradas.length} de {votacoes.length}
               </div>
             </div>
 
             {isLoadingVotacoes && (
-              <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center text-slate-600">
+              <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
                 Carregando votações…
               </div>
             )}
 
             {!isLoadingVotacoes && votacoesFiltradas.length === 0 && (
-              <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center text-slate-600">
+              <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
                 Nenhuma votação encontrada com esses filtros.
               </div>
             )}
@@ -917,7 +919,7 @@ export const PoliticoProfile = () => {
                   : v.ementa || 'Votação';
               const isExpanded = expandedVotoId === v.votoId;
               return (
-              <div key={v.votoId} className="rounded-2xl border border-slate-200 bg-white transition-all hover:border-slate-300">
+              <div key={v.votoId} className="rounded-2xl border border-slate-200 bg-white transition-all hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:hover:border-slate-600">
                 <button
                   onClick={() => setExpandedVotoId((curr) => (curr === v.votoId ? null : v.votoId))}
                   className="flex w-full items-start justify-between gap-4 p-4 text-left sm:p-6"
@@ -925,23 +927,29 @@ export const PoliticoProfile = () => {
                   <div className="flex min-w-0 gap-4 items-start">
                     <div className={cn(
                       "mt-1 flex h-10 w-10 shrink-0 items-center justify-center rounded-full",
-                      v.voto === 'Sim' ? "bg-emerald-50 text-emerald-600" : 
-                      v.voto === 'Não' ? "bg-rose-50 text-rose-600" : "bg-slate-50 text-slate-600"
+                      v.voto === 'Sim'
+                        ? "bg-emerald-50 text-emerald-600 dark:bg-emerald-950 dark:text-emerald-400"
+                        : v.voto === 'Não'
+                          ? "bg-rose-50 text-rose-600 dark:bg-rose-950 dark:text-rose-400"
+                          : "bg-slate-50 text-slate-600 dark:bg-slate-800 dark:text-slate-400"
                     )}>
-                      {v.voto === 'Sim' ? <CheckCircle2 size={20} /> : 
+                      {v.voto === 'Sim' ? <CheckCircle2 size={20} /> :
                        v.voto === 'Não' ? <XCircle size={20} /> : <MinusCircle size={20} />}
                     </div>
                     <div className="min-w-0">
-                      <h4 className="break-words font-bold text-slate-900">{titulo}</h4>
-                      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
+                      <h4 className="break-words font-bold text-slate-900 dark:text-slate-50">{titulo}</h4>
+                      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500 dark:text-slate-400">
                         <span className="flex items-center gap-1">
                           <Calendar size={12} />{' '}
                           {formatarDataVotacao(v.dataVotacao) ?? 'Data indisponível'}
                         </span>
                         <span className={cn(
                           "font-bold uppercase tracking-wider",
-                          v.voto === 'Sim' ? "text-emerald-600" : 
-                          v.voto === 'Não' ? "text-rose-600" : "text-slate-600"
+                          v.voto === 'Sim'
+                            ? "text-emerald-600 dark:text-emerald-400"
+                            : v.voto === 'Não'
+                              ? "text-rose-600 dark:text-rose-400"
+                              : "text-slate-600 dark:text-slate-400"
                         )}>Votou: {v.voto}</span>
                       </div>
                     </div>
@@ -952,27 +960,27 @@ export const PoliticoProfile = () => {
                 </button>
 
                 {isExpanded && (
-                  <div className="border-t border-slate-100 px-4 py-5 sm:px-6">
+                  <div className="border-t border-slate-100 px-4 py-5 sm:px-6 dark:border-slate-800">
                     <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                      <div className="rounded-2xl bg-slate-50 p-4">
-                        <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Ementa</div>
-                        <div className="mt-1 text-sm font-semibold text-slate-900">{v.ementa || '—'}</div>
+                      <div className="rounded-2xl bg-slate-50 p-4 dark:bg-slate-800">
+                        <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">Ementa</div>
+                        <div className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-50">{v.ementa || '—'}</div>
                       </div>
-                      <div className="rounded-2xl bg-slate-50 p-4">
-                        <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Identificadores</div>
-                        <div className="mt-2 grid grid-cols-1 gap-1 text-xs text-slate-600">
-                          <div><span className="font-bold text-slate-800">Voto ID:</span> {v.votoId}</div>
-                          <div><span className="font-bold text-slate-800">Votação ID:</span> {v.votacaoId}</div>
-                          <div><span className="font-bold text-slate-800">Político ID:</span> {v.politicoId}</div>
+                      <div className="rounded-2xl bg-slate-50 p-4 dark:bg-slate-800">
+                        <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">Identificadores</div>
+                        <div className="mt-2 grid grid-cols-1 gap-1 text-xs text-slate-600 dark:text-slate-400">
+                          <div><span className="font-bold text-slate-800 dark:text-slate-200">Voto ID:</span> {v.votoId}</div>
+                          <div><span className="font-bold text-slate-800 dark:text-slate-200">Votação ID:</span> {v.votacaoId}</div>
+                          <div><span className="font-bold text-slate-800 dark:text-slate-200">Político ID:</span> {v.politicoId}</div>
                         </div>
                       </div>
-                      <div className="rounded-2xl bg-slate-50 p-4">
-                        <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Tipo</div>
-                        <div className="mt-1 text-sm font-semibold text-slate-900">{v.siglaTipo || '—'}</div>
+                      <div className="rounded-2xl bg-slate-50 p-4 dark:bg-slate-800">
+                        <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">Tipo</div>
+                        <div className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-50">{v.siglaTipo || '—'}</div>
                       </div>
-                      <div className="rounded-2xl bg-slate-50 p-4">
-                        <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Número/Ano</div>
-                        <div className="mt-1 text-sm font-semibold text-slate-900">
+                      <div className="rounded-2xl bg-slate-50 p-4 dark:bg-slate-800">
+                        <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">Número/Ano</div>
+                        <div className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-50">
                           {v.numero != null && v.ano != null ? `${v.numero}/${v.ano}` : '—'}
                         </div>
                       </div>
@@ -989,7 +997,7 @@ export const PoliticoProfile = () => {
                   type="button"
                   onClick={loadMoreVotacoes}
                   disabled={isLoadingMoreVotacoes}
-                  className="rounded-2xl bg-slate-100 px-6 py-3 text-sm font-bold text-slate-700 hover:bg-slate-200 disabled:opacity-50"
+                  className="rounded-2xl bg-slate-100 px-6 py-3 text-sm font-bold text-slate-700 hover:bg-slate-200 disabled:opacity-50 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
                 >
                   {isLoadingMoreVotacoes ? 'Carregando…' : 'Carregar mais'}
                 </button>
@@ -1000,13 +1008,13 @@ export const PoliticoProfile = () => {
 
         {activeTab === 'despesas' && (
           <div className="space-y-4">
-            <div className="rounded-2xl border border-slate-200 bg-white p-4 sm:p-5">
+            <div className="rounded-2xl border border-slate-200 bg-white p-4 sm:p-5 dark:border-slate-700 dark:bg-slate-900">
               <div className="flex flex-col gap-4 md:flex-row md:items-end">
                 <div className="flex-1">
-                  <label className="text-xs font-bold text-slate-600">Tipo</label>
+                  <label className="text-xs font-bold text-slate-600 dark:text-slate-400">Tipo</label>
                   <input
                     type="text"
-                    className="mt-1 block w-full rounded-2xl border-0 py-2 px-3 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:ring-2 focus:ring-inset focus:ring-blue-600 sm:text-sm sm:leading-6"
+                    className="mt-1 block w-full rounded-2xl border-0 py-2 px-3 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:ring-2 focus:ring-inset focus:ring-blue-600 sm:text-sm sm:leading-6 dark:bg-slate-800 dark:text-slate-50 dark:ring-slate-700 dark:placeholder:text-slate-500"
                     placeholder="Ex: Divulgação, Passagens…"
                     value={despesasFiltro.tipo}
                     onChange={(e) => setDespesasFiltro((curr) => ({...curr, tipo: e.target.value}))}
@@ -1019,9 +1027,9 @@ export const PoliticoProfile = () => {
                   </datalist>
                 </div>
                 <div className="w-full md:w-28">
-                  <label className="text-xs font-bold text-slate-600">Ano</label>
+                  <label className="text-xs font-bold text-slate-600 dark:text-slate-400">Ano</label>
                   <select
-                    className="mt-1 block w-full rounded-2xl border-0 py-2 px-3 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-200 focus:ring-2 focus:ring-inset focus:ring-blue-600 sm:text-sm sm:leading-6"
+                    className="mt-1 block w-full rounded-2xl border-0 py-2 px-3 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-200 focus:ring-2 focus:ring-inset focus:ring-blue-600 sm:text-sm sm:leading-6 dark:bg-slate-800 dark:text-slate-50 dark:ring-slate-700"
                     value={despesasFiltro.ano}
                     onChange={(e) => setDespesasFiltro((curr) => ({...curr, ano: e.target.value}))}
                   >
@@ -1032,9 +1040,9 @@ export const PoliticoProfile = () => {
                   </select>
                 </div>
                 <div className="w-full md:w-28">
-                  <label className="text-xs font-bold text-slate-600">Mês</label>
+                  <label className="text-xs font-bold text-slate-600 dark:text-slate-400">Mês</label>
                   <select
-                    className="mt-1 block w-full rounded-2xl border-0 py-2 px-3 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-200 focus:ring-2 focus:ring-inset focus:ring-blue-600 sm:text-sm sm:leading-6"
+                    className="mt-1 block w-full rounded-2xl border-0 py-2 px-3 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-200 focus:ring-2 focus:ring-inset focus:ring-blue-600 sm:text-sm sm:leading-6 dark:bg-slate-800 dark:text-slate-50 dark:ring-slate-700"
                     value={despesasFiltro.mes}
                     onChange={(e) => setDespesasFiltro((curr) => ({...curr, mes: e.target.value}))}
                   >
@@ -1045,20 +1053,20 @@ export const PoliticoProfile = () => {
                   </select>
                 </div>
                 <div className="w-full md:w-40">
-                  <label className="text-xs font-bold text-slate-600">Valor mín.</label>
+                  <label className="text-xs font-bold text-slate-600 dark:text-slate-400">Valor mín.</label>
                   <input
                     inputMode="decimal"
-                    className="mt-1 block w-full rounded-2xl border-0 py-2 px-3 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:ring-2 focus:ring-inset focus:ring-blue-600 sm:text-sm sm:leading-6"
+                    className="mt-1 block w-full rounded-2xl border-0 py-2 px-3 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:ring-2 focus:ring-inset focus:ring-blue-600 sm:text-sm sm:leading-6 dark:bg-slate-800 dark:text-slate-50 dark:ring-slate-700 dark:placeholder:text-slate-500"
                     placeholder="0"
                     value={despesasFiltro.valorMin}
                     onChange={(e) => setDespesasFiltro((curr) => ({...curr, valorMin: e.target.value}))}
                   />
                 </div>
                 <div className="w-full md:w-40">
-                  <label className="text-xs font-bold text-slate-600">Valor máx.</label>
+                  <label className="text-xs font-bold text-slate-600 dark:text-slate-400">Valor máx.</label>
                   <input
                     inputMode="decimal"
-                    className="mt-1 block w-full rounded-2xl border-0 py-2 px-3 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:ring-2 focus:ring-inset focus:ring-blue-600 sm:text-sm sm:leading-6"
+                    className="mt-1 block w-full rounded-2xl border-0 py-2 px-3 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:ring-2 focus:ring-inset focus:ring-blue-600 sm:text-sm sm:leading-6 dark:bg-slate-800 dark:text-slate-50 dark:ring-slate-700 dark:placeholder:text-slate-500"
                     placeholder="0"
                     value={despesasFiltro.valorMax}
                     onChange={(e) => setDespesasFiltro((curr) => ({...curr, valorMax: e.target.value}))}
@@ -1068,23 +1076,23 @@ export const PoliticoProfile = () => {
                   type="button"
                   disabled={!despesasHasFiltro}
                   onClick={() => setDespesasFiltro({tipo: '', ano: '', mes: '', valorMin: '', valorMax: ''})}
-                  className="w-full rounded-2xl bg-slate-100 px-5 py-2 text-sm font-bold text-slate-700 hover:bg-slate-200 disabled:opacity-50 disabled:hover:bg-slate-100 md:w-auto"
+                  className="w-full rounded-2xl bg-slate-100 px-5 py-2 text-sm font-bold text-slate-700 hover:bg-slate-200 disabled:opacity-50 disabled:hover:bg-slate-100 md:w-auto dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700 dark:disabled:hover:bg-slate-800"
                 >
                   Limpar
                 </button>
               </div>
-              <div className="mt-3 text-xs font-medium text-slate-500">
+              <div className="mt-3 text-xs font-medium text-slate-500 dark:text-slate-400">
                 Mostrando {despesasFiltradas.length} de {despesas.length}
               </div>
             </div>
 
             <div className="space-y-3 md:hidden">
               {isLoadingDespesas ? (
-                <div className="rounded-3xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-600">
+                <div className="rounded-3xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
                   Carregando despesas...
                 </div>
               ) : despesasFiltradas.length === 0 ? (
-                <div className="rounded-3xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-600">
+                <div className="rounded-3xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
                   Nenhuma despesa encontrada com esses filtros.
                 </div>
               ) : (
@@ -1096,11 +1104,11 @@ export const PoliticoProfile = () => {
                       currencyFormatter={currencyFormatter}
                     />
                   ))}
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                    <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800">
+                    <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">
                       Total no periodo
                     </div>
-                    <div className="mt-1 text-lg font-black text-slate-900">
+                    <div className="mt-1 text-lg font-black text-slate-900 dark:text-slate-50">
                       {currencyFormatter.format(despesasTotal)}
                     </div>
                   </div>
@@ -1108,36 +1116,36 @@ export const PoliticoProfile = () => {
               )}
             </div>
 
-            <div className="hidden overflow-hidden rounded-3xl border border-slate-200 bg-white md:block">
+            <div className="hidden overflow-hidden rounded-3xl border border-slate-200 bg-white md:block dark:border-slate-700 dark:bg-slate-900">
               <table className="w-full text-left border-collapse">
                 <thead>
-                  <tr className="bg-slate-50 border-b border-slate-200">
-                    <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Data</th>
-                    <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Tipo de Despesa</th>
-                    <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider text-right">Valor</th>
+                  <tr className="bg-slate-50 border-b border-slate-200 dark:bg-slate-800 dark:border-slate-700">
+                    <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider dark:text-slate-400">Data</th>
+                    <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider dark:text-slate-400">Tipo de Despesa</th>
+                    <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider text-right dark:text-slate-400">Valor</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100">
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                   {isLoadingDespesas ? (
                     <tr>
-                      <td colSpan={3} className="px-6 py-8 text-center text-sm text-slate-600">
+                      <td colSpan={3} className="px-6 py-8 text-center text-sm text-slate-600 dark:text-slate-400">
                         Carregando despesas…
                       </td>
                     </tr>
                   ) : despesasFiltradas.length === 0 ? (
                     <tr>
-                      <td colSpan={3} className="px-6 py-8 text-center text-sm text-slate-600">
+                      <td colSpan={3} className="px-6 py-8 text-center text-sm text-slate-600 dark:text-slate-400">
                         Nenhuma despesa encontrada com esses filtros.
                       </td>
                     </tr>
                   ) : (
                     despesasFiltradas.map((d) => (
-                      <tr key={d.id} className="hover:bg-slate-50/50 transition-colors">
-                        <td className="px-6 py-4 text-sm text-slate-600">
+                      <tr key={d.id} className="hover:bg-slate-50/50 transition-colors dark:hover:bg-slate-800/50">
+                        <td className="px-6 py-4 text-sm text-slate-600 dark:text-slate-400">
                           {new Date(`${d.ano}-${String(d.mes).padStart(2, '0')}-01`).toLocaleDateString('pt-BR')}
                         </td>
-                        <td className="px-6 py-4 text-sm font-medium text-slate-900">{d.tipo}</td>
-                        <td className="px-6 py-4 text-sm font-bold text-slate-900 text-right">
+                        <td className="px-6 py-4 text-sm font-medium text-slate-900 dark:text-slate-50">{d.tipo}</td>
+                        <td className="px-6 py-4 text-sm font-bold text-slate-900 text-right dark:text-slate-50">
                           {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(d.valor)}
                         </td>
                       </tr>
@@ -1145,9 +1153,9 @@ export const PoliticoProfile = () => {
                   )}
                 </tbody>
                 <tfoot>
-                  <tr className="bg-slate-50 font-bold">
-                    <td colSpan={2} className="px-6 py-4 text-sm text-slate-900">Total no período</td>
-                    <td className="px-6 py-4 text-sm text-slate-900 text-right">
+                  <tr className="bg-slate-50 font-bold dark:bg-slate-800">
+                    <td colSpan={2} className="px-6 py-4 text-sm text-slate-900 dark:text-slate-50">Total no período</td>
+                    <td className="px-6 py-4 text-sm text-slate-900 text-right dark:text-slate-50">
                       {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(
                         despesasTotal
                       )}
@@ -1163,7 +1171,7 @@ export const PoliticoProfile = () => {
                   type="button"
                   onClick={loadMoreDespesas}
                   disabled={isLoadingMoreDespesas}
-                  className="rounded-2xl bg-slate-100 px-6 py-3 text-sm font-bold text-slate-700 hover:bg-slate-200 disabled:opacity-50"
+                  className="rounded-2xl bg-slate-100 px-6 py-3 text-sm font-bold text-slate-700 hover:bg-slate-200 disabled:opacity-50 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
                 >
                   {isLoadingMoreDespesas ? 'Carregando…' : 'Carregar mais'}
                 </button>
@@ -1173,17 +1181,17 @@ export const PoliticoProfile = () => {
         )}
 
         {activeTab === 'noticias' && (
-          <div className="rounded-3xl border border-slate-200 bg-white p-8 text-slate-600">
+          <div className="rounded-3xl border border-slate-200 bg-white p-8 text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
             Notícias em breve.
           </div>
         )}
       </div>
 
-      <EvaluationModal 
-        isOpen={isModalOpen} 
-        onClose={() => setIsModalOpen(false)} 
+      <EvaluationModal
+        isOpen={isModalOpen}
+        onClose={() => setIsModalOpen(false)}
         politicoId={politico.id}
-        politicoName={politico.nome} 
+        politicoName={politico.nome}
         onEvaluationSaved={handleEvaluationSaved}
       />
     </div>
@@ -1191,16 +1199,16 @@ export const PoliticoProfile = () => {
 };
 
 const Info = ({ size, className }: { size: number, className?: string }) => (
-  <svg 
-    xmlns="http://www.w3.org/2000/svg" 
-    width={size} 
-    height={size} 
-    viewBox="0 0 24 24" 
-    fill="none" 
-    stroke="currentColor" 
-    strokeWidth="2" 
-    strokeLinecap="round" 
-    strokeLinejoin="round" 
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
     className={className}
   >
     <circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>

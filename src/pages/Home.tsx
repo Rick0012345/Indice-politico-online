@@ -27,10 +27,10 @@ const PoliticoCard: React.FC<{politico: PoliticoCardModel; type: 'best' | 'worst
   return (
     <Link
       to={`/politico/${politico.id}`}
-      className="group relative flex flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white p-4 transition-all hover:-translate-y-1 hover:shadow-lg"
+      className="group relative flex flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white p-4 transition-all hover:-translate-y-1 hover:shadow-lg dark:border-slate-700 dark:bg-slate-900"
     >
       <div className="flex items-center gap-4">
-        <div className="relative h-16 w-16 overflow-hidden rounded-full border-2 border-slate-100">
+        <div className="relative h-16 w-16 overflow-hidden rounded-full border-2 border-slate-100 dark:border-slate-700">
           <img
             src={politico.foto}
             alt={politico.nome}
@@ -39,15 +39,15 @@ const PoliticoCard: React.FC<{politico: PoliticoCardModel; type: 'best' | 'worst
           />
         </div>
         <div className="min-w-0 flex-1">
-          <h3 className="break-words font-bold text-slate-900 transition-colors group-hover:text-blue-600">
+          <h3 className="break-words font-bold text-slate-900 transition-colors group-hover:text-blue-600 dark:text-slate-50">
             {politico.nome}
           </h3>
-          <p className="truncate text-xs text-slate-500">
+          <p className="truncate text-xs text-slate-500 dark:text-slate-400">
             {politico.partido} / {politico.estado}
           </p>
           <div className="mt-1 flex items-center gap-1">
             <Star size={14} className="fill-yellow-400 text-yellow-400" />
-            <span className="text-sm font-bold text-slate-700">{politico.notaMedia.toFixed(1)}</span>
+            <span className="text-sm font-bold text-slate-700 dark:text-slate-300">{politico.notaMedia.toFixed(1)}</span>
           </div>
           <span
             className={cn(
@@ -61,7 +61,9 @@ const PoliticoCard: React.FC<{politico: PoliticoCardModel; type: 'best' | 'worst
         <div
           className={cn(
             'flex h-8 w-8 items-center justify-center rounded-full',
-            type === 'best' ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600',
+            type === 'best'
+              ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-950 dark:text-emerald-400'
+              : 'bg-rose-50 text-rose-600 dark:bg-rose-950 dark:text-rose-400',
           )}
         >
           {type === 'best' ? <TrendingUp size={16} /> : <TrendingDown size={16} />}
@@ -75,10 +77,10 @@ const NovoPoliticoCard: React.FC<{politico: PoliticoCardModel}> = ({politico}) =
   return (
     <Link
       to={`/politico/${politico.id}`}
-      className="group relative flex flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white p-4 transition-all hover:-translate-y-1 hover:shadow-lg"
+      className="group relative flex flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white p-4 transition-all hover:-translate-y-1 hover:shadow-lg dark:border-slate-700 dark:bg-slate-900"
     >
       <div className="flex items-center gap-4">
-        <div className="relative h-16 w-16 overflow-hidden rounded-full border-2 border-slate-100">
+        <div className="relative h-16 w-16 overflow-hidden rounded-full border-2 border-slate-100 dark:border-slate-700">
           <img
             src={politico.foto}
             alt={politico.nome}
@@ -87,13 +89,13 @@ const NovoPoliticoCard: React.FC<{politico: PoliticoCardModel}> = ({politico}) =
           />
         </div>
         <div className="min-w-0 flex-1">
-          <h3 className="break-words font-bold text-slate-900 transition-colors">{politico.nome}</h3>
-          <p className="truncate text-xs text-slate-500">
+          <h3 className="break-words font-bold text-slate-900 transition-colors dark:text-slate-50">{politico.nome}</h3>
+          <p className="truncate text-xs text-slate-500 dark:text-slate-400">
             {politico.partido} / {politico.estado}
           </p>
           <div className="mt-1 flex items-center gap-1">
             <Star size={14} className="fill-yellow-400 text-yellow-400" />
-            <span className="text-sm font-bold text-slate-700">{politico.notaMedia.toFixed(1)}</span>
+            <span className="text-sm font-bold text-slate-700 dark:text-slate-300">{politico.notaMedia.toFixed(1)}</span>
           </div>
           <span
             className={cn(
@@ -104,7 +106,7 @@ const NovoPoliticoCard: React.FC<{politico: PoliticoCardModel}> = ({politico}) =
             {getPoliticoStatusLabel(politico)}
           </span>
         </div>
-        <div className="flex h-8 w-8 items-center justify-center rounded-full bg-blue-50 text-blue-600">
+        <div className="flex h-8 w-8 items-center justify-center rounded-full bg-blue-50 text-blue-600 dark:bg-blue-950 dark:text-blue-400">
           <Sparkles size={16} />
         </div>
       </div>
@@ -272,13 +274,13 @@ export const Home = () => {
 
   return (
     <div className="flex flex-col gap-16 pb-20">
-      <section className="relative overflow-hidden bg-slate-50 py-12 sm:py-16">
-        <div className="absolute inset-0 -z-10 bg-[radial-gradient(45rem_50rem_at_top,theme(colors.blue.100),theme(colors.white))] opacity-20" />
+      <section className="relative overflow-hidden bg-slate-50 py-12 sm:py-16 dark:bg-slate-950">
+        <div className="absolute inset-0 -z-10 bg-[radial-gradient(45rem_50rem_at_top,theme(colors.blue.100),theme(colors.white))] opacity-20 dark:bg-[radial-gradient(45rem_50rem_at_top,theme(colors.blue.950),theme(colors.slate.950))] dark:opacity-30" />
         <div className="mx-auto max-w-7xl px-4 text-center sm:px-6 lg:px-8">
-          <h1 className="text-4xl font-extrabold tracking-tight text-slate-900 sm:text-6xl">
+          <h1 className="text-4xl font-extrabold tracking-tight text-slate-900 sm:text-6xl dark:text-slate-50">
             Transparencia que gera <span className="text-blue-600">mudanca</span>.
           </h1>
-          <p className="mx-auto mt-6 max-w-2xl text-lg leading-8 text-slate-600">
+          <p className="mx-auto mt-6 max-w-2xl text-lg leading-8 text-slate-600 dark:text-slate-400">
             Acompanhe votos, gastos e o desempenho dos seus representantes. O poder da
             informacao em suas maos.
           </p>
@@ -298,7 +300,7 @@ export const Home = () => {
               ) : null}
               {topSearchSuggestion ? (
                 <div className="pointer-events-none absolute inset-y-0 right-0 hidden items-center pr-3 sm:flex">
-                  <div className="flex items-center gap-2 rounded-full bg-slate-900/5 px-2 py-1 text-xs font-semibold text-slate-600 ring-1 ring-inset ring-slate-200">
+                  <div className="flex items-center gap-2 rounded-full bg-slate-900/5 px-2 py-1 text-xs font-semibold text-slate-600 ring-1 ring-inset ring-slate-200 dark:bg-white/5 dark:text-slate-400 dark:ring-slate-700">
                     <img
                       src={topSearchSuggestion.foto}
                       alt={topSearchSuggestion.nome}
@@ -313,7 +315,7 @@ export const Home = () => {
               ) : null}
               <input
                 type="text"
-                className="block w-full rounded-2xl border-0 bg-white/95 py-4 pl-12 pr-5 text-slate-900 shadow-xl ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:ring-2 focus:ring-inset focus:ring-blue-600 sm:pr-24 sm:text-sm sm:leading-6"
+                className="block w-full rounded-2xl border-0 bg-white/95 py-4 pl-12 pr-5 text-slate-900 shadow-xl ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:ring-2 focus:ring-inset focus:ring-blue-600 sm:pr-24 sm:text-sm sm:leading-6 dark:bg-slate-900/95 dark:text-slate-50 dark:ring-slate-700 dark:placeholder:text-slate-500"
                 placeholder="Busque por nome, partido ou estado"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
@@ -324,26 +326,26 @@ export const Home = () => {
             {showSearchFeedback ? (
               <div className="w-full max-w-2xl text-left">
                 {topSearchSuggestion ? (
-                  <div className="overflow-hidden rounded-3xl border border-slate-200/80 bg-white/95 shadow-xl ring-1 ring-inset ring-white/70 backdrop-blur">
+                  <div className="overflow-hidden rounded-3xl border border-slate-200/80 bg-white/95 shadow-xl ring-1 ring-inset ring-white/70 backdrop-blur dark:border-slate-700/80 dark:bg-slate-900/95 dark:ring-slate-800/70">
                     <button
                       type="button"
                       onClick={() => setSearch(topSearchSuggestion.nome)}
-                      className="flex w-full items-center gap-4 border-b border-slate-200/80 px-4 py-4 text-left transition-colors hover:bg-slate-50"
+                      className="flex w-full items-center gap-4 border-b border-slate-200/80 px-4 py-4 text-left transition-colors hover:bg-slate-50 dark:border-slate-700/80 dark:hover:bg-slate-800"
                     >
                       <img
                         src={topSearchSuggestion.foto}
                         alt={topSearchSuggestion.nome}
-                        className="h-14 w-14 rounded-2xl border border-slate-100 object-cover"
+                        className="h-14 w-14 rounded-2xl border border-slate-100 object-cover dark:border-slate-700"
                         referrerPolicy="no-referrer"
                       />
                       <div className="min-w-0 flex-1">
                         <p className="text-[11px] font-black uppercase tracking-[0.2em] text-blue-600">
                           Sugestao em tempo real
                         </p>
-                        <p className="truncate text-base font-black text-slate-900 sm:text-lg">
+                        <p className="truncate text-base font-black text-slate-900 sm:text-lg dark:text-slate-50">
                           {topSearchSuggestion.nome}
                         </p>
-                        <p className="truncate text-sm text-slate-500">
+                        <p className="truncate text-sm text-slate-500 dark:text-slate-400">
                           {topSearchSuggestion.partido} / {topSearchSuggestion.estado}
                           {inlineSearchCompletion ? ' - Tab completa o nome' : ''}
                         </p>
@@ -358,7 +360,7 @@ export const Home = () => {
                             key={politico.id}
                             type="button"
                             onClick={() => setSearch(politico.nome)}
-                            className="flex min-w-0 max-w-full items-center gap-2 rounded-full bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-200"
+                            className="flex min-w-0 max-w-full items-center gap-2 rounded-full bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
                           >
                             <img
                               src={politico.foto}
@@ -373,7 +375,7 @@ export const Home = () => {
                     ) : null}
                   </div>
                 ) : (
-                  <div className="rounded-2xl border border-slate-200 bg-white/90 px-4 py-3 text-sm font-medium text-slate-500 shadow-sm backdrop-blur">
+                  <div className="rounded-2xl border border-slate-200 bg-white/90 px-4 py-3 text-sm font-medium text-slate-500 shadow-sm backdrop-blur dark:border-slate-700 dark:bg-slate-900/90 dark:text-slate-400">
                     Nenhum deputado encontrado para "{trimmedSearch}".
                   </div>
                 )}
@@ -381,7 +383,7 @@ export const Home = () => {
             ) : null}
 
             <div className="flex flex-wrap justify-center gap-2">
-              <span className="py-2 text-sm font-medium text-slate-500">Status:</span>
+              <span className="py-2 text-sm font-medium text-slate-500 dark:text-slate-400">Status:</span>
               {politicoStatusOptions.map((option) => (
                 <button
                   key={option.value}
@@ -391,7 +393,7 @@ export const Home = () => {
                     'rounded-full px-4 py-1.5 text-xs font-semibold shadow-sm ring-1 ring-inset transition-colors',
                     status === option.value
                       ? 'bg-blue-600 text-white ring-blue-600'
-                      : 'bg-white text-slate-600 ring-slate-200 hover:bg-slate-50',
+                      : 'bg-white text-slate-600 ring-slate-200 hover:bg-slate-50 dark:bg-slate-800 dark:text-slate-300 dark:ring-slate-700 dark:hover:bg-slate-700',
                   )}
                 >
                   {option.label}
@@ -406,8 +408,8 @@ export const Home = () => {
         <section className="mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8">
           <div className="mb-6 flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <Search className="text-slate-600" />
-              <h2 className="text-2xl font-bold text-slate-900">Resultados</h2>
+              <Search className="text-slate-600 dark:text-slate-400" />
+              <h2 className="text-2xl font-bold text-slate-900 dark:text-slate-50">Resultados</h2>
             </div>
           </div>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -423,7 +425,7 @@ export const Home = () => {
           <div className="mb-6 flex items-center justify-between">
             <div className="flex items-center gap-2">
               <Sparkles className="text-blue-600" />
-              <h2 className="text-2xl font-bold text-slate-900">Novos cadastrados</h2>
+              <h2 className="text-2xl font-bold text-slate-900 dark:text-slate-50">Novos cadastrados</h2>
             </div>
           </div>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -440,11 +442,11 @@ export const Home = () => {
             <div className="mb-6 flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex items-center gap-2">
                 <TrendingUp className="text-emerald-600" />
-                <h2 className="text-2xl font-bold text-slate-900">Mais bem avaliados</h2>
+                <h2 className="text-2xl font-bold text-slate-900 dark:text-slate-50">Mais bem avaliados</h2>
               </div>
               <Link
                 to="/ranking"
-                className="flex items-center gap-1 text-sm font-semibold text-blue-600 hover:underline"
+                className="flex items-center gap-1 text-sm font-semibold text-blue-600 hover:underline dark:text-blue-400"
               >
                 Ver ranking completo <ChevronRight size={16} />
               </Link>
@@ -460,11 +462,11 @@ export const Home = () => {
             <div className="mb-6 flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex items-center gap-2">
                 <TrendingDown className="text-rose-600" />
-                <h2 className="text-2xl font-bold text-slate-900">Piores da semana</h2>
+                <h2 className="text-2xl font-bold text-slate-900 dark:text-slate-50">Piores da semana</h2>
               </div>
               <Link
                 to="/ranking"
-                className="flex items-center gap-1 text-sm font-semibold text-blue-600 hover:underline"
+                className="flex items-center gap-1 text-sm font-semibold text-blue-600 hover:underline dark:text-blue-400"
               >
                 Ver ranking completo <ChevronRight size={16} />
               </Link>
