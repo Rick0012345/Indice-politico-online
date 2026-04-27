@@ -13,7 +13,10 @@ type CliOptions = {
   concurrency: number;
   minDelayMs: number;
   maxAttempts: number;
+  staleMinutes: number;
   resetFailed: boolean;
+  resetCancelled: boolean;
+  resetEmpty: boolean;
   dryRun: boolean;
 };
 
@@ -96,6 +99,8 @@ type DeputyVote = {
   };
 };
 
+type LogLevel = 'log' | 'warn' | 'error';
+
 const databaseUrl = process.env.DATABASE_URL?.trim();
 const pool = databaseUrl
   ? new Pool({connectionString: databaseUrl})
@@ -108,6 +113,23 @@ const pool = databaseUrl
     });
 
 const API_BASE = 'https://dadosabertos.camara.leg.br/api/v2';
+const HTTP_TIMEOUT_MS = 45000;
+const MAX_HTTP_ATTEMPTS = 5;
+const MAX_PAGES_PER_REQUEST = 200;
+
+class HttpError extends Error {
+  constructor(
+    public status: number,
+    public url: string,
+    public retryable: boolean,
+  ) {
+    super(`HTTP ${status} em ${url}`);
+  }
+}
+
+const writeLog = (level: LogLevel, message: string) => {
+  console[level](`[${new Date().toISOString()}] ${message}`);
+};
 
 const parseArgs = (): CliOptions => {
   const args = process.argv.slice(2);
@@ -132,7 +154,10 @@ const parseArgs = (): CliOptions => {
     concurrency: Math.max(1, Number(get('concurrency', '2')) || 2),
     minDelayMs: Math.max(0, Number(get('min-delay-ms', '750')) || 750),
     maxAttempts: Math.max(1, Number(get('max-attempts', '5')) || 5),
+    staleMinutes: Math.max(5, Number(get('stale-minutes', '30')) || 30),
     resetFailed: args.includes('--reset-failed'),
+    resetCancelled: args.includes('--reset-cancelled'),
+    resetEmpty: args.includes('--reset-empty'),
     dryRun: args.includes('--dry-run'),
   };
 };
@@ -196,39 +221,113 @@ const textOrNull = (value: unknown) => {
   return text.length > 0 ? text : null;
 };
 
-const fetchJson = async <T>(url: string, attempt = 1): Promise<T> => {
-  const response = await fetch(url, {
-    headers: {
-      Accept: 'application/json',
-      'User-Agent': 'catalogo-politico-ingest-agent/1.0',
-    },
+const mapConcurrent = async <T>(
+  items: T[],
+  concurrency: number,
+  handler: (item: T) => Promise<void>,
+) => {
+  let index = 0;
+  const workers = Array.from({length: Math.min(concurrency, items.length)}, async () => {
+    for (;;) {
+      const currentIndex = index;
+      index += 1;
+      if (currentIndex >= items.length) return;
+      await handler(items[currentIndex]);
+    }
   });
-
-  if ([403, 408, 429, 500, 502, 503, 504].includes(response.status) && attempt < 5) {
-    const retryAfter = Number(response.headers.get('retry-after'));
-    const delay = Number.isFinite(retryAfter) ? retryAfter * 1000 : 1000 * 2 ** attempt;
-    await sleep(delay);
-    return fetchJson<T>(url, attempt + 1);
-  }
-
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status} em ${url}`);
-  }
-
-  return (await response.json()) as T;
+  await Promise.all(workers);
 };
 
-const fetchPaged = async <T>(path: string, params: Record<string, string | number>) => {
+const jitter = (base: number) => Math.round(base * (0.8 + Math.random() * 0.4));
+
+const retryDelayForStatus = (status: number, retryAfterHeader: string | null, attempt: number) => {
+  const retryAfter = retryAfterHeader != null ? Number(retryAfterHeader) : Number.NaN;
+  if (Number.isFinite(retryAfter) && retryAfter > 0) {
+    return Math.min(120000, retryAfter * 1000);
+  }
+
+  const baseByStatus =
+    status === 429 ? 10000 : status === 403 ? 8000 : status === 504 ? 5000 : 2000;
+  return jitter(Math.min(120000, baseByStatus * 2 ** (attempt - 1)));
+};
+
+const fetchJson = async <T>(url: string, attempt = 1): Promise<T> => {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), HTTP_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        Accept: 'application/json',
+        'User-Agent': 'catalogo-politico-ingest-agent/1.0',
+      },
+    });
+
+    const retryable = [403, 408, 429, 500, 502, 503, 504].includes(response.status);
+    if (retryable && attempt < MAX_HTTP_ATTEMPTS) {
+      const delay = retryDelayForStatus(response.status, response.headers.get('retry-after'), attempt);
+      writeLog(
+        'warn',
+        `[http-retry] tentativa=${attempt} status=${response.status} delay=${delay} url=${url}`,
+      );
+      await sleep(delay);
+      return fetchJson<T>(url, attempt + 1);
+    }
+
+    if (!response.ok) {
+      throw new HttpError(response.status, url, retryable);
+    }
+
+    return (await response.json()) as T;
+  } catch (error) {
+    if (error instanceof HttpError) throw error;
+
+    const isAbort = error instanceof Error && error.name === 'AbortError';
+    if (attempt < MAX_HTTP_ATTEMPTS) {
+      const delay = jitter(Math.min(30000, 1000 * 2 ** attempt));
+      writeLog(
+        'warn',
+        `[http-retry] tentativa=${attempt} erro=${isAbort ? 'timeout' : error instanceof Error ? error.message : String(error)} delay=${delay} url=${url}`,
+      );
+      await sleep(delay);
+      return fetchJson<T>(url, attempt + 1);
+    }
+
+    throw new Error(`${isAbort ? 'Timeout' : 'Erro de rede'} em ${url}`);
+  } finally {
+    clearTimeout(timeout);
+  }
+};
+
+const fetchPaged = async <T>(
+  path: string,
+  params: Record<string, string | number>,
+  options: {ignoreBadRequest?: boolean} = {},
+) => {
   const items: T[] = [];
   let page = 1;
 
   for (;;) {
+    if (page > MAX_PAGES_PER_REQUEST) {
+      throw new Error(`Limite de paginacao excedido (${MAX_PAGES_PER_REQUEST}) em ${path}`);
+    }
+
     const url = new URL(`${API_BASE}${path}`);
     for (const [key, value] of Object.entries({...params, itens: 100, pagina: page})) {
       url.searchParams.set(key, String(value));
     }
 
-    const data = await fetchJson<CamaraListResponse<T>>(url.toString());
+    let data: CamaraListResponse<T>;
+    try {
+      data = await fetchJson<CamaraListResponse<T>>(url.toString());
+    } catch (error) {
+      if (options.ignoreBadRequest && error instanceof HttpError && error.status === 400) {
+        writeLog('warn', `[skip] API retornou 400 para recurso opcional: ${url.toString()}`);
+        return items;
+      }
+      throw error;
+    }
     const pageItems = data.dados ?? [];
     items.push(...pageItems);
 
@@ -264,6 +363,14 @@ const ensureCheckpointTable = async () => {
     CREATE UNIQUE INDEX IF NOT EXISTS ingestion_checkpoints_unique_window
     ON ingestion_checkpoints(source, dataset, entity_id, period_start, period_end)
   `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_ingestion_checkpoints_running_lock
+    ON ingestion_checkpoints(source, status, locked_at)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_ingestion_checkpoints_claim_queue
+    ON ingestion_checkpoints(source, dataset, status, attempts, period_start, entity_id)
+  `);
 };
 
 const seedCheckpoint = async (
@@ -272,6 +379,8 @@ const seedCheckpoint = async (
   start: string,
   end: string,
   resetFailed: boolean,
+  resetCancelled: boolean,
+  resetEmpty: boolean,
 ) => {
   await pool.query(
     `
@@ -281,12 +390,22 @@ const seedCheckpoint = async (
     DO UPDATE SET
       status = CASE
         WHEN $5::boolean AND ingestion_checkpoints.status = 'failed' THEN 'pending'
+        WHEN $6::boolean AND ingestion_checkpoints.status = 'cancelled' THEN 'pending'
+        WHEN $7::boolean AND ingestion_checkpoints.status = 'done' AND ingestion_checkpoints.items_count = 0 THEN 'pending'
         WHEN ingestion_checkpoints.status = 'cancelled' THEN 'cancelled'
         ELSE ingestion_checkpoints.status
       END,
+      attempts = CASE
+        WHEN $7::boolean AND ingestion_checkpoints.status = 'done' AND ingestion_checkpoints.items_count = 0 THEN 0
+        ELSE ingestion_checkpoints.attempts
+      END,
+      last_error = CASE
+        WHEN $7::boolean AND ingestion_checkpoints.status = 'done' AND ingestion_checkpoints.items_count = 0 THEN NULL
+        ELSE ingestion_checkpoints.last_error
+      END,
       updated_at = CURRENT_TIMESTAMP
     `,
-    [dataset, entityId, start, end, resetFailed],
+    [dataset, entityId, start, end, resetFailed, resetCancelled, resetEmpty],
   );
 };
 
@@ -303,6 +422,7 @@ const claimCheckpoint = async (dataset: Dataset, maxAttempts: number) => {
         attempts = attempts + 1,
         locked_at = CURRENT_TIMESTAMP,
         started_at = COALESCE(started_at, CURRENT_TIMESTAMP),
+        last_error = NULL,
         updated_at = CURRENT_TIMESTAMP
     WHERE id = (
       SELECT id
@@ -323,6 +443,26 @@ const claimCheckpoint = async (dataset: Dataset, maxAttempts: number) => {
   return result.rows[0] ?? null;
 };
 
+const releaseStaleCheckpoints = async (staleMinutes: number) => {
+  const result = await pool.query(
+    `
+    UPDATE ingestion_checkpoints
+    SET status = CASE WHEN attempts >= 5 THEN 'failed' ELSE 'pending' END,
+        locked_at = NULL,
+        last_error = COALESCE(last_error, 'Checkpoint running expirou e foi liberado automaticamente.'),
+        updated_at = CURRENT_TIMESTAMP
+    WHERE source = 'camara'
+      AND status = 'running'
+      AND locked_at < CURRENT_TIMESTAMP - ($1::text || ' minutes')::interval
+    `,
+    [String(staleMinutes)],
+  );
+
+  if ((result.rowCount ?? 0) > 0) {
+    writeLog('warn', `[stale] ${result.rowCount} checkpoint(s) running liberado(s)`);
+  }
+};
+
 const finishCheckpoint = async (
   id: string,
   status: CheckpointStatus,
@@ -332,11 +472,11 @@ const finishCheckpoint = async (
   await pool.query(
     `
     UPDATE ingestion_checkpoints
-    SET status = $2,
+    SET status = $2::varchar,
         items_count = $3,
         last_error = $4,
         locked_at = NULL,
-        finished_at = CASE WHEN $2 = 'done' THEN CURRENT_TIMESTAMP ELSE finished_at END,
+        finished_at = CASE WHEN $2::text = 'done' THEN CURRENT_TIMESTAMP ELSE finished_at END,
         updated_at = CURRENT_TIMESTAMP
     WHERE id = $1
       AND status <> 'cancelled'
@@ -426,24 +566,39 @@ const ingestDeputiesForLegislature = async (legislature: number) => {
   deputies.forEach((deputy) => ids.add(deputy.id));
 
   let count = 0;
-  const client = await pool.connect();
-  try {
-    for (const id of ids) {
+  await mapConcurrent([...ids], 5, async (id) => {
+    const client = await pool.connect();
+    try {
       const url = `${API_BASE}/deputados/${id}`;
       const detail = await fetchJson<{dados: DeputyDetails}>(url);
       await upsertDeputy(client, detail.dados);
       count += 1;
       await sleep(250);
+    } finally {
+      client.release();
     }
-  } finally {
-    client.release();
-  }
+  });
   return count;
 };
 
-const getPoliticoIds = async () => {
+const getPoliticoIdsForRange = async (from: string, to: string) => {
+  const legislatures = legislaturesForYears(yearsForRange(from, to));
+
+  if (legislatures.length > 0) {
+    const result = await pool.query<{id: string}>(
+      `
+      SELECT id::text AS id
+      FROM politicos
+      WHERE id_legislatura = ANY($1::int[])
+      ORDER BY id ASC
+      `,
+      [legislatures],
+    );
+    return result.rows.map((row) => row.id);
+  }
+
   const result = await pool.query<{id: string}>(
-    'SELECT id::text AS id FROM politicos WHERE ativo IS DISTINCT FROM false ORDER BY id ASC',
+    'SELECT id::text AS id FROM politicos ORDER BY id ASC',
   );
   return result.rows.map((row) => row.id);
 };
@@ -534,20 +689,34 @@ const upsertVoteSession = async (voteSession: VoteSession) => {
   );
 };
 
-const upsertVote = async (voteSessionId: string, vote: DeputyVote) => {
-  const politicoId = vote.deputado_?.id;
-  const voteType = textOrNull(vote.tipoVoto);
-  if (!politicoId || !voteType) return false;
+const upsertVotes = async (voteSessionId: string, votes: DeputyVote[]) => {
+  const validVotes = votes
+    .map((vote) => ({
+      politicoId: vote.deputado_?.id,
+      voteType: textOrNull(vote.tipoVoto),
+    }))
+    .filter((vote): vote is {politicoId: number; voteType: string} =>
+      Boolean(vote.politicoId && vote.voteType),
+    );
+
+  if (validVotes.length === 0) return 0;
+
+  const values: Array<string | number> = [];
+  const placeholders = validVotes.map((vote, index) => {
+    const offset = index * 3;
+    values.push(voteSessionId, vote.politicoId, vote.voteType);
+    return `($${offset + 1}, $${offset + 2}, $${offset + 3})`;
+  });
 
   await pool.query(
     `
     INSERT INTO votos_deputados (votacao_id, politico_id, voto)
-    VALUES ($1, $2, $3)
+    VALUES ${placeholders.join(', ')}
     ON CONFLICT (votacao_id, politico_id) DO UPDATE SET voto = EXCLUDED.voto
     `,
-    [voteSessionId, politicoId, voteType],
+    values,
   );
-  return true;
+  return validVotes.length;
 };
 
 const ingestVoteWindow = async (start: string, end: string) => {
@@ -557,14 +726,16 @@ const ingestVoteWindow = async (start: string, end: string) => {
   });
 
   let count = 0;
-  for (const voteSession of voteSessions) {
+  await mapConcurrent(voteSessions, 4, async (voteSession) => {
     await upsertVoteSession(voteSession);
-    const votes = await fetchPaged<DeputyVote>(`/votacoes/${voteSession.id}/votos`, {});
-    for (const vote of votes) {
-      if (await upsertVote(voteSession.id, vote)) count += 1;
-    }
+    const votes = await fetchPaged<DeputyVote>(
+      `/votacoes/${voteSession.id}/votos`,
+      {},
+      {ignoreBadRequest: true},
+    );
+    count += await upsertVotes(voteSession.id, votes);
     await sleep(250);
-  }
+  });
 
   return count + voteSessions.length;
 };
@@ -580,13 +751,23 @@ const runCheckpointWorkers = async (
       if (!checkpoint) return;
 
       try {
+        writeLog(
+          'log',
+          `[start] ${dataset} ${checkpoint.entity_id} ${checkpoint.period_start}..${checkpoint.period_end}`,
+        );
         const itemsCount = await handler(checkpoint);
         await finishCheckpoint(checkpoint.id, 'done', itemsCount, null);
-        console.log(`[ok] ${dataset} ${checkpoint.entity_id} ${checkpoint.period_start}..${checkpoint.period_end}: ${itemsCount}`);
+        writeLog(
+          'log',
+          `[${itemsCount > 0 ? 'ok-items' : 'ok-zero'}] ${dataset} ${checkpoint.entity_id} ${checkpoint.period_start}..${checkpoint.period_end}: ${itemsCount}`,
+        );
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         await finishCheckpoint(checkpoint.id, 'failed', 0, message);
-        console.warn(`[retry] ${dataset} ${checkpoint.entity_id} ${checkpoint.period_start}..${checkpoint.period_end}: ${message}`);
+        writeLog(
+          'warn',
+          `[retry] ${dataset} ${checkpoint.entity_id} ${checkpoint.period_start}..${checkpoint.period_end}: ${message}`,
+        );
       }
 
       await sleep(options.minDelayMs);
@@ -597,42 +778,68 @@ const runCheckpointWorkers = async (
 };
 
 const seedExpenseCheckpoints = async (options: CliOptions) => {
-  const politicoIds = await getPoliticoIds();
+  const politicoIds = await getPoliticoIdsForRange(options.from, options.to);
   const windows = buildWindows(options.from, options.to, 'month');
   for (const politicoId of politicoIds) {
     for (const window of windows) {
-      await seedCheckpoint('despesas', politicoId, window.start, window.end, options.resetFailed);
+      await seedCheckpoint(
+        'despesas',
+        politicoId,
+        window.start,
+        window.end,
+        options.resetFailed,
+        options.resetCancelled,
+        options.resetEmpty,
+      );
     }
   }
-  console.log(`[seed] despesas: ${politicoIds.length * windows.length} tarefas`);
+  writeLog('log', `[seed] despesas: ${politicoIds.length * windows.length} tarefas`);
 };
 
 const seedVoteCheckpoints = async (options: CliOptions) => {
   const windows = buildWindows(options.from, options.to, options.window);
   for (const window of windows) {
-    await seedCheckpoint('votacoes', '', window.start, window.end, options.resetFailed);
+    await seedCheckpoint(
+      'votacoes',
+      '',
+      window.start,
+      window.end,
+      options.resetFailed,
+      options.resetCancelled,
+      options.resetEmpty,
+    );
   }
-  console.log(`[seed] votacoes: ${windows.length} tarefas`);
+  writeLog('log', `[seed] votacoes: ${windows.length} tarefas`);
 };
 
 const seedDeputyCheckpoints = async (options: CliOptions) => {
   const legislatures = legislaturesForYears(yearsForRange(options.from, options.to));
   for (const legislature of legislatures) {
-    await seedCheckpoint('deputados', String(legislature), options.from, options.to, options.resetFailed);
+    await seedCheckpoint(
+      'deputados',
+      String(legislature),
+      options.from,
+      options.to,
+      options.resetFailed,
+      options.resetCancelled,
+      options.resetEmpty,
+    );
   }
-  console.log(`[seed] deputados: ${legislatures.length} tarefas`);
+  writeLog('log', `[seed] deputados: ${legislatures.length} tarefas`);
 };
 
 const run = async () => {
   const options = parseArgs();
   await ensureCheckpointTable();
+  await releaseStaleCheckpoints(options.staleMinutes);
 
-  console.log(
+  writeLog(
+    'log',
     `[agent] periodo=${options.from}..${options.to} datasets=${options.datasets.join(',')} janela=${options.window} concorrencia=${options.concurrency}`,
   );
 
   if (options.dryRun) {
-    console.log('[dry-run] nenhum dado sera gravado');
+    writeLog('log', '[dry-run] nenhum dado sera gravado');
     return;
   }
 
@@ -665,7 +872,7 @@ const run = async () => {
 
 run()
   .catch((error) => {
-    console.error(error);
+    writeLog('error', error instanceof Error ? error.stack ?? error.message : String(error));
     process.exitCode = 1;
   })
   .finally(async () => {

@@ -1,5 +1,5 @@
-import React, {useEffect, useMemo, useState} from 'react';
-import {CalendarDays, Database, Play, RefreshCw, Settings, XCircle} from 'lucide-react';
+import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
+import {Activity, CalendarDays, Database, Play, RefreshCw, ScrollText, Settings, XCircle} from 'lucide-react';
 import {cn} from '../lib/utils';
 
 type CheckpointSummary = {
@@ -16,6 +16,19 @@ type PopulatedPeriod = {
   periodStart: string;
   periodEnd: string;
   total: number;
+};
+
+type LogStats = {
+  totalLines: number;
+  starts: number;
+  okItems: number;
+  okZero: number;
+  retries: number;
+  skips: number;
+  httpRetries: number;
+  httpStatus: Record<string, number>;
+  lastActivityAt: string | null;
+  lastHttpError: string | null;
 };
 
 const datasetOptions = [
@@ -37,11 +50,50 @@ const formatDate = (value: string | null) => {
   return new Intl.DateTimeFormat('pt-BR', {timeZone: 'UTC'}).format(new Date(value));
 };
 
+const countWindows = (start: string, end: string, mode: 'month' | 'quarter' | 'year') => {
+  const fromDate = new Date(`${start}T00:00:00.000Z`);
+  const toDate = new Date(`${end}T00:00:00.000Z`);
+  if (Number.isNaN(fromDate.getTime()) || Number.isNaN(toDate.getTime())) return 0;
+
+  const months =
+    (toDate.getUTCFullYear() - fromDate.getUTCFullYear()) * 12 +
+    (toDate.getUTCMonth() - fromDate.getUTCMonth()) +
+    1;
+  const step = mode === 'year' ? 12 : mode === 'quarter' ? 3 : 1;
+  return Math.max(0, Math.ceil(months / step));
+};
+
+const countLegislatures = (start: string, end: string) => {
+  const fromYear = new Date(`${start}T00:00:00.000Z`).getUTCFullYear();
+  const toYear = new Date(`${end}T00:00:00.000Z`).getUTCFullYear();
+  const ranges = [
+    [2015, 2018],
+    [2019, 2022],
+    [2023, 2026],
+  ];
+  return ranges.filter(([rangeStart, rangeEnd]) => fromYear <= rangeEnd && toYear >= rangeStart).length;
+};
+
+const defaultLogStats = (): LogStats => ({
+  totalLines: 0,
+  starts: 0,
+  okItems: 0,
+  okZero: 0,
+  retries: 0,
+  skips: 0,
+  httpRetries: 0,
+  httpStatus: {},
+  lastActivityAt: null,
+  lastHttpError: null,
+});
+
+const formatNumber = (value: number) => value.toLocaleString('pt-BR');
+
 export const Admin = () => {
   const [from, setFrom] = useState('2016-01-01');
   const [to, setTo] = useState('2020-12-31');
   const [windowSize, setWindowSize] = useState<'month' | 'quarter' | 'year'>('month');
-  const [concurrency, setConcurrency] = useState(2);
+  const [concurrency, setConcurrency] = useState(4);
   const [selectedDatasets, setSelectedDatasets] = useState<string[]>([
     'deputados',
     'despesas',
@@ -54,8 +106,12 @@ export const Admin = () => {
   const [isPolling, setIsPolling] = useState(false);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [logFile, setLogFile] = useState<string | null>(null);
+  const [logText, setLogText] = useState('');
+  const [logStats, setLogStats] = useState<LogStats>(() => defaultLogStats());
+  const refreshInFlightRef = useRef(false);
 
-  const loadSummary = async () => {
+  const loadSummary = useCallback(async () => {
     setIsLoading(true);
     try {
       const response = await fetch('/api/admin/ingestion/summary');
@@ -69,11 +125,34 @@ export const Admin = () => {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
+
+  const loadLogs = useCallback(async () => {
+    try {
+      const response = await fetch('/api/admin/ingestion/logs');
+      if (!response.ok) return;
+      const data = await response.json();
+      setLogFile(data.file ?? null);
+      setLogText(data.log ?? '');
+      setLogStats(data.stats ?? defaultLogStats());
+    } catch {
+      // Logs are auxiliary; keep the ingestion panel usable if this fails.
+    }
+  }, []);
+
+  const refreshAdminData = useCallback(async () => {
+    if (refreshInFlightRef.current) return;
+    refreshInFlightRef.current = true;
+    try {
+      await Promise.all([loadSummary(), loadLogs()]);
+    } finally {
+      refreshInFlightRef.current = false;
+    }
+  }, [loadLogs, loadSummary]);
 
   useEffect(() => {
-    void loadSummary();
-  }, []);
+    void refreshAdminData();
+  }, [refreshAdminData]);
 
   const groupedCheckpoints = useMemo(() => {
     return datasetOptions.map((dataset) => {
@@ -110,19 +189,43 @@ export const Admin = () => {
       failed,
       pending,
       percent: total > 0 ? Math.round((done / total) * 100) : 0,
+      activePercent: total > 0 ? Math.round(((done + running) / total) * 100) : 0,
     };
   }, [checkpoints, selectedDatasets]);
+
+  const estimatedQueueTotal = useMemo(() => {
+    return selectedDatasets.reduce((sum, dataset) => {
+      if (dataset === 'deputados') return sum + countLegislatures(from, to);
+      if (dataset === 'votacoes') return sum + countWindows(from, to, windowSize);
+      return sum;
+    }, 0);
+  }, [from, selectedDatasets, to, windowSize]);
+
+  const queuePercent =
+    estimatedQueueTotal > 0
+      ? Math.min(100, Math.round((selectedProgress.total / estimatedQueueTotal) * 100))
+      : selectedProgress.total > 0
+        ? 100
+        : 0;
+
+  const httpStatusEntries = useMemo(
+    () =>
+      Object.entries(logStats.httpStatus)
+        .sort(([, a], [, b]) => Number(b) - Number(a))
+        .slice(0, 4),
+    [logStats.httpStatus],
+  );
 
   useEffect(() => {
     const hasActiveWork = checkpoints.some((row) => row.status === 'running' || row.status === 'pending');
     if (!hasActiveWork && !isPolling) return;
 
     const timer = window.setInterval(() => {
-      void loadSummary();
-    }, 5000);
+      void refreshAdminData();
+    }, 1000);
 
     return () => window.clearInterval(timer);
-  }, [checkpoints, isPolling]);
+  }, [checkpoints, isPolling, refreshAdminData]);
 
   useEffect(() => {
     const hasActiveWork = checkpoints.some((row) => row.status === 'running' || row.status === 'pending');
@@ -150,7 +253,7 @@ export const Admin = () => {
       if (!response.ok) throw new Error(data.error ?? 'Erro ao iniciar ingestao.');
       setMessage(data.message ?? 'Ingestao iniciada.');
       setIsPolling(true);
-      await loadSummary();
+      await refreshAdminData();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Erro ao iniciar ingestao.');
     } finally {
@@ -176,8 +279,8 @@ export const Admin = () => {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 py-8 dark:bg-slate-950">
-      <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+    <div className="min-h-screen overflow-x-hidden bg-slate-50 py-8 dark:bg-slate-950">
+      <div className="mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8">
         <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <div className="flex items-center gap-2 text-sm font-bold uppercase text-blue-600 dark:text-blue-400">
@@ -190,7 +293,7 @@ export const Admin = () => {
           </div>
           <button
             type="button"
-            onClick={loadSummary}
+            onClick={refreshAdminData}
             disabled={isLoading}
             className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 transition hover:bg-slate-100 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
           >
@@ -199,8 +302,8 @@ export const Admin = () => {
           </button>
         </div>
 
-        <section className="grid gap-6 lg:grid-cols-[380px_1fr]">
-          <div className="rounded-lg border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-900">
+        <section className="grid min-w-0 gap-6 lg:grid-cols-[minmax(280px,340px)_minmax(0,1fr)] xl:grid-cols-[360px_minmax(0,1fr)]">
+          <div className="min-w-0 rounded-lg border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-900">
             <div className="mb-5 flex items-center gap-2">
               <CalendarDays size={20} className="text-blue-600 dark:text-blue-400" />
               <h2 className="text-lg font-black text-slate-900 dark:text-slate-50">Nova coleta</h2>
@@ -249,14 +352,33 @@ export const Admin = () => {
                 </label>
                 <label className="text-sm font-bold text-slate-700 dark:text-slate-200">
                   Paralelo
-                  <input type="number" min={1} max={6} value={concurrency} onChange={(event) => setConcurrency(Number(event.target.value))} className="mt-2 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-50" />
+                  <input type="number" min={1} max={10} value={concurrency} onChange={(event) => setConcurrency(Number(event.target.value))} className="mt-2 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-50" />
                 </label>
               </div>
 
               <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-950">
                 <div className="mb-2 flex items-center justify-between gap-3">
                   <span className="text-xs font-black uppercase text-slate-500 dark:text-slate-400">
-                    Progresso da coleta
+                    Criacao da fila
+                  </span>
+                  <span className="text-sm font-black text-slate-900 dark:text-slate-50">
+                    {queuePercent}%
+                  </span>
+                </div>
+                <div className="h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
+                  <div
+                    className="h-full rounded-full bg-cyan-500 transition-all"
+                    style={{width: `${queuePercent}%`}}
+                  />
+                </div>
+                <div className="mt-2 flex items-center justify-between text-xs font-bold text-slate-500 dark:text-slate-400">
+                  <span>{selectedProgress.total} checkpoints visiveis</span>
+                  <span>{estimatedQueueTotal > 0 ? `${estimatedQueueTotal} estimados` : 'estimativa aberta'}</span>
+                </div>
+
+                <div className="mb-2 mt-4 flex items-center justify-between gap-3">
+                  <span className="text-xs font-black uppercase text-slate-500 dark:text-slate-400">
+                    Processamento
                   </span>
                   <span className="text-sm font-black text-slate-900 dark:text-slate-50">
                     {selectedProgress.percent}%
@@ -266,13 +388,28 @@ export const Admin = () => {
                   <div
                     className="h-full rounded-full bg-blue-600 transition-all"
                     style={{width: `${selectedProgress.percent}%`}}
-                  />
+                  >
+                    <div className="h-full w-full bg-blue-500" />
+                  </div>
+                  {selectedProgress.running > 0 && selectedProgress.percent < 100 && (
+                    <div
+                      className="relative -mt-3 h-3 animate-pulse rounded-full bg-blue-400/70 transition-all"
+                      style={{
+                        marginLeft: `${selectedProgress.percent}%`,
+                        width: `${Math.max(3, selectedProgress.activePercent - selectedProgress.percent)}%`,
+                      }}
+                    />
+                  )}
                 </div>
                 <div className="mt-3 grid grid-cols-2 gap-2 text-xs font-bold text-slate-500 dark:text-slate-400">
                   <span>{selectedProgress.done} concluidas</span>
                   <span className="text-right">{selectedProgress.total} tarefas</span>
                   <span>{selectedProgress.running} rodando</span>
-                  <span className="text-right">{selectedProgress.failed} falhas</span>
+                  <span className="text-right">{selectedProgress.pending} na fila</span>
+                  <span>{selectedProgress.failed} falhas</span>
+                  <span className="text-right">
+                    {selectedProgress.running > 0 ? 'Agente trabalhando' : 'Sem tarefa ativa'}
+                  </span>
                 </div>
                 {selectedProgress.total === 0 && (
                   <div className="mt-2 text-xs font-semibold text-slate-500 dark:text-slate-400">
@@ -298,10 +435,10 @@ export const Admin = () => {
             </div>
           </div>
 
-          <div className="space-y-6">
-            <div className="grid gap-4 md:grid-cols-3">
+          <div className="min-w-0 space-y-6">
+            <div className="grid min-w-0 gap-4 md:grid-cols-2 xl:grid-cols-3">
               {groupedCheckpoints.map((dataset) => (
-                <div key={dataset.id} className="rounded-lg border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-900">
+                <div key={dataset.id} className="min-w-0 rounded-lg border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-900">
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <div className="text-sm font-black text-slate-900 dark:text-slate-50">{dataset.label}</div>
@@ -320,12 +457,12 @@ export const Admin = () => {
               ))}
             </div>
 
-            <div className="rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900">
+            <div className="min-w-0 rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900">
               <div className="border-b border-slate-200 p-5 dark:border-slate-700">
                 <h2 className="text-lg font-black text-slate-900 dark:text-slate-50">Checkpoints</h2>
               </div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-sm">
+              <div className="min-w-0 overflow-x-auto">
+                <table className="min-w-[720px] w-full text-left text-sm">
                   <thead className="bg-slate-50 text-xs font-black uppercase text-slate-500 dark:bg-slate-950 dark:text-slate-400">
                     <tr>
                       <th className="px-4 py-3">Dataset</th>
@@ -375,11 +512,111 @@ export const Admin = () => {
               </div>
             </div>
 
-            <div className="rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900">
+            <div className="min-w-0 rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900">
+              <div className="flex items-center justify-between gap-3 border-b border-slate-200 p-5 dark:border-slate-700">
+                <div className="flex items-center gap-2">
+                  <ScrollText size={20} className="text-blue-600 dark:text-blue-400" />
+                  <h2 className="text-lg font-black text-slate-900 dark:text-slate-50">Logs da ingestao</h2>
+                </div>
+                <button
+                  type="button"
+                  onClick={loadLogs}
+                  className="rounded-lg p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+                  aria-label="Atualizar logs"
+                  title="Atualizar logs"
+                >
+                  <RefreshCw size={18} />
+                </button>
+              </div>
+              <div className="p-5">
+                <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                  <div className="rounded-lg bg-slate-50 p-3 dark:bg-slate-950">
+                    <div className="flex items-center gap-2 text-xs font-black uppercase text-slate-500 dark:text-slate-400">
+                      <Activity size={14} />
+                      Processadas
+                    </div>
+                    <div className="mt-2 text-xl font-black tabular-nums text-slate-900 dark:text-slate-50">
+                      {formatNumber(logStats.okItems + logStats.okZero)}
+                    </div>
+                    <div className="mt-1 text-xs font-bold text-slate-500 dark:text-slate-400">
+                      {formatNumber(logStats.starts)} iniciadas
+                    </div>
+                  </div>
+                  <div className="rounded-lg bg-slate-50 p-3 dark:bg-slate-950">
+                    <div className="text-xs font-black uppercase text-slate-500 dark:text-slate-400">
+                      Com dados
+                    </div>
+                    <div className="mt-2 text-xl font-black tabular-nums text-emerald-700 dark:text-emerald-300">
+                      {formatNumber(logStats.okItems)}
+                    </div>
+                    <div className="mt-1 text-xs font-bold text-slate-500 dark:text-slate-400">
+                      gravaram 1+ item
+                    </div>
+                  </div>
+                  <div className="rounded-lg bg-slate-50 p-3 dark:bg-slate-950">
+                    <div className="text-xs font-black uppercase text-slate-500 dark:text-slate-400">
+                      Sem itens
+                    </div>
+                    <div className="mt-2 text-xl font-black tabular-nums text-amber-700 dark:text-amber-300">
+                      {formatNumber(logStats.okZero)}
+                    </div>
+                    <div className="mt-1 text-xs font-bold text-slate-500 dark:text-slate-400">
+                      API respondeu zero
+                    </div>
+                  </div>
+                  <div className="rounded-lg bg-slate-50 p-3 dark:bg-slate-950">
+                    <div className="text-xs font-black uppercase text-slate-500 dark:text-slate-400">
+                      Retentativas
+                    </div>
+                    <div className="mt-2 text-xl font-black tabular-nums text-rose-700 dark:text-rose-300">
+                      {formatNumber(logStats.httpRetries)}
+                    </div>
+                    <div className="mt-1 truncate text-xs font-bold text-slate-500 dark:text-slate-400">
+                      {httpStatusEntries.length > 0
+                        ? httpStatusEntries.map(([status, total]) => `${status}: ${formatNumber(total)}`).join(' / ')
+                        : 'sem erro HTTP'}
+                    </div>
+                  </div>
+                </div>
+
+                {(logStats.retries > 0 || logStats.skips > 0 || logStats.lastActivityAt) && (
+                  <div className="mb-4 grid gap-2 text-xs font-bold text-slate-500 dark:text-slate-400 sm:grid-cols-3">
+                    <div className="rounded-lg border border-slate-200 px-3 py-2 dark:border-slate-700">
+                      Falhas reprocessaveis: {formatNumber(logStats.retries)}
+                    </div>
+                    <div className="rounded-lg border border-slate-200 px-3 py-2 dark:border-slate-700">
+                      Recursos ignorados: {formatNumber(logStats.skips)}
+                    </div>
+                    <div className="rounded-lg border border-slate-200 px-3 py-2 dark:border-slate-700">
+                      Ultima atividade:{' '}
+                      {logStats.lastActivityAt
+                        ? new Date(logStats.lastActivityAt).toLocaleTimeString('pt-BR')
+                        : 'sem timestamp'}
+                    </div>
+                  </div>
+                )}
+
+                {logStats.lastHttpError && (
+                  <div className="mb-4 truncate rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
+                    Ultimo retry HTTP: {logStats.lastHttpError}
+                  </div>
+                )}
+
+                <div className="mb-3 flex items-center justify-between gap-3 text-xs font-bold text-slate-500 dark:text-slate-400">
+                  <span>{logFile ?? 'Nenhum arquivo de log'}</span>
+                  <span>{logText ? `${logText.split('\n').length} linhas` : 'sem saida'}</span>
+                </div>
+                <pre className="max-h-80 max-w-full overflow-auto rounded-lg bg-slate-950 p-4 text-xs leading-relaxed text-slate-100">
+                  {logText || 'Nenhum log de ingestao disponivel ainda.'}
+                </pre>
+              </div>
+            </div>
+
+            <div className="min-w-0 rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900">
               <div className="border-b border-slate-200 p-5 dark:border-slate-700">
                 <h2 className="text-lg font-black text-slate-900 dark:text-slate-50">Meses populados</h2>
               </div>
-              <div className="grid gap-2 p-5 sm:grid-cols-2 lg:grid-cols-3">
+              <div className="grid min-w-0 gap-2 p-5 sm:grid-cols-2 xl:grid-cols-3">
                 {periods.slice(0, 36).map((period) => (
                   <div key={`${period.dataset}-${period.periodStart}`} className="rounded-lg bg-slate-50 p-3 dark:bg-slate-950">
                     <div className="flex items-center justify-between gap-2">

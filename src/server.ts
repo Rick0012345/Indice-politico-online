@@ -1,6 +1,8 @@
 import 'dotenv/config';
 import {createHash} from 'node:crypto';
 import {spawn} from 'node:child_process';
+import {createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, statSync} from 'node:fs';
+import {join} from 'node:path';
 import express, {type Request, type Response} from 'express';
 import {Pool} from 'pg';
 
@@ -19,6 +21,8 @@ const pool = databaseUrl
       password: process.env.APP_DB_PASSWORD ?? 'app',
       database: process.env.APP_DB_NAME ?? 'app',
     });
+
+let isStartingIngestion = false;
 
 const sendJson = (res: Response, statusCode: number, body: unknown) => {
   res.status(statusCode).json(body);
@@ -156,6 +160,14 @@ const ensureIngestionCheckpointTable = async () => {
     CREATE UNIQUE INDEX IF NOT EXISTS ingestion_checkpoints_unique_window
     ON ingestion_checkpoints(source, dataset, entity_id, period_start, period_end)
   `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_ingestion_checkpoints_running_lock
+    ON ingestion_checkpoints(source, status, locked_at)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_ingestion_checkpoints_claim_queue
+    ON ingestion_checkpoints(source, dataset, status, attempts, period_start, entity_id)
+  `);
 };
 
 const parseIsoDateInput = (value: unknown, fallback: string) => {
@@ -172,6 +184,61 @@ const parseDatasetList = (value: unknown) => {
 const parseCheckpointStatus = (value: unknown) => {
   const allowed = new Set(['pending', 'running', 'failed']);
   return typeof value === 'string' && allowed.has(value) ? value : null;
+};
+
+const releaseStaleIngestionCheckpoints = async (minutes = 30) => {
+  await pool.query(
+    `
+    UPDATE ingestion_checkpoints
+    SET status = CASE WHEN attempts >= 5 THEN 'failed' ELSE 'pending' END,
+        locked_at = NULL,
+        last_error = COALESCE(last_error, 'Checkpoint running expirou e foi liberado automaticamente.'),
+        updated_at = CURRENT_TIMESTAMP
+    WHERE source = 'camara'
+      AND status = 'running'
+      AND locked_at < CURRENT_TIMESTAMP - ($1::text || ' minutes')::interval
+    `,
+    [String(minutes)],
+  );
+};
+
+const emptyLogStats = () => ({
+  totalLines: 0,
+  starts: 0,
+  okItems: 0,
+  okZero: 0,
+  retries: 0,
+  skips: 0,
+  httpRetries: 0,
+  httpStatus: {} as Record<string, number>,
+  lastActivityAt: null as string | null,
+  lastHttpError: null as string | null,
+});
+
+const parseIngestionLogStats = (content: string) => {
+  const stats = emptyLogStats();
+  const lines = content.split(/\r?\n/).filter((line) => line.trim().length > 0);
+  stats.totalLines = lines.length;
+
+  for (const line of lines) {
+    if (line.includes('[start]')) stats.starts += 1;
+    if (line.includes('[ok-items]')) stats.okItems += 1;
+    if (line.includes('[ok-zero]')) stats.okZero += 1;
+    if (line.includes('[retry]')) stats.retries += 1;
+    if (line.includes('[skip]')) stats.skips += 1;
+
+    if (line.includes('[http-retry]')) {
+      stats.httpRetries += 1;
+      const status = line.match(/status=(\d+)/)?.[1] ?? 'rede';
+      stats.httpStatus[status] = (stats.httpStatus[status] ?? 0) + 1;
+      stats.lastHttpError = line;
+    }
+
+    const timestamp = line.match(/^\[(\d{4}-\d{2}-\d{2}T[^\]]+Z)\]/)?.[1];
+    if (timestamp) stats.lastActivityAt = timestamp;
+  }
+
+  return stats;
 };
 
 app.get('/api/politicos/novos', async (req, res) => {
@@ -962,6 +1029,7 @@ app.get('/api/despesas/media', async (req, res) => {
 app.get('/api/admin/ingestion/summary', async (_req, res) => {
   try {
     await ensureIngestionCheckpointTable();
+    await releaseStaleIngestionCheckpoints();
 
     const checkpointResult = await pool.query(
       `
@@ -975,6 +1043,8 @@ app.get('/api/admin/ingestion/summary', async (_req, res) => {
         MAX(updated_at)::text AS "updatedAt"
       FROM ingestion_checkpoints
       WHERE source = 'camara'
+        AND status <> 'cancelled'
+        AND NOT (status = 'done' AND items_count = 0)
       GROUP BY dataset, status
       ORDER BY dataset ASC, status ASC
       `,
@@ -1019,20 +1089,90 @@ app.get('/api/admin/ingestion/summary', async (_req, res) => {
   }
 });
 
+app.get('/api/admin/ingestion/logs', async (_req, res) => {
+  try {
+    const logsDir = join(process.cwd(), 'logs');
+    if (!existsSync(logsDir)) {
+      sendJson(res, 200, {log: '', file: null});
+      return;
+    }
+
+    const files = readdirSync(logsDir)
+      .filter((file) => file.startsWith('ingest-') && file.endsWith('.log'))
+      .map((file) => {
+        const path = join(logsDir, file);
+        return {file, path, mtimeMs: statSync(path).mtimeMs};
+      })
+      .sort((a, b) => b.mtimeMs - a.mtimeMs);
+
+    const latest = files[0];
+    if (!latest) {
+      sendJson(res, 200, {log: '', file: null});
+      return;
+    }
+
+    const content = readFileSync(latest.path, 'utf8');
+    const stats = parseIngestionLogStats(content);
+    sendJson(res, 200, {
+      file: latest.file,
+      log: content.slice(-12000),
+      stats,
+    });
+  } catch {
+    sendJson(res, 500, {error: 'Erro ao carregar logs de ingestao.'});
+  }
+});
+
 app.post('/api/admin/ingestion/run', async (req, res) => {
   try {
+    await ensureIngestionCheckpointTable();
+    await releaseStaleIngestionCheckpoints();
+
+    if (isStartingIngestion) {
+      sendJson(res, 409, {error: 'Uma ingestao ja esta sendo inicializada. Aguarde alguns segundos.'});
+      return;
+    }
+
     const from = parseIsoDateInput(req.body?.from, '2016-01-01');
     const to = parseIsoDateInput(req.body?.to, '2020-12-31');
     const datasets = parseDatasetList(req.body?.datasets);
     const window = ['month', 'quarter', 'year'].includes(req.body?.window)
       ? String(req.body.window)
       : 'month';
-    const concurrency = Math.max(1, Math.min(6, Number(req.body?.concurrency) || 2));
+    const concurrency = Math.max(1, Math.min(10, Number(req.body?.concurrency) || 4));
 
     if (datasets.length === 0) {
       sendJson(res, 400, {error: 'Selecione pelo menos um conjunto de dados.'});
       return;
     }
+
+    const activeResult = await pool.query(
+      `
+      SELECT COUNT(*)::int AS total
+      FROM ingestion_checkpoints
+      WHERE source = 'camara'
+        AND status = 'running'
+      `,
+    );
+    const activeTotal = Number(activeResult.rows[0]?.total ?? 0);
+
+    if (activeTotal > 0) {
+      sendJson(res, 409, {
+        error: 'Ja existe uma ingestao em andamento. Cancele ou aguarde terminar antes de iniciar outra.',
+        activeTotal,
+      });
+      return;
+    }
+
+    isStartingIngestion = true;
+    setTimeout(() => {
+      isStartingIngestion = false;
+    }, 10000).unref();
+
+    const logsDir = join(process.cwd(), 'logs');
+    mkdirSync(logsDir, {recursive: true});
+    const logPath = join(logsDir, `ingest-${Date.now()}.log`);
+    const logStream = createWriteStream(logPath, {flags: 'a'});
 
     const child = spawn(
       process.execPath,
@@ -1045,16 +1185,31 @@ app.post('/api/admin/ingestion/run', async (req, res) => {
         `--datasets=${datasets.join(',')}`,
         `--window=${window}`,
         `--concurrency=${concurrency}`,
+        '--stale-minutes=30',
         '--reset-failed',
+        '--reset-cancelled',
+        '--reset-empty',
       ],
       {
         cwd: process.cwd(),
         detached: true,
-        stdio: 'ignore',
+        stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
       },
     );
 
+    child.stdout?.pipe(logStream);
+    child.stderr?.pipe(logStream);
+    child.on('exit', (code, signal) => {
+      logStream.write(`\n[exit] code=${code ?? ''} signal=${signal ?? ''}\n`);
+      logStream.end();
+      isStartingIngestion = false;
+    });
+    child.on('error', (error) => {
+      logStream.write(`\n[spawn-error] ${error.message}\n`);
+      logStream.end();
+      isStartingIngestion = false;
+    });
     child.unref();
 
     sendJson(res, 202, {
@@ -1065,6 +1220,7 @@ app.post('/api/admin/ingestion/run', async (req, res) => {
       datasets,
       window,
       concurrency,
+      logPath,
     });
   } catch {
     sendJson(res, 500, {error: 'Erro ao iniciar ingestao.'});
