@@ -35,6 +35,14 @@ const datasetOptions = [
   {id: 'deputados', label: 'Deputados'},
   {id: 'despesas', label: 'Despesas'},
   {id: 'votacoes', label: 'Votacoes'},
+  {id: 'legislaturas', label: 'Legislaturas'},
+  {id: 'partidos', label: 'Partidos'},
+  {id: 'blocos', label: 'Blocos'},
+  {id: 'orgaos', label: 'Orgaos'},
+  {id: 'eventos', label: 'Eventos'},
+  {id: 'frentes', label: 'Frentes'},
+  {id: 'proposicoes', label: 'Proposicoes'},
+  {id: 'referencias', label: 'Referencias'},
 ];
 
 const statusClasses: Record<string, string> = {
@@ -98,6 +106,10 @@ export const Admin = () => {
     'deputados',
     'despesas',
     'votacoes',
+    'legislaturas',
+    'partidos',
+    'orgaos',
+    'referencias',
   ]);
   const [checkpoints, setCheckpoints] = useState<CheckpointSummary[]>([]);
   const [periods, setPeriods] = useState<PopulatedPeriod[]>([]);

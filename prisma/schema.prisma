@@ -9,6 +9,7 @@ datasource db {
 
 model Politico {
   id             BigInt    @id @db.BigInt
+  uri            String?   @db.Text
   cpf            String?   @unique @db.VarChar(11)
   nome           String
   nomeCivil      String?   @map("nome_civil")
@@ -33,6 +34,11 @@ model Politico {
   gabineteSala   String?   @map("gabinete_sala") @db.VarChar(20)
   gabineteAndar  String?   @map("gabinete_andar") @db.VarChar(20)
   situacao       String?   @default("Exercício") @db.VarChar(50)
+  dataFalecimento DateTime? @map("data_falecimento") @db.Date
+  uriPartido     String?   @map("uri_partido") @db.Text
+  descricaoStatus String?  @map("descricao_status") @db.Text
+  ultimoStatusJson Json?   @map("ultimo_status_json")
+  rawJson        Json?     @map("raw_json")
   ativo          Boolean?  @default(true)
   atualizadoEm   DateTime? @default(now()) @map("atualizado_em") @db.Timestamptz(6)
 
@@ -46,13 +52,29 @@ model Politico {
 
 model Votacao {
   id              String    @id
+  uri             String?   @db.Text
   siglaTipo       String?   @map("sigla_tipo") @db.VarChar(20)
   numero          Int?
   ano             Int?
   ementa          String?   @db.Text
+  data            DateTime? @db.Date
+  dataHoraRegistro DateTime? @map("data_hora_registro") @db.Timestamptz(6)
   dataVotacao     DateTime? @map("data_hora_votacao") @db.Timestamptz(6)
+  siglaOrgao      String?   @map("sigla_orgao") @db.VarChar(50)
+  uriOrgao        String?   @map("uri_orgao") @db.Text
+  idOrgao         Int?      @map("id_orgao")
+  uriEvento       String?   @map("uri_evento") @db.Text
+  idEvento        Int?      @map("id_evento")
+  proposicaoObjeto String?  @map("proposicao_objeto") @db.Text
+  uriProposicaoObjeto String? @map("uri_proposicao_objeto") @db.Text
   resultado       String?   @db.VarChar(255)
   aprovacao       Int?
+  descUltimaAberturaVotacao String? @map("desc_ultima_abertura_votacao") @db.Text
+  dataHoraUltimaAberturaVotacao DateTime? @map("data_hora_ultima_abertura_votacao") @db.Timestamptz(6)
+  ultimaApresentacaoProposicaoJson Json? @map("ultima_apresentacao_proposicao_json")
+  efeitosRegistradosJson Json? @map("efeitos_registrados_json")
+  objetosPossiveisJson Json? @map("objetos_possiveis_json")
+  rawJson         Json?     @map("raw_json")
 
   votos VotoDeputado[]
 
@@ -64,6 +86,9 @@ model VotoDeputado {
   votacaoId String @map("votacao_id")
   politicoId BigInt @map("politico_id") @db.BigInt
   voto      String @db.VarChar(50)
+  dataHoraVoto DateTime? @map("data_hora_voto") @db.Timestamptz(6)
+  deputadoJson Json? @map("deputado_json")
+  rawJson   Json? @map("raw_json")
 
   votacao  Votacao  @relation(fields: [votacaoId], references: [id], onDelete: Cascade)
   politico Politico @relation(fields: [politicoId], references: [id], onDelete: Cascade)
@@ -84,15 +109,18 @@ model Despesa {
   cnpjCpfFornecedor String?   @map("cnpj_cpf_fornecedor") @db.VarChar(14)
   nomeFornecedor    String?   @map("nome_fornecedor") @db.VarChar(255)
   tipoDocumento     String?   @map("tipo_documento") @db.VarChar(50)
+  codTipoDocumento  Int?      @map("cod_tipo_documento")
   dataDocumento     DateTime? @map("data_documento") @db.Date
   numDocumento      String?   @map("num_documento") @db.VarChar(100)
   valorDocumento    Decimal   @map("valor_documento") @db.Decimal(12, 2)
   valorGlosa        Decimal?  @default(0) @map("valor_glosa") @db.Decimal(12, 2)
   valorLiquido      Decimal   @map("valor_liquido") @db.Decimal(12, 2)
   numLote           String?   @map("num_lote") @db.VarChar(50)
+  codLote           String?   @map("cod_lote") @db.VarChar(100)
   numRessarcimento  String?   @map("num_ressarcimento") @db.VarChar(50)
   parcela           Int?      @default(0) @db.SmallInt
   urlDocumento      String?   @map("url_documento") @db.Text
+  rawJson           Json?     @map("raw_json")
 
   politico Politico @relation(fields: [politicoId], references: [id], onDelete: Cascade)
 
@@ -143,4 +171,23 @@ model NoticiaPolitico {
   @@index([dataPublicacao], map: "idx_noticias_data_publicacao")
   @@index([periodoTipo], map: "idx_noticias_periodo_tipo")
   @@map("noticias_politicos")
+}
+
+model CamaraApiRawItem {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  resource       String   @db.VarChar(120)
+  resourceId     String   @map("resource_id") @db.Text
+  parentResource String   @default("") @map("parent_resource") @db.VarChar(120)
+  parentId       String   @default("") @map("parent_id") @db.Text
+  endpoint       String   @db.Text
+  queryParams    Json     @default("{}") @map("query_params")
+  rawJson        Json     @map("raw_json")
+  linksJson      Json?    @map("links_json")
+  fetchedAt      DateTime @default(now()) @map("fetched_at") @db.Timestamptz(6)
+  updatedAt      DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  @@unique([resource, resourceId, parentResource, parentId])
+  @@index([resource], map: "idx_camara_api_raw_items_resource")
+  @@index([parentResource, parentId], map: "idx_camara_api_raw_items_parent")
+  @@map("camara_api_raw_items")
 }

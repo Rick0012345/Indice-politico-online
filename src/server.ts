@@ -177,7 +177,20 @@ const parseIsoDateInput = (value: unknown, fallback: string) => {
 
 const parseDatasetList = (value: unknown) => {
   const raw = Array.isArray(value) ? value : typeof value === 'string' ? value.split(',') : [];
-  const allowed = new Set(['deputados', 'despesas', 'votacoes']);
+  const allowed = new Set([
+    'deputados',
+    'despesas',
+    'votacoes',
+    'legislaturas',
+    'partidos',
+    'blocos',
+    'orgaos',
+    'eventos',
+    'frentes',
+    'proposicoes',
+    'referencias',
+    'todos',
+  ]);
   return raw.filter((item): item is string => typeof item === 'string' && allowed.has(item));
 };
 
