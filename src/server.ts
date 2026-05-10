@@ -507,6 +507,678 @@ app.get('/api/partidos/gastos', async (req, res) => {
   }
 });
 
+app.get('/api/partidos', async (req, res) => {
+  try {
+    const limit = parseLimit(req);
+    const offset = parseOffset(req);
+    const search = typeof req.query.search === 'string' ? req.query.search.trim() : '';
+    const sortParam = typeof req.query.sort === 'string' ? req.query.sort : undefined;
+    const directionParam = typeof req.query.direction === 'string' ? req.query.direction : undefined;
+    const direction = directionParam === 'asc' || directionParam === 'desc' ? directionParam : 'asc';
+    const dirSql = direction === 'desc' ? 'DESC' : 'ASC';
+    const status = parsePoliticoStatusFilter(req);
+    const statusWhere = buildPoliticoStatusWhereSql(status);
+
+    const params: Array<string | number> = [];
+    const where: string[] = [];
+
+    if (search) {
+      params.push(`%${search}%`);
+      const searchParamIndex = params.length;
+      where.push(
+        `(COALESCE(c.sigla, agg.partido) ILIKE $${searchParamIndex} OR c.nome ILIKE $${searchParamIndex})`,
+      );
+    }
+
+    const orderBy =
+      sortParam === 'despesas'
+        ? `"totalDespesas" ${dirSql}, partido ASC`
+        : sortParam === 'politicos'
+          ? `"totalPoliticos" ${dirSql}, partido ASC`
+          : sortParam === 'nota'
+            ? `"notaMedia" ${dirSql}, partido ASC`
+            : sortParam === 'votacoes'
+              ? `"totalVotacoes" ${dirSql}, partido ASC`
+              : sortParam === 'nome'
+                ? `nome ${dirSql}, partido ASC`
+                : `partido ${dirSql}`;
+
+    params.push(limit);
+    params.push(offset);
+
+    const result = await pool.query(
+      `
+      WITH dsum AS (
+        SELECT politico_id, SUM(valor_liquido)::double precision AS total_despesas
+        FROM despesas
+        GROUP BY politico_id
+      ),
+      vcnt AS (
+        SELECT politico_id, COUNT(*)::int AS total_votacoes
+        FROM votos_deputados
+        GROUP BY politico_id
+      ),
+      ar AS (
+        SELECT politico_id, AVG(nota)::double precision AS nota_media, COUNT(*)::int AS total_avaliacoes
+        FROM avaliacoes
+        GROUP BY politico_id
+      ),
+      agg AS (
+        SELECT
+          p.sigla_partido AS partido,
+          COUNT(DISTINCT p.id)::int AS "totalPoliticos",
+          COUNT(DISTINCT p.id) FILTER (WHERE p.ativo IS DISTINCT FROM false)::int AS "totalAtivos",
+          COUNT(DISTINCT p.sigla_uf)::int AS "totalEstados",
+          COALESCE(SUM(dsum.total_despesas), 0)::double precision AS "totalDespesas",
+          COALESCE(SUM(vcnt.total_votacoes), 0)::int AS "totalVotacoes",
+          COALESCE(AVG(ar.nota_media), 0)::double precision AS "notaMedia",
+          COALESCE(SUM(ar.total_avaliacoes), 0)::int AS "totalAvaliacoes",
+          MAX(p.atualizado_em) AS "atualizadoEm"
+        FROM politicos p
+        LEFT JOIN dsum ON dsum.politico_id = p.id
+        LEFT JOIN vcnt ON vcnt.politico_id = p.id
+        LEFT JOIN ar ON ar.politico_id = p.id
+        WHERE ${statusWhere}
+          AND p.sigla_partido IS NOT NULL
+          AND p.sigla_partido <> ''
+        GROUP BY p.sigla_partido
+      )
+      SELECT
+        COALESCE(c.sigla, agg.partido) AS partido,
+        COALESCE(c.nome, COALESCE(c.sigla, agg.partido)) AS nome,
+        c.id::text AS id,
+        c.numero_eleitoral AS "numeroEleitoral",
+        c.url_logo AS "logoUrl",
+        c.url_website AS "websiteUrl",
+        c.url_facebook AS "facebookUrl",
+        c.status_json AS "statusJson",
+        c.atualizado_em AS "partidoAtualizadoEm",
+        COALESCE(agg."totalPoliticos", 0)::int AS "totalPoliticos",
+        COALESCE(agg."totalAtivos", 0)::int AS "totalAtivos",
+        COALESCE(agg."totalEstados", 0)::int AS "totalEstados",
+        COALESCE(agg."totalDespesas", 0)::double precision AS "totalDespesas",
+        COALESCE(agg."totalVotacoes", 0)::int AS "totalVotacoes",
+        COALESCE(agg."notaMedia", 0)::double precision AS "notaMedia",
+        COALESCE(agg."totalAvaliacoes", 0)::int AS "totalAvaliacoes",
+        agg."atualizadoEm"
+      FROM camara_partidos c
+      FULL OUTER JOIN agg ON agg.partido = c.sigla
+      ${where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''}
+      ORDER BY ${orderBy}
+      LIMIT $${params.length - 1}
+      OFFSET $${params.length}
+      `,
+      params,
+    );
+
+    sendJson(res, 200, {items: result.rows});
+  } catch {
+    sendJson(res, 500, {error: 'Erro ao processar requisição'});
+  }
+});
+
+app.get('/api/partidos/:sigla/politicos', async (req, res) => {
+  try {
+    const limit = parseLimit(req);
+    const offset = parseOffset(req);
+    const sigla = req.params.sigla.trim();
+    const status = parsePoliticoStatusFilter(req);
+    const statusWhere = buildPoliticoStatusWhereSql(status);
+
+    if (!sigla) {
+      sendJson(res, 400, {error: 'Partido invalido'});
+      return;
+    }
+
+    const result = await pool.query(
+      `
+      SELECT
+        p.id::text AS id,
+        p.nome,
+        p.sigla_partido AS partido,
+        p.sigla_uf AS estado,
+        p.url_foto AS foto,
+        COALESCE(p.ativo, true) AS ativo,
+        p.situacao,
+        COALESCE(AVG(a.nota), 0)::double precision AS "notaMedia",
+        COUNT(a.id)::int AS "totalAvaliacoes",
+        COALESCE(dsum.total_despesas, 0)::double precision AS "totalDespesas",
+        COALESCE(vcnt.total_votacoes, 0)::int AS "totalVotacoes",
+        p.atualizado_em AS "atualizadoEm",
+        'Deputado Federal'::text AS cargo
+      FROM politicos p
+      LEFT JOIN avaliacoes a ON a.politico_id = p.id
+      LEFT JOIN (
+        SELECT politico_id, SUM(valor_liquido)::double precision AS total_despesas
+        FROM despesas
+        GROUP BY politico_id
+      ) dsum ON dsum.politico_id = p.id
+      LEFT JOIN (
+        SELECT politico_id, COUNT(*)::int AS total_votacoes
+        FROM votos_deputados
+        GROUP BY politico_id
+      ) vcnt ON vcnt.politico_id = p.id
+      WHERE ${statusWhere}
+        AND p.sigla_partido = $1
+      GROUP BY
+        p.id,
+        p.nome,
+        p.sigla_partido,
+        p.sigla_uf,
+        p.url_foto,
+        p.ativo,
+        p.situacao,
+        p.atualizado_em,
+        dsum.total_despesas,
+        vcnt.total_votacoes
+      ORDER BY p.nome ASC
+      LIMIT $2
+      OFFSET $3
+      `,
+      [sigla, limit, offset],
+    );
+
+    sendJson(res, 200, {items: result.rows});
+  } catch {
+    sendJson(res, 500, {error: 'Erro ao processar requisição'});
+  }
+});
+
+app.get('/api/camara/proposicoes', async (req, res) => {
+  try {
+    const limit = parseLimit(req);
+    const offset = parseOffset(req);
+    const search = typeof req.query.search === 'string' ? req.query.search.trim() : '';
+    const tipo = typeof req.query.tipo === 'string' ? req.query.tipo.trim() : '';
+    const situacao = typeof req.query.situacao === 'string' ? req.query.situacao.trim() : '';
+    const ano = parseOptionalInt(req.query.ano);
+    const params: Array<string | number> = [];
+    const where: string[] = [];
+
+    if (search) {
+      params.push(`%${search}%`);
+      where.push(`(p.ementa ILIKE $${params.length} OR p.keywords ILIKE $${params.length} OR p.texto ILIKE $${params.length})`);
+    }
+    if (tipo) {
+      params.push(tipo);
+      where.push(`p.sigla_tipo = $${params.length}`);
+    }
+    if (ano != null) {
+      params.push(ano);
+      where.push(`p.ano = $${params.length}`);
+    }
+    if (situacao) {
+      params.push(`%${situacao}%`);
+      where.push(`COALESCE(p.status_proposicao_json->>'descricaoSituacao', p.status_proposicao_json->>'situacao') ILIKE $${params.length}`);
+    }
+
+    const whereClause = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
+    params.push(limit, offset);
+
+    const result = await pool.query(
+      `
+      SELECT
+        p.id::text AS id,
+        p.sigla_tipo AS "siglaTipo",
+        p.numero,
+        p.ano,
+        p.ementa,
+        p.descricao_tipo AS "descricaoTipo",
+        p.data_apresentacao AS "dataApresentacao",
+        p.url_inteiro_teor AS "urlInteiroTeor",
+        COALESCE(p.status_proposicao_json->>'descricaoSituacao', p.status_proposicao_json->>'situacao') AS situacao,
+        COALESCE(tema.total, 0)::int AS "totalTemas",
+        COALESCE(autor.total, 0)::int AS "totalAutores",
+        COALESCE(tram.total, 0)::int AS "totalTramitacoes"
+      FROM camara_proposicoes p
+      LEFT JOIN (
+        SELECT proposicao_id, COUNT(*)::int AS total
+        FROM camara_proposicoes_temas
+        GROUP BY proposicao_id
+      ) tema ON tema.proposicao_id = p.id
+      LEFT JOIN (
+        SELECT proposicao_id, COUNT(*)::int AS total
+        FROM camara_proposicoes_autores
+        GROUP BY proposicao_id
+      ) autor ON autor.proposicao_id = p.id
+      LEFT JOIN (
+        SELECT proposicao_id, COUNT(*)::int AS total
+        FROM camara_proposicoes_tramitacoes
+        GROUP BY proposicao_id
+      ) tram ON tram.proposicao_id = p.id
+      ${whereClause}
+      ORDER BY p.data_apresentacao DESC NULLS LAST, p.ano DESC NULLS LAST, p.id DESC
+      LIMIT $${params.length - 1}
+      OFFSET $${params.length}
+      `,
+      params,
+    );
+
+    sendJson(res, 200, {items: result.rows});
+  } catch {
+    sendJson(res, 500, {error: 'Erro ao processar requisição'});
+  }
+});
+
+app.get('/api/camara/proposicoes/:id', async (req, res) => {
+  try {
+    const {id} = req.params;
+    const proposicaoResult = await pool.query(
+      `
+      SELECT
+        p.id::text AS id,
+        p.sigla_tipo AS "siglaTipo",
+        p.numero,
+        p.ano,
+        p.ementa,
+        p.ementa_detalhada AS "ementaDetalhada",
+        p.descricao_tipo AS "descricaoTipo",
+        p.data_apresentacao AS "dataApresentacao",
+        p.keywords,
+        p.url_inteiro_teor AS "urlInteiroTeor",
+        p.texto,
+        p.justificativa,
+        p.status_proposicao_json AS "statusProposicao",
+        COALESCE(p.status_proposicao_json->>'descricaoSituacao', p.status_proposicao_json->>'situacao') AS situacao
+      FROM camara_proposicoes p
+      WHERE p.id::text = $1
+      LIMIT 1
+      `,
+      [id],
+    );
+
+    const proposicao = proposicaoResult.rows[0];
+    if (!proposicao) {
+      sendJson(res, 404, {error: 'Proposição não encontrada'});
+      return;
+    }
+
+    const [autores, temas, tramitacoes, relacionadas] = await Promise.all([
+      pool.query(
+        `
+        SELECT nome, tipo, ordem_assinatura AS "ordemAssinatura", proponente
+        FROM camara_proposicoes_autores
+        WHERE proposicao_id::text = $1
+        ORDER BY ordem_assinatura ASC NULLS LAST, nome ASC
+        `,
+        [id],
+      ),
+      pool.query(
+        `
+        SELECT tema, relevancia
+        FROM camara_proposicoes_temas
+        WHERE proposicao_id::text = $1
+        ORDER BY relevancia DESC NULLS LAST, tema ASC
+        `,
+        [id],
+      ),
+      pool.query(
+        `
+        SELECT
+          sequencia,
+          data_hora AS "dataHora",
+          sigla_orgao AS "siglaOrgao",
+          regime,
+          descricao_tramitacao AS "descricaoTramitacao",
+          descricao_situacao AS "descricaoSituacao",
+          despacho,
+          url
+        FROM camara_proposicoes_tramitacoes
+        WHERE proposicao_id::text = $1
+        ORDER BY sequencia DESC
+        LIMIT 80
+        `,
+        [id],
+      ),
+      pool.query(
+        `
+        SELECT r.relacionada_id::text AS id, p.sigla_tipo AS "siglaTipo", p.numero, p.ano, p.ementa
+        FROM camara_proposicoes_relacionadas r
+        LEFT JOIN camara_proposicoes p ON p.id = r.relacionada_id
+        WHERE r.proposicao_id::text = $1
+        ORDER BY p.ano DESC NULLS LAST, p.numero DESC NULLS LAST
+        LIMIT 40
+        `,
+        [id],
+      ),
+    ]);
+
+    sendJson(res, 200, {
+      proposicao,
+      autores: autores.rows,
+      temas: temas.rows,
+      tramitacoes: tramitacoes.rows,
+      relacionadas: relacionadas.rows,
+    });
+  } catch {
+    sendJson(res, 500, {error: 'Erro ao processar requisição'});
+  }
+});
+
+app.get('/api/camara/eventos', async (req, res) => {
+  try {
+    const limit = parseLimit(req);
+    const offset = parseOffset(req);
+    const search = typeof req.query.search === 'string' ? req.query.search.trim() : '';
+    const tipo = typeof req.query.tipo === 'string' ? req.query.tipo.trim() : '';
+    const situacao = typeof req.query.situacao === 'string' ? req.query.situacao.trim() : '';
+    const params: Array<string | number> = [];
+    const where: string[] = [];
+
+    if (search) {
+      params.push(`%${search}%`);
+      where.push(`(e.descricao ILIKE $${params.length} OR e.descricao_tipo ILIKE $${params.length} OR e.local_externo ILIKE $${params.length})`);
+    }
+    if (tipo) {
+      params.push(`%${tipo}%`);
+      where.push(`e.descricao_tipo ILIKE $${params.length}`);
+    }
+    if (situacao) {
+      params.push(`%${situacao}%`);
+      where.push(`e.situacao ILIKE $${params.length}`);
+    }
+
+    const whereClause = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
+    params.push(limit, offset);
+    const result = await pool.query(
+      `
+      SELECT
+        e.id::text AS id,
+        e.data_hora_inicio AS "dataHoraInicio",
+        e.data_hora_fim AS "dataHoraFim",
+        e.situacao,
+        e.descricao_tipo AS "descricaoTipo",
+        e.descricao,
+        e.local_externo AS "localExterno",
+        e.local_camara_json AS "localCamara",
+        e.orgaos_json AS orgaos,
+        e.url_registro AS "urlRegistro"
+      FROM camara_eventos e
+      ${whereClause}
+      ORDER BY e.data_hora_inicio DESC NULLS LAST, e.id DESC
+      LIMIT $${params.length - 1}
+      OFFSET $${params.length}
+      `,
+      params,
+    );
+    sendJson(res, 200, {items: result.rows});
+  } catch {
+    sendJson(res, 500, {error: 'Erro ao processar requisição'});
+  }
+});
+
+app.get('/api/camara/orgaos', async (req, res) => {
+  try {
+    const limit = parseLimit(req);
+    const offset = parseOffset(req);
+    const search = typeof req.query.search === 'string' ? req.query.search.trim() : '';
+    const tipo = typeof req.query.tipo === 'string' ? req.query.tipo.trim() : '';
+    const params: Array<string | number> = [];
+    const where: string[] = [];
+
+    if (search) {
+      params.push(`%${search}%`);
+      where.push(`(o.sigla ILIKE $${params.length} OR o.nome ILIKE $${params.length} OR o.apelido ILIKE $${params.length})`);
+    }
+    if (tipo) {
+      params.push(`%${tipo}%`);
+      where.push(`o.tipo_orgao ILIKE $${params.length}`);
+    }
+
+    const whereClause = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
+    params.push(limit, offset);
+    const result = await pool.query(
+      `
+      SELECT
+        o.id::text AS id,
+        o.sigla,
+        o.nome,
+        o.apelido,
+        o.tipo_orgao AS "tipoOrgao",
+        o.nome_publicacao AS "nomePublicacao",
+        o.nome_resumido AS "nomeResumido"
+      FROM camara_orgaos o
+      ${whereClause}
+      ORDER BY o.sigla ASC NULLS LAST, o.nome ASC
+      LIMIT $${params.length - 1}
+      OFFSET $${params.length}
+      `,
+      params,
+    );
+    sendJson(res, 200, {items: result.rows});
+  } catch {
+    sendJson(res, 500, {error: 'Erro ao processar requisição'});
+  }
+});
+
+app.get('/api/camara/frentes', async (req, res) => {
+  try {
+    const limit = parseLimit(req);
+    const offset = parseOffset(req);
+    const search = typeof req.query.search === 'string' ? req.query.search.trim() : '';
+    const legislatura = parseOptionalInt(req.query.legislatura);
+    const params: Array<string | number> = [];
+    const where: string[] = [];
+
+    if (search) {
+      params.push(`%${search}%`);
+      where.push(`f.titulo ILIKE $${params.length}`);
+    }
+    if (legislatura != null) {
+      params.push(legislatura);
+      where.push(`f.id_legislatura = $${params.length}`);
+    }
+
+    const whereClause = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
+    params.push(limit, offset);
+    const result = await pool.query(
+      `
+      SELECT
+        f.id::text AS id,
+        f.titulo,
+        f.id_legislatura AS "idLegislatura",
+        f.uri
+      FROM camara_frentes f
+      ${whereClause}
+      ORDER BY f.id_legislatura DESC NULLS LAST, f.titulo ASC
+      LIMIT $${params.length - 1}
+      OFFSET $${params.length}
+      `,
+      params,
+    );
+    sendJson(res, 200, {items: result.rows});
+  } catch {
+    sendJson(res, 500, {error: 'Erro ao processar requisição'});
+  }
+});
+
+app.get('/api/politicos/:politicoId/orgaos', async (req, res) => {
+  try {
+    const {politicoId} = req.params;
+    const result = await pool.query(
+      `
+      SELECT
+        d.orgao_id::text AS "orgaoId",
+        d.sigla_orgao AS "siglaOrgao",
+        d.nome_orgao AS "nomeOrgao",
+        d.nome_publicacao AS "nomePublicacao",
+        d.titulo,
+        d.data_inicio AS "dataInicio",
+        d.data_fim AS "dataFim",
+        o.tipo_orgao AS "tipoOrgao"
+      FROM camara_deputados_orgaos d
+      LEFT JOIN camara_orgaos o ON o.id = d.orgao_id
+      WHERE d.politico_id::text = $1
+      ORDER BY d.data_fim DESC NULLS FIRST, d.data_inicio DESC NULLS LAST, d.sigla_orgao ASC
+      `,
+      [politicoId],
+    );
+    sendJson(res, 200, {items: result.rows});
+  } catch {
+    sendJson(res, 500, {error: 'Erro ao processar requisição'});
+  }
+});
+
+app.get('/api/politicos/:politicoId/eventos', async (req, res) => {
+  try {
+    const {politicoId} = req.params;
+    const limit = parseLimit(req);
+    const result = await pool.query(
+      `
+      SELECT
+        e.id::text AS id,
+        e.data_hora_inicio AS "dataHoraInicio",
+        e.data_hora_fim AS "dataHoraFim",
+        e.situacao,
+        e.descricao_tipo AS "descricaoTipo",
+        e.descricao,
+        e.local_externo AS "localExterno",
+        e.local_camara_json AS "localCamara",
+        e.orgaos_json AS orgaos,
+        e.url_registro AS "urlRegistro"
+      FROM camara_deputados_eventos de
+      JOIN camara_eventos e ON e.id = de.evento_id
+      WHERE de.politico_id::text = $1
+      ORDER BY e.data_hora_inicio DESC NULLS LAST
+      LIMIT $2
+      `,
+      [politicoId, limit],
+    );
+    sendJson(res, 200, {items: result.rows});
+  } catch {
+    sendJson(res, 500, {error: 'Erro ao processar requisição'});
+  }
+});
+
+app.get('/api/politicos/:politicoId/frentes', async (req, res) => {
+  try {
+    const {politicoId} = req.params;
+    const result = await pool.query(
+      `
+      SELECT
+        f.id::text AS id,
+        f.titulo,
+        f.id_legislatura AS "idLegislatura",
+        f.uri
+      FROM camara_deputados_frentes df
+      JOIN camara_frentes f ON f.id = df.frente_id
+      WHERE df.politico_id::text = $1
+      ORDER BY f.id_legislatura DESC NULLS LAST, f.titulo ASC
+      `,
+      [politicoId],
+    );
+    sendJson(res, 200, {items: result.rows});
+  } catch {
+    sendJson(res, 500, {error: 'Erro ao processar requisição'});
+  }
+});
+
+app.get('/api/politicos/:politicoId/historico-profissional', async (req, res) => {
+  try {
+    const {politicoId} = req.params;
+    const [profissoes, ocupacoes] = await Promise.all([
+      pool.query(
+        `
+        SELECT titulo, data_hora AS "dataHora"
+        FROM camara_deputados_profissoes
+        WHERE politico_id::text = $1
+        ORDER BY titulo ASC
+        `,
+        [politicoId],
+      ),
+      pool.query(
+        `
+        SELECT titulo, entidade, entidade_uf AS "entidadeUf", entidade_pais AS "entidadePais", ano_inicio AS "anoInicio", ano_fim AS "anoFim"
+        FROM camara_deputados_ocupacoes
+        WHERE politico_id::text = $1
+        ORDER BY ano_fim DESC NULLS FIRST, ano_inicio DESC NULLS LAST, titulo ASC
+        `,
+        [politicoId],
+      ),
+    ]);
+    sendJson(res, 200, {profissoes: profissoes.rows, ocupacoes: ocupacoes.rows});
+  } catch {
+    sendJson(res, 500, {error: 'Erro ao processar requisição'});
+  }
+});
+
+app.get('/api/politicos/:politicoId/atuacao', async (req, res) => {
+  try {
+    const {politicoId} = req.params;
+    const [orgaos, eventos, frentes, historico, proposicoes] = await Promise.all([
+      pool.query(
+        `
+        SELECT d.orgao_id::text AS "orgaoId", d.sigla_orgao AS "siglaOrgao", d.nome_orgao AS "nomeOrgao", d.nome_publicacao AS "nomePublicacao", d.titulo, d.data_inicio AS "dataInicio", d.data_fim AS "dataFim", o.tipo_orgao AS "tipoOrgao"
+        FROM camara_deputados_orgaos d
+        LEFT JOIN camara_orgaos o ON o.id = d.orgao_id
+        WHERE d.politico_id::text = $1
+        ORDER BY d.data_fim DESC NULLS FIRST, d.data_inicio DESC NULLS LAST
+        LIMIT 80
+        `,
+        [politicoId],
+      ),
+      pool.query(
+        `
+        SELECT e.id::text AS id, e.data_hora_inicio AS "dataHoraInicio", e.situacao, e.descricao_tipo AS "descricaoTipo", e.descricao, e.local_externo AS "localExterno", e.local_camara_json AS "localCamara", e.orgaos_json AS orgaos, e.url_registro AS "urlRegistro"
+        FROM camara_deputados_eventos de
+        JOIN camara_eventos e ON e.id = de.evento_id
+        WHERE de.politico_id::text = $1
+        ORDER BY e.data_hora_inicio DESC NULLS LAST
+        LIMIT 20
+        `,
+        [politicoId],
+      ),
+      pool.query(
+        `
+        SELECT f.id::text AS id, f.titulo, f.id_legislatura AS "idLegislatura", f.uri
+        FROM camara_deputados_frentes df
+        JOIN camara_frentes f ON f.id = df.frente_id
+        WHERE df.politico_id::text = $1
+        ORDER BY f.id_legislatura DESC NULLS LAST, f.titulo ASC
+        LIMIT 80
+        `,
+        [politicoId],
+      ),
+      Promise.all([
+        pool.query('SELECT titulo, data_hora AS "dataHora" FROM camara_deputados_profissoes WHERE politico_id::text = $1 ORDER BY titulo ASC', [politicoId]),
+        pool.query('SELECT titulo, entidade, entidade_uf AS "entidadeUf", entidade_pais AS "entidadePais", ano_inicio AS "anoInicio", ano_fim AS "anoFim" FROM camara_deputados_ocupacoes WHERE politico_id::text = $1 ORDER BY ano_fim DESC NULLS FIRST, ano_inicio DESC NULLS LAST, titulo ASC', [politicoId]),
+      ]),
+      pool.query(
+        `
+        SELECT DISTINCT
+          p.id::text AS id,
+          p.sigla_tipo AS "siglaTipo",
+          p.numero,
+          p.ano,
+          p.ementa,
+          p.data_apresentacao AS "dataApresentacao",
+          p.url_inteiro_teor AS "urlInteiroTeor",
+          COALESCE(p.status_proposicao_json->>'descricaoSituacao', p.status_proposicao_json->>'situacao') AS situacao
+        FROM votos_deputados vd
+        JOIN votacoes v ON v.id = vd.votacao_id
+        JOIN camara_proposicoes p ON p.uri = v.uri_proposicao_objeto OR p.id::text = regexp_replace(COALESCE(v.uri_proposicao_objeto, ''), '^.*/', '')
+        WHERE vd.politico_id::text = $1
+        ORDER BY p.data_apresentacao DESC NULLS LAST
+        LIMIT 20
+        `,
+        [politicoId],
+      ),
+    ]);
+
+    const [profissoes, ocupacoes] = historico;
+    sendJson(res, 200, {
+      orgaos: orgaos.rows,
+      eventos: eventos.rows,
+      frentes: frentes.rows,
+      profissoes: profissoes.rows,
+      ocupacoes: ocupacoes.rows,
+      proposicoes: proposicoes.rows,
+    });
+  } catch {
+    sendJson(res, 500, {error: 'Erro ao processar requisição'});
+  }
+});
+
 app.get('/api/politicos', async (req, res) => {
   try {
     const limit = parseLimit(req);

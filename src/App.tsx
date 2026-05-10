@@ -4,6 +4,9 @@ import { Navbar, Footer } from './components/Layout';
 import { Home } from './pages/Home';
 import { PoliticoProfile } from './pages/PoliticoProfile';
 import { Ranking } from './pages/Ranking';
+import { Partidos } from './pages/Partidos';
+import { Camara } from './pages/Camara';
+import { ProposicaoDetail } from './pages/ProposicaoDetail';
 import { Methodology } from './pages/Methodology';
 import { About } from './pages/About';
 import { Admin } from './pages/Admin';
@@ -20,6 +23,9 @@ export default function App() {
               <Route path="/" element={<Home />} />
               <Route path="/politico/:id" element={<PoliticoProfile />} />
               <Route path="/ranking" element={<Ranking />} />
+              <Route path="/partidos" element={<Partidos />} />
+              <Route path="/camara" element={<Camara />} />
+              <Route path="/camara/proposicoes/:id" element={<ProposicaoDetail />} />
               <Route path="/admin" element={<Admin />} />
               <Route path="/metodologia" element={<Methodology />} />
               <Route path="/sobre" element={<About />} />

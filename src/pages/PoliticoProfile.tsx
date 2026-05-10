@@ -12,7 +12,10 @@ import {
   XCircle,
   MinusCircle,
   ExternalLink,
-  BarChart3
+  BarChart3,
+  Landmark,
+  Users,
+  BriefcaseBusiness
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import {
@@ -76,6 +79,65 @@ type DespesaItem = {
   valor: number;
   urlDocumento: string | null;
   fornecedor: string | null;
+};
+
+type AtuacaoOrgao = {
+  orgaoId: string;
+  siglaOrgao: string | null;
+  nomeOrgao: string | null;
+  nomePublicacao: string | null;
+  titulo: string | null;
+  dataInicio: string | null;
+  dataFim: string | null;
+  tipoOrgao: string | null;
+};
+
+type AtuacaoEvento = {
+  id: string;
+  dataHoraInicio: string | null;
+  situacao: string | null;
+  descricaoTipo: string | null;
+  descricao: string | null;
+  localExterno: string | null;
+  localCamara: {nome?: string; predio?: string; sala?: string} | null;
+  urlRegistro: string | null;
+};
+
+type AtuacaoFrente = {
+  id: string;
+  titulo: string | null;
+  idLegislatura: number | null;
+  uri: string | null;
+};
+
+type AtuacaoHistorico = {
+  titulo: string | null;
+  entidade?: string | null;
+  entidadeUf?: string | null;
+  entidadePais?: string | null;
+  anoInicio?: number | null;
+  anoFim?: number | null;
+  dataHora?: string | null;
+};
+
+type AtuacaoProposicao = {
+  id: string;
+  siglaTipo: string | null;
+  numero: number | null;
+  ano: number | null;
+  ementa: string | null;
+  dataApresentacao: string | null;
+  urlInteiroTeor: string | null;
+  situacao: string | null;
+};
+
+type AtuacaoData = {
+  orgaos: AtuacaoOrgao[];
+  eventos: AtuacaoEvento[];
+  frentes: AtuacaoFrente[];
+  profissoes: AtuacaoHistorico[];
+  ocupacoes: AtuacaoHistorico[];
+  proposicoes: AtuacaoProposicao[];
 };
 
 const ResponsiveExpenseCard: React.FC<{
@@ -165,6 +227,15 @@ export const PoliticoProfile = () => {
   const [despesasAnosDisponiveis, setDespesasAnosDisponiveis] = useState<number[]>([]);
   const [despesasResumo, setDespesasResumo] = useState<{ano: number; mes: number; total: number}[]>([]);
   const [despesasMedia, setDespesasMedia] = useState<{ano: number; mes: number; media: number}[]>([]);
+  const [atuacao, setAtuacao] = useState<AtuacaoData>({
+    orgaos: [],
+    eventos: [],
+    frentes: [],
+    profissoes: [],
+    ocupacoes: [],
+    proposicoes: [],
+  });
+  const [isLoadingAtuacao, setIsLoadingAtuacao] = useState(false);
 
   const formatarData = (value: string | null | undefined) => {
     if (!value) return null;
@@ -406,6 +477,39 @@ export const PoliticoProfile = () => {
     return () => controller.abort();
   }, [id, despesasFiltro.ano]);
 
+  useEffect(() => {
+    const politicoId = id?.trim();
+    if (!politicoId) return;
+
+    const controller = new AbortController();
+    setIsLoadingAtuacao(true);
+
+    const run = async () => {
+      try {
+        const response = await fetch(`/api/politicos/${encodeURIComponent(politicoId)}/atuacao`, {
+          signal: controller.signal,
+        });
+        if (!response.ok) return;
+        const data = (await response.json()) as Partial<AtuacaoData>;
+        setAtuacao({
+          orgaos: Array.isArray(data.orgaos) ? data.orgaos : [],
+          eventos: Array.isArray(data.eventos) ? data.eventos : [],
+          frentes: Array.isArray(data.frentes) ? data.frentes : [],
+          profissoes: Array.isArray(data.profissoes) ? data.profissoes : [],
+          ocupacoes: Array.isArray(data.ocupacoes) ? data.ocupacoes : [],
+          proposicoes: Array.isArray(data.proposicoes) ? data.proposicoes : [],
+        });
+      } catch {
+        setAtuacao({orgaos: [], eventos: [], frentes: [], profissoes: [], ocupacoes: [], proposicoes: []});
+      } finally {
+        setIsLoadingAtuacao(false);
+      }
+    };
+
+    run();
+    return () => controller.abort();
+  }, [id]);
+
   const loadMoreVotacoes = async () => {
     const politicoId = id?.trim();
     if (!politicoId) return;
@@ -591,6 +695,7 @@ export const PoliticoProfile = () => {
 
   const tabs = [
     { id: 'geral', label: 'Visão Geral', icon: BarChart3 },
+    { id: 'atuacao', label: 'Atuacao', icon: Landmark },
     { id: 'votacoes', label: 'Votações', icon: CheckCircle2 },
     { id: 'despesas', label: 'Despesas', icon: DollarSign },
     { id: 'noticias', label: 'Notícias', icon: FileText },
@@ -878,6 +983,136 @@ export const PoliticoProfile = () => {
                 </div>
               )}
             </div>
+          </div>
+        )}
+
+        {activeTab === 'atuacao' && (
+          <div className="space-y-6">
+            {isLoadingAtuacao ? (
+              <div className="rounded-3xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
+                Carregando atuaÃ§Ã£o parlamentar...
+              </div>
+            ) : (
+              <>
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
+                  {[
+                    {label: 'Orgaos', value: atuacao.orgaos.length, icon: Landmark},
+                    {label: 'Frentes', value: atuacao.frentes.length, icon: Users},
+                    {label: 'Eventos', value: atuacao.eventos.length, icon: Calendar},
+                    {label: 'Historico', value: atuacao.profissoes.length + atuacao.ocupacoes.length, icon: BriefcaseBusiness},
+                    {label: 'Proposicoes', value: atuacao.proposicoes.length, icon: FileText},
+                  ].map((item) => (
+                    <div key={item.label} className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+                      <div className="flex items-center gap-2 text-xs font-bold uppercase text-slate-400 dark:text-slate-500">
+                        <item.icon size={15} />
+                        {item.label}
+                      </div>
+                      <div className="mt-2 text-2xl font-black text-slate-900 dark:text-slate-50">{item.value}</div>
+                    </div>
+                  ))}
+                </div>
+
+                <section className="rounded-3xl border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-900">
+                  <h3 className="text-lg font-extrabold text-slate-900 dark:text-slate-50">Orgaos e comissoes</h3>
+                  {atuacao.orgaos.length === 0 ? (
+                    <div className="mt-4 rounded-2xl bg-slate-50 p-4 text-sm font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+                      Esses dados ainda estao sendo sincronizados pela API da Camara.
+                    </div>
+                  ) : (
+                    <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+                      {atuacao.orgaos.map((orgao) => (
+                        <article key={`${orgao.orgaoId}-${orgao.titulo}-${orgao.dataInicio}`} className="rounded-2xl border border-slate-200 p-4 dark:border-slate-700">
+                          <div className="text-xs font-bold uppercase text-slate-400 dark:text-slate-500">{orgao.tipoOrgao || orgao.siglaOrgao || 'Orgao'}</div>
+                          <h4 className="mt-1 font-extrabold text-slate-900 dark:text-slate-50">{orgao.nomeOrgao || orgao.nomePublicacao || orgao.siglaOrgao}</h4>
+                          {orgao.titulo && <p className="mt-2 text-sm font-semibold text-blue-600 dark:text-blue-400">{orgao.titulo}</p>}
+                          <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                            {formatarData(orgao.dataInicio) || 'Inicio nao informado'} - {formatarData(orgao.dataFim) || 'Atual'}
+                          </p>
+                        </article>
+                      ))}
+                    </div>
+                  )}
+                </section>
+
+                <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+                  <section className="rounded-3xl border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-900">
+                    <h3 className="text-lg font-extrabold text-slate-900 dark:text-slate-50">Frentes parlamentares</h3>
+                    {atuacao.frentes.length === 0 ? (
+                      <div className="mt-4 rounded-2xl bg-slate-50 p-4 text-sm font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+                        Esses dados ainda estao sendo sincronizados pela API da Camara.
+                      </div>
+                    ) : (
+                      <div className="mt-4 space-y-3">
+                        {atuacao.frentes.map((frente) => (
+                          <article key={frente.id} className="rounded-2xl bg-slate-50 p-4 dark:bg-slate-800">
+                            <div className="text-xs font-bold uppercase text-slate-400 dark:text-slate-500">Legislatura {frente.idLegislatura ?? '-'}</div>
+                            <h4 className="mt-1 font-bold text-slate-900 dark:text-slate-50">{frente.titulo || 'Frente parlamentar'}</h4>
+                          </article>
+                        ))}
+                      </div>
+                    )}
+                  </section>
+
+                  <section className="rounded-3xl border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-900">
+                    <h3 className="text-lg font-extrabold text-slate-900 dark:text-slate-50">Historico profissional</h3>
+                    {atuacao.profissoes.length + atuacao.ocupacoes.length === 0 ? (
+                      <div className="mt-4 rounded-2xl bg-slate-50 p-4 text-sm font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+                        Esses dados ainda estao sendo sincronizados pela API da Camara.
+                      </div>
+                    ) : (
+                      <div className="mt-4 space-y-3">
+                        {[...atuacao.profissoes, ...atuacao.ocupacoes].map((item, index) => (
+                          <article key={`${item.titulo}-${index}`} className="rounded-2xl bg-slate-50 p-4 dark:bg-slate-800">
+                            <h4 className="font-bold text-slate-900 dark:text-slate-50">{item.titulo || 'Registro profissional'}</h4>
+                            {item.entidade && <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">{item.entidade}</p>}
+                            {(item.anoInicio || item.anoFim) && <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{item.anoInicio ?? '?'} - {item.anoFim ?? 'Atual'}</p>}
+                          </article>
+                        ))}
+                      </div>
+                    )}
+                  </section>
+                </div>
+
+                <section className="rounded-3xl border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-900">
+                  <h3 className="text-lg font-extrabold text-slate-900 dark:text-slate-50">Eventos vinculados</h3>
+                  {atuacao.eventos.length === 0 ? (
+                    <div className="mt-4 rounded-2xl bg-slate-50 p-4 text-sm font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+                      Esses dados ainda estao sendo sincronizados pela API da Camara.
+                    </div>
+                  ) : (
+                    <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+                      {atuacao.eventos.map((evento) => (
+                        <article key={evento.id} className="rounded-2xl border border-slate-200 p-4 dark:border-slate-700">
+                          <div className="text-xs font-bold uppercase text-slate-400 dark:text-slate-500">{formatarData(evento.dataHoraInicio)} {evento.situacao ? `- ${evento.situacao}` : ''}</div>
+                          <h4 className="mt-1 font-extrabold text-slate-900 dark:text-slate-50">{evento.descricaoTipo || 'Evento'}</h4>
+                          <p className="mt-2 line-clamp-3 text-sm text-slate-600 dark:text-slate-400">{evento.descricao || 'Descricao indisponivel'}</p>
+                          {evento.urlRegistro && <a href={evento.urlRegistro} target="_blank" rel="noreferrer" className="mt-3 inline-flex items-center gap-1 text-sm font-bold text-blue-600 hover:underline dark:text-blue-400">Registro oficial <ExternalLink size={14} /></a>}
+                        </article>
+                      ))}
+                    </div>
+                  )}
+                </section>
+
+                <section className="rounded-3xl border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-900">
+                  <h3 className="text-lg font-extrabold text-slate-900 dark:text-slate-50">Proposicoes relacionadas</h3>
+                  {atuacao.proposicoes.length === 0 ? (
+                    <div className="mt-4 rounded-2xl bg-slate-50 p-4 text-sm font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+                      Esses dados ainda estao sendo sincronizados pela API da Camara.
+                    </div>
+                  ) : (
+                    <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+                      {atuacao.proposicoes.map((proposicao) => (
+                        <Link key={proposicao.id} to={`/camara/proposicoes/${proposicao.id}`} className="rounded-2xl border border-slate-200 p-4 transition-colors hover:border-blue-200 dark:border-slate-700 dark:hover:border-blue-900">
+                          <div className="text-xs font-bold uppercase text-slate-400 dark:text-slate-500">{proposicao.siglaTipo} {proposicao.numero}/{proposicao.ano}</div>
+                          <h4 className="mt-1 line-clamp-3 font-extrabold text-slate-900 dark:text-slate-50">{proposicao.ementa || 'Proposicao'}</h4>
+                          {proposicao.situacao && <p className="mt-2 text-xs font-bold text-blue-600 dark:text-blue-400">{proposicao.situacao}</p>}
+                        </Link>
+                      ))}
+                    </div>
+                  )}
+                </section>
+              </>
+            )}
           </div>
         )}
 
