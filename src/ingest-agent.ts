@@ -136,6 +136,12 @@ type DeputyVote = {
 type RawItem = Record<string, unknown>;
 
 type LogLevel = 'log' | 'warn' | 'error';
+type FetchPagedOptions = {
+  ignoreBadRequest?: boolean;
+  logBadRequest?: boolean;
+  onBadRequest?: (url: string) => void;
+};
+type ProposalChildResource = 'autores' | 'temas' | 'tramitacoes' | 'relacionadas';
 
 const databaseUrl = process.env.DATABASE_URL?.trim();
 const pool = databaseUrl
@@ -152,6 +158,13 @@ const API_BASE = 'https://dadosabertos.camara.leg.br/api/v2';
 const HTTP_TIMEOUT_MS = 45000;
 const MAX_HTTP_ATTEMPTS = 5;
 const MAX_PAGES_PER_REQUEST = 200;
+const OPTIONAL_CHILD_BREAKER_MIN_ATTEMPTS = 24;
+const OPTIONAL_CHILD_BREAKER_BAD_RATIO = 0.85;
+
+const optionalChildStats = new Map<
+  string,
+  {attempts: number; badRequests: number; skipped: number}
+>();
 
 class HttpError extends Error {
   constructor(
@@ -165,6 +178,41 @@ class HttpError extends Error {
 
 const writeLog = (level: LogLevel, message: string) => {
   console[level](`[${new Date().toISOString()}] ${message}`);
+};
+
+const optionalChildKey = (proposal: RawItem, resource: ProposalChildResource) => {
+  const siglaTipo = textOrNull(proposal.siglaTipo) ?? 'sem-tipo';
+  return `${siglaTipo}/${resource}`;
+};
+
+const shouldSkipOptionalChild = (key: string) => {
+  const stats = optionalChildStats.get(key);
+  if (!stats || stats.attempts < OPTIONAL_CHILD_BREAKER_MIN_ATTEMPTS) return false;
+  return stats.badRequests / stats.attempts >= OPTIONAL_CHILD_BREAKER_BAD_RATIO;
+};
+
+const recordOptionalChildResult = (key: string, badRequest: boolean, skipped = false) => {
+  const stats = optionalChildStats.get(key) ?? {attempts: 0, badRequests: 0, skipped: 0};
+  if (skipped) {
+    stats.skipped += 1;
+  } else {
+    stats.attempts += 1;
+    if (badRequest) stats.badRequests += 1;
+  }
+
+  const shouldLog =
+    (badRequest && stats.badRequests % 25 === 0) ||
+    (skipped && stats.skipped % 100 === 1);
+
+  if (shouldLog) {
+    const ratio = stats.attempts > 0 ? Math.round((stats.badRequests / stats.attempts) * 100) : 0;
+    writeLog(
+      'warn',
+      `[optional-child] ${key}: ${stats.badRequests}/${stats.attempts} HTTP 400 (${ratio}%), ${stats.skipped} pulados por heuristica`,
+    );
+  }
+
+  optionalChildStats.set(key, stats);
 };
 
 const parseArgs = (): CliOptions => {
@@ -397,7 +445,7 @@ const fetchJson = async <T>(url: string, attempt = 1): Promise<T> => {
 const fetchPaged = async <T>(
   path: string,
   params: Record<string, string | number>,
-  options: {ignoreBadRequest?: boolean} = {},
+  options: FetchPagedOptions = {},
 ) => {
   const items: T[] = [];
   let page = 1;
@@ -417,7 +465,10 @@ const fetchPaged = async <T>(
       data = await fetchJson<CamaraListResponse<T>>(url.toString());
     } catch (error) {
       if (options.ignoreBadRequest && error instanceof HttpError && error.status === 400) {
-        writeLog('warn', `[skip] API retornou 400 para recurso opcional: ${url.toString()}`);
+        options.onBadRequest?.(url.toString());
+        if (options.logBadRequest !== false) {
+          writeLog('warn', `[skip] API retornou 400 para recurso opcional: ${url.toString()}`);
+        }
         return items;
       }
       throw error;
@@ -1282,9 +1333,38 @@ const upsertProposal = async (item: RawItem) => {
   return 1;
 };
 
-const upsertProposalChildren = async (proposalId: number) => {
+const fetchProposalChild = async (
+  proposal: RawItem,
+  proposalId: number,
+  resource: ProposalChildResource,
+) => {
+  const key = optionalChildKey(proposal, resource);
+  if (shouldSkipOptionalChild(key)) {
+    recordOptionalChildResult(key, false, true);
+    return [] as RawItem[];
+  }
+
+  let badRequest = false;
+  try {
+    return await fetchPaged<RawItem>(
+      `/proposicoes/${proposalId}/${resource}`,
+      {},
+      {
+        ignoreBadRequest: true,
+        logBadRequest: false,
+        onBadRequest: () => {
+          badRequest = true;
+        },
+      },
+    );
+  } finally {
+    recordOptionalChildResult(key, badRequest);
+  }
+};
+
+const upsertProposalChildren = async (proposalId: number, proposal: RawItem) => {
   let count = 0;
-  const authors = await fetchPaged<RawItem>(`/proposicoes/${proposalId}/autores`, {}, {ignoreBadRequest: true});
+  const authors = await fetchProposalChild(proposal, proposalId, 'autores');
   for (const author of authors) {
     const uri = textOrNull(author.uri);
     if (!uri) continue;
@@ -1320,7 +1400,7 @@ const upsertProposalChildren = async (proposalId: number) => {
     count += 1;
   }
 
-  const themes = await fetchPaged<RawItem>(`/proposicoes/${proposalId}/temas`, {}, {ignoreBadRequest: true});
+  const themes = await fetchProposalChild(proposal, proposalId, 'temas');
   for (const theme of themes) {
     const codTema = numberOrNull(theme.codTema);
     if (codTema == null) continue;
@@ -1338,7 +1418,7 @@ const upsertProposalChildren = async (proposalId: number) => {
     count += 1;
   }
 
-  const proceedings = await fetchPaged<RawItem>(`/proposicoes/${proposalId}/tramitacoes`, {}, {ignoreBadRequest: true});
+  const proceedings = await fetchProposalChild(proposal, proposalId, 'tramitacoes');
   for (const proceeding of proceedings) {
     const sequencia = numberOrNull(proceeding.sequencia);
     if (sequencia == null) continue;
@@ -1388,7 +1468,7 @@ const upsertProposalChildren = async (proposalId: number) => {
     count += 1;
   }
 
-  const related = await fetchPaged<RawItem>(`/proposicoes/${proposalId}/relacionadas`, {}, {ignoreBadRequest: true});
+  const related = await fetchProposalChild(proposal, proposalId, 'relacionadas');
   for (const relation of related) {
     const relatedId = numberOrNull(relation.id);
     if (relatedId == null) continue;
@@ -1454,7 +1534,7 @@ const ingestProposalsWindow = async (start: string, end: string) => {
       item = summary;
     }
     count += await upsertProposal(item);
-    count += await upsertProposalChildren(id);
+    count += await upsertProposalChildren(id, item);
     await sleep(250);
   });
   return count;

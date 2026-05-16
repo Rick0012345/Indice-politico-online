@@ -58,6 +58,20 @@ const formatDate = (value: string | null) => {
   return new Intl.DateTimeFormat('pt-BR', {timeZone: 'UTC'}).format(new Date(value));
 };
 
+const calculatePercent = (completed: number, total: number) =>
+  total > 0 ? Math.min(100, (completed / total) * 100) : 0;
+
+const formatPercent = (percent: number, completed: number, total: number) => {
+  if (total <= 0) return '0%';
+  if (completed >= total) return '100%';
+  const visiblePercent = Math.min(99.99, percent);
+  const fractionDigits = visiblePercent >= 99 ? 2 : visiblePercent >= 10 ? 1 : 0;
+  return `${visiblePercent.toLocaleString('pt-BR', {
+    minimumFractionDigits: fractionDigits,
+    maximumFractionDigits: fractionDigits,
+  })}%`;
+};
+
 const countWindows = (start: string, end: string, mode: 'month' | 'quarter' | 'year') => {
   const fromDate = new Date(`${start}T00:00:00.000Z`);
   const toDate = new Date(`${end}T00:00:00.000Z`);
@@ -96,6 +110,32 @@ const defaultLogStats = (): LogStats => ({
 });
 
 const formatNumber = (value: number) => value.toLocaleString('pt-BR');
+
+const summarizeCheckpointProgress = (rows: CheckpointSummary[]) => {
+  const total = rows.reduce((sum, row) => sum + Number(row.total ?? 0), 0);
+  const done = rows
+    .filter((row) => row.status === 'done')
+    .reduce((sum, row) => sum + Number(row.total ?? 0), 0);
+  const running = rows
+    .filter((row) => row.status === 'running')
+    .reduce((sum, row) => sum + Number(row.total ?? 0), 0);
+  const failed = rows
+    .filter((row) => row.status === 'failed')
+    .reduce((sum, row) => sum + Number(row.total ?? 0), 0);
+  const pending = rows
+    .filter((row) => row.status === 'pending')
+    .reduce((sum, row) => sum + Number(row.total ?? 0), 0);
+
+  return {
+    total,
+    done,
+    running,
+    failed,
+    pending,
+    percent: calculatePercent(done, total),
+    activePercent: calculatePercent(done + running, total),
+  };
+};
 
 export const Admin = () => {
   const [from, setFrom] = useState('2016-01-01');
@@ -176,34 +216,24 @@ export const Admin = () => {
       const failed = rows
         .filter((row) => row.status === 'failed')
         .reduce((sum, row) => sum + Number(row.total ?? 0), 0);
-      return {...dataset, total, done, failed, progress: total > 0 ? Math.round((done / total) * 100) : 0};
+      return {...dataset, total, done, failed, progress: calculatePercent(done, total)};
     });
   }, [checkpoints]);
 
-  const selectedProgress = useMemo(() => {
-    const rows = checkpoints.filter((row) => selectedDatasets.includes(row.dataset));
-    const total = rows.reduce((sum, row) => sum + Number(row.total ?? 0), 0);
-    const done = rows
-      .filter((row) => row.status === 'done')
-      .reduce((sum, row) => sum + Number(row.total ?? 0), 0);
-    const running = rows
-      .filter((row) => row.status === 'running')
-      .reduce((sum, row) => sum + Number(row.total ?? 0), 0);
-    const failed = rows
-      .filter((row) => row.status === 'failed')
-      .reduce((sum, row) => sum + Number(row.total ?? 0), 0);
-    const pending = Math.max(0, total - done - running - failed);
+  const selectedProgress = useMemo(
+    () => summarizeCheckpointProgress(checkpoints.filter((row) => selectedDatasets.includes(row.dataset))),
+    [checkpoints, selectedDatasets],
+  );
 
-    return {
-      total,
-      done,
-      running,
-      failed,
-      pending,
-      percent: total > 0 ? Math.round((done / total) * 100) : 0,
-      activePercent: total > 0 ? Math.round(((done + running) / total) * 100) : 0,
-    };
-  }, [checkpoints, selectedDatasets]);
+  const overallProgress = useMemo(
+    () => summarizeCheckpointProgress(checkpoints),
+    [checkpoints],
+  );
+
+  const activeCheckpoints = useMemo(
+    () => checkpoints.filter((row) => row.status !== 'done'),
+    [checkpoints],
+  );
 
   const estimatedQueueTotal = useMemo(() => {
     return selectedDatasets.reduce((sum, dataset) => {
@@ -384,7 +414,7 @@ export const Admin = () => {
                   />
                 </div>
                 <div className="mt-2 flex items-center justify-between text-xs font-bold text-slate-500 dark:text-slate-400">
-                  <span>{selectedProgress.total} checkpoints visiveis</span>
+                  <span>{activeCheckpoints.length} checkpoints acionaveis</span>
                   <span>{estimatedQueueTotal > 0 ? `${estimatedQueueTotal} estimados` : 'estimativa aberta'}</span>
                 </div>
 
@@ -393,37 +423,37 @@ export const Admin = () => {
                     Processamento
                   </span>
                   <span className="text-sm font-black text-slate-900 dark:text-slate-50">
-                    {selectedProgress.percent}%
+                    {formatPercent(overallProgress.percent, overallProgress.done, overallProgress.total)}
                   </span>
                 </div>
                 <div className="h-3 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
                   <div
                     className="h-full rounded-full bg-blue-600 transition-all"
-                    style={{width: `${selectedProgress.percent}%`}}
+                    style={{width: `${overallProgress.percent}%`}}
                   >
                     <div className="h-full w-full bg-blue-500" />
                   </div>
-                  {selectedProgress.running > 0 && selectedProgress.percent < 100 && (
+                  {overallProgress.running > 0 && overallProgress.percent < 100 && (
                     <div
                       className="relative -mt-3 h-3 animate-pulse rounded-full bg-blue-400/70 transition-all"
                       style={{
-                        marginLeft: `${selectedProgress.percent}%`,
-                        width: `${Math.max(3, selectedProgress.activePercent - selectedProgress.percent)}%`,
+                        marginLeft: `${overallProgress.percent}%`,
+                        width: `${Math.max(3, overallProgress.activePercent - overallProgress.percent)}%`,
                       }}
                     />
                   )}
                 </div>
                 <div className="mt-3 grid grid-cols-2 gap-2 text-xs font-bold text-slate-500 dark:text-slate-400">
-                  <span>{selectedProgress.done} concluidas</span>
-                  <span className="text-right">{selectedProgress.total} tarefas</span>
-                  <span>{selectedProgress.running} rodando</span>
-                  <span className="text-right">{selectedProgress.pending} na fila</span>
-                  <span>{selectedProgress.failed} falhas</span>
+                  <span>{overallProgress.done} concluidas</span>
+                  <span className="text-right">{overallProgress.total} tarefas</span>
+                  <span>{overallProgress.running} rodando</span>
+                  <span className="text-right">{overallProgress.pending} na fila</span>
+                  <span>{overallProgress.failed} falhas</span>
                   <span className="text-right">
-                    {selectedProgress.running > 0 ? 'Agente trabalhando' : 'Sem tarefa ativa'}
+                    {overallProgress.running > 0 ? 'Agente trabalhando' : 'Sem tarefa ativa'}
                   </span>
                 </div>
-                {selectedProgress.total === 0 && (
+                {overallProgress.total === 0 && (
                   <div className="mt-2 text-xs font-semibold text-slate-500 dark:text-slate-400">
                     Aguardando o agente criar os checkpoints desta coleta.
                   </div>
@@ -462,7 +492,7 @@ export const Admin = () => {
                     <div className="h-2 rounded-full bg-blue-600" style={{width: `${dataset.progress}%`}} />
                   </div>
                   <div className="mt-3 flex items-center justify-between text-xs font-bold text-slate-500 dark:text-slate-400">
-                    <span>{dataset.progress}% concluido</span>
+                    <span>{formatPercent(dataset.progress, dataset.done, dataset.total)} concluido</span>
                     <span>{dataset.failed} falhas</span>
                   </div>
                 </div>
@@ -486,7 +516,7 @@ export const Admin = () => {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                    {checkpoints.map((row) => (
+                    {activeCheckpoints.map((row) => (
                       <tr key={`${row.dataset}-${row.status}`} className="text-slate-700 dark:text-slate-200">
                         <td className="px-4 py-3 font-bold">{row.dataset}</td>
                         <td className="px-4 py-3">
@@ -514,9 +544,9 @@ export const Admin = () => {
                         </td>
                       </tr>
                     ))}
-                    {checkpoints.length === 0 && (
+                    {activeCheckpoints.length === 0 && (
                       <tr>
-                        <td className="px-4 py-6 text-center text-slate-500 dark:text-slate-400" colSpan={6}>Nenhum checkpoint registrado.</td>
+                        <td className="px-4 py-6 text-center text-slate-500 dark:text-slate-400" colSpan={6}>Nenhuma tarefa ativa, pendente ou com falha.</td>
                       </tr>
                     )}
                   </tbody>
