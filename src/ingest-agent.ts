@@ -126,6 +126,7 @@ type VoteSession = {
 type DeputyVote = {
   tipoVoto?: string;
   dataHoraVoto?: string;
+  dataRegistroVoto?: string;
   deputado_?: {
     id?: number;
     [key: string]: unknown;
@@ -156,8 +157,9 @@ const pool = databaseUrl
 
 const API_BASE = 'https://dadosabertos.camara.leg.br/api/v2';
 const HTTP_TIMEOUT_MS = 45000;
-const MAX_HTTP_ATTEMPTS = 5;
+const MAX_HTTP_ATTEMPTS = 2;
 const MAX_PAGES_PER_REQUEST = 200;
+const HTTP_REQUEST_MIN_INTERVAL_MS = 500;
 const OPTIONAL_CHILD_BREAKER_MIN_ATTEMPTS = 24;
 const OPTIONAL_CHILD_BREAKER_BAD_RATIO = 0.85;
 
@@ -165,6 +167,8 @@ const optionalChildStats = new Map<
   string,
   {attempts: number; badRequests: number; skipped: number}
 >();
+let nextHttpRequestAt = 0;
+let httpRequestQueue = Promise.resolve();
 
 class HttpError extends Error {
   constructor(
@@ -178,6 +182,20 @@ class HttpError extends Error {
 
 const writeLog = (level: LogLevel, message: string) => {
   console[level](`[${new Date().toISOString()}] ${message}`);
+};
+
+const waitForHttpSlot = async () => {
+  const wait = httpRequestQueue.then(async () => {
+    const delay = Math.max(0, nextHttpRequestAt - Date.now());
+    if (delay > 0) await sleep(delay);
+    nextHttpRequestAt = Date.now() + HTTP_REQUEST_MIN_INTERVAL_MS;
+  });
+  httpRequestQueue = wait.catch(() => undefined);
+  await wait;
+};
+
+const applyHttpCooldown = (delay: number) => {
+  nextHttpRequestAt = Math.max(nextHttpRequestAt, Date.now() + delay);
 };
 
 const optionalChildKey = (proposal: RawItem, resource: ProposalChildResource) => {
@@ -398,6 +416,7 @@ const fetchJson = async <T>(url: string, attempt = 1): Promise<T> => {
   const timeout = setTimeout(() => controller.abort(), HTTP_TIMEOUT_MS);
 
   try {
+    await waitForHttpSlot();
     const response = await fetch(url, {
       signal: controller.signal,
       headers: {
@@ -409,6 +428,9 @@ const fetchJson = async <T>(url: string, attempt = 1): Promise<T> => {
     const retryable = [403, 408, 429, 500, 502, 503, 504].includes(response.status);
     if (retryable && attempt < MAX_HTTP_ATTEMPTS) {
       const delay = retryDelayForStatus(response.status, response.headers.get('retry-after'), attempt);
+      if (response.status === 429) {
+        applyHttpCooldown(delay);
+      }
       writeLog(
         'warn',
         `[http-retry] tentativa=${attempt} status=${response.status} delay=${delay} url=${url}`,
@@ -482,6 +504,31 @@ const fetchPaged = async <T>(
   }
 
   return items;
+};
+
+const fetchList = async <T>(
+  path: string,
+  params: Record<string, string | number> = {},
+  options: FetchPagedOptions = {},
+) => {
+  const url = new URL(`${API_BASE}${path}`);
+  for (const [key, value] of Object.entries(params)) {
+    url.searchParams.set(key, String(value));
+  }
+
+  try {
+    const data = await fetchJson<CamaraListResponse<T>>(url.toString());
+    return data.dados ?? [];
+  } catch (error) {
+    if (options.ignoreBadRequest && error instanceof HttpError && [400, 404, 405].includes(error.status)) {
+      options.onBadRequest?.(url.toString());
+      if (options.logBadRequest !== false) {
+        writeLog('warn', `[skip] API retornou ${error.status} para recurso opcional: ${url.toString()}`);
+      }
+      return [];
+    }
+    throw error;
+  }
 };
 
 const ensureCheckpointTable = async () => {
@@ -633,6 +680,19 @@ const finishCheckpoint = async (
       AND status <> 'cancelled'
     `,
     [id, status, itemsCount, error],
+  );
+};
+
+const touchCheckpointProgress = async (id: string, itemsCount: number) => {
+  await pool.query(
+    `
+    UPDATE ingestion_checkpoints
+    SET items_count = $2,
+        updated_at = CURRENT_TIMESTAMP
+    WHERE id = $1
+      AND status = 'running'
+    `,
+    [id, itemsCount],
   );
 };
 
@@ -940,7 +1000,7 @@ const upsertVotes = async (voteSessionId: string, votes: DeputyVote[]) => {
     .map((vote) => ({
       politicoId: vote.deputado_?.id,
       voteType: textOrNull(vote.tipoVoto),
-      dataHoraVoto: textOrNull(vote.dataHoraVoto),
+      dataHoraVoto: textOrNull(vote.dataHoraVoto) ?? textOrNull(vote.dataRegistroVoto),
       deputyJson: vote.deputado_ == null ? null : JSON.stringify(vote.deputado_),
       rawJson: JSON.stringify(vote),
     }))
@@ -1033,27 +1093,44 @@ const upsertVoteOrientations = async (voteSessionId: string, orientations: RawIt
   return orientations.length;
 };
 
-const ingestVoteWindow = async (start: string, end: string) => {
+const ingestVoteWindow = async (start: string, end: string, checkpointId?: string) => {
   const voteSessions = await fetchPaged<VoteSession>('/votacoes', {
     dataInicio: start,
     dataFim: end,
   });
 
   let count = 0;
+  let processed = 0;
+  let voteRows = 0;
+  let orientationRows = 0;
   await mapConcurrent(voteSessions, 4, async (voteSession) => {
     await upsertVoteSession(voteSession);
-    const votes = await fetchPaged<DeputyVote>(
+    const votes = await fetchList<DeputyVote>(
       `/votacoes/${voteSession.id}/votos`,
       {},
       {ignoreBadRequest: true},
     );
-    const orientations = await fetchPaged<RawItem>(
+    const orientations = await fetchList<RawItem>(
       `/votacoes/${voteSession.id}/orientacoes`,
       {},
       {ignoreBadRequest: true},
     );
-    count += await upsertVotes(voteSession.id, votes);
-    count += await upsertVoteOrientations(voteSession.id, orientations);
+    const insertedVotes = await upsertVotes(voteSession.id, votes);
+    const insertedOrientations = await upsertVoteOrientations(voteSession.id, orientations);
+    count += insertedVotes + insertedOrientations;
+    voteRows += insertedVotes;
+    orientationRows += insertedOrientations;
+    processed += 1;
+
+    if (checkpointId && (processed % 25 === 0 || processed === voteSessions.length)) {
+      const totalCount = count + processed;
+      await touchCheckpointProgress(checkpointId, totalCount);
+      writeLog(
+        'log',
+        `[progress] votacoes ${start}..${end}: ${processed}/${voteSessions.length} sessoes, ${voteRows} votos, ${orientationRows} orientacoes, ${totalCount} registros`,
+      );
+    }
+
     await sleep(250);
   });
 
@@ -1520,9 +1597,10 @@ const ingestParties = async () => {
   return count;
 };
 
-const ingestProposalsWindow = async (start: string, end: string) => {
+const ingestProposalsWindow = async (start: string, end: string, checkpointId?: string) => {
   const proposals = await fetchPaged<RawItem>('/proposicoes', {dataInicio: start, dataFim: end});
   let count = 0;
+  let processed = 0;
   await mapConcurrent(proposals, 3, async (summary) => {
     const id = numberOrNull(summary.id);
     if (id == null) return;
@@ -1535,6 +1613,14 @@ const ingestProposalsWindow = async (start: string, end: string) => {
     }
     count += await upsertProposal(item);
     count += await upsertProposalChildren(id, item);
+    processed += 1;
+    if (checkpointId && (processed % 100 === 0 || processed === proposals.length)) {
+      await touchCheckpointProgress(checkpointId, count);
+      writeLog(
+        'log',
+        `[progress] proposicoes ${start}..${end}: ${processed}/${proposals.length} proposicoes, ${count} registros`,
+      );
+    }
     await sleep(250);
   });
   return count;
@@ -1599,7 +1685,12 @@ const ingestReferences = async () => {
 const runCheckpointWorkers = async (
   dataset: Dataset,
   options: CliOptions,
-  handler: (checkpoint: {entity_id: string; period_start: string; period_end: string}) => Promise<number>,
+  handler: (checkpoint: {
+    id: string;
+    entity_id: string;
+    period_start: string;
+    period_end: string;
+  }) => Promise<number>,
 ) => {
   const worker = async () => {
     for (;;) {
@@ -1750,7 +1841,7 @@ const run = async () => {
   if (options.datasets.includes('votacoes')) {
     await seedVoteCheckpoints(options);
     await runCheckpointWorkers('votacoes', options, async (checkpoint) =>
-      ingestVoteWindow(checkpoint.period_start, checkpoint.period_end),
+      ingestVoteWindow(checkpoint.period_start, checkpoint.period_end, checkpoint.id),
     );
   }
 
@@ -1800,7 +1891,7 @@ const run = async () => {
   if (options.datasets.includes('proposicoes')) {
     await seedWindowCheckpoints('proposicoes', options);
     await runCheckpointWorkers('proposicoes', options, async (checkpoint) =>
-      ingestProposalsWindow(checkpoint.period_start, checkpoint.period_end),
+      ingestProposalsWindow(checkpoint.period_start, checkpoint.period_end, checkpoint.id),
     );
   }
 

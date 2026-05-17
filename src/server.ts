@@ -136,6 +136,77 @@ const parseJsonStringArray = (value: unknown) => {
   }
 };
 
+const normalizeText = (value: unknown) =>
+  typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : '';
+
+const extractVoteSubjectReference = (value: unknown) => {
+  const text = normalizeText(value);
+  const patterns: Array<{regex: RegExp; type: string}> = [
+    {regex: /(?:Projeto\s+de\s+Lei|PL)\s*(?:n[ºo.]*)?\s*([\d.]+)\s*(?:\/|,\s*de\s*)(\d{4})/i, type: 'PL'},
+    {regex: /(?:Proposta\s+de\s+Emenda\s+(?:à|a)\s+Constitui[cç][aã]o|PEC)\s*(?:n[ºo.]*)?\s*([\d.]+)\s*(?:\/|,\s*de\s*)(\d{4})/i, type: 'PEC'},
+    {regex: /(?:Projeto\s+de\s+Lei\s+Complementar|PLP)\s*(?:n[ºo.]*)?\s*([\d.]+)\s*(?:\/|,\s*de\s*)(\d{4})/i, type: 'PLP'},
+    {regex: /(?:Medida\s+Provis[oó]ria|MPV?|MP)\s*(?:n[ºo.]*)?\s*([\d.]+)\s*(?:\/|,\s*de\s*)(\d{4})/i, type: 'MPV'},
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern.regex);
+    if (!match) continue;
+    const number = Number(match[1].replace(/\D/g, ''));
+    const year = Number(match[2]);
+    if (Number.isFinite(number) && Number.isFinite(year)) {
+      return {type: pattern.type, number, year};
+    }
+  }
+
+  return null;
+};
+
+const simplifyProposalTitle = (ementa: unknown, fallback: unknown) => {
+  const text = normalizeText(ementa) || normalizeText(fallback);
+  const lower = text.toLowerCase();
+
+  if (lower.includes('6x1') || (lower.includes('escala') && lower.includes('jornada'))) {
+    return 'Redução da jornada de trabalho e fim da escala 6x1';
+  }
+  if (lower.includes('conselho nacional de justiça') || lower.includes('cnj')) {
+    return 'Criação de cargos no Conselho Nacional de Justiça';
+  }
+  if (lower.includes('violência doméstica') || lower.includes('violencia domestica') || lower.includes('agressores')) {
+    return 'Monitoramento de agressores em casos de violência doméstica';
+  }
+  if (lower.includes('simples nacional')) return 'Mudanças no Simples Nacional';
+  if (lower.includes('alimentação escolar') || lower.includes('alimentacao escolar')) {
+    return 'Alimentação escolar nas escolas públicas';
+  }
+
+  const clean = text
+    .replace(/^disp[oõ]e\s+sobre\s+/i, '')
+    .replace(/^altera\s+(?:a\s+)?lei[^,]*,\s*para\s+/i, '')
+    .replace(/^institui\s+/i, '')
+    .replace(/^requer\s+(?:a\s+)?/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  return clean.length > 140 ? `${clean.slice(0, 137).trim()}...` : clean || null;
+};
+
+const buildPlainVoteSummary = (title: string | null, ementa: unknown, decision: unknown) => {
+  const source = normalizeText(ementa);
+  const officialDecision = normalizeText(decision);
+  if (!title && !source) return null;
+
+  if (source && title && source.toLowerCase().includes(title.toLowerCase())) {
+    return source.length > 260 ? `${source.slice(0, 257).trim()}...` : source;
+  }
+
+  if (source) {
+    const sentence = source.length > 260 ? `${source.slice(0, 257).trim()}...` : source;
+    return sentence;
+  }
+
+  return officialDecision || null;
+};
+
 const ensureIngestionCheckpointTable = async () => {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS ingestion_checkpoints (
@@ -199,6 +270,120 @@ const parseCheckpointStatus = (value: unknown) => {
   return typeof value === 'string' && allowed.has(value) ? value : null;
 };
 
+const parseCleanupDataset = (value: unknown) => {
+  const allowed = new Set([
+    'deputados',
+    'despesas',
+    'votacoes',
+    'legislaturas',
+    'partidos',
+    'blocos',
+    'orgaos',
+    'eventos',
+    'frentes',
+    'proposicoes',
+    'referencias',
+    'todos',
+  ]);
+  return typeof value === 'string' && allowed.has(value) ? value : null;
+};
+
+const cleanupDefinitions: Record<string, {label: string; tables: string[]; rawResources: string[]; checkpointDatasets: string[]}> = {
+  deputados: {
+    label: 'Deputados',
+    tables: [
+      'camara_deputados_ocupacoes',
+      'camara_deputados_profissoes',
+      'camara_deputados_orgaos',
+      'camara_deputados_eventos',
+      'camara_deputados_frentes',
+      'politicos',
+    ],
+    rawResources: ['deputados'],
+    checkpointDatasets: ['deputados'],
+  },
+  despesas: {
+    label: 'Despesas',
+    tables: ['despesas'],
+    rawResources: ['deputados_despesas'],
+    checkpointDatasets: ['despesas'],
+  },
+  votacoes: {
+    label: 'Votações',
+    tables: ['camara_votacoes_orientacoes', 'votos_deputados', 'votacoes'],
+    rawResources: ['votacoes', 'votacoes_votos', 'votacoes_orientacoes'],
+    checkpointDatasets: ['votacoes'],
+  },
+  legislaturas: {
+    label: 'Legislaturas',
+    tables: ['camara_legislaturas'],
+    rawResources: ['legislaturas'],
+    checkpointDatasets: ['legislaturas'],
+  },
+  partidos: {
+    label: 'Partidos',
+    tables: ['camara_partidos'],
+    rawResources: ['partidos'],
+    checkpointDatasets: ['partidos'],
+  },
+  blocos: {
+    label: 'Blocos',
+    tables: ['camara_blocos'],
+    rawResources: ['blocos'],
+    checkpointDatasets: ['blocos'],
+  },
+  orgaos: {
+    label: 'Órgãos',
+    tables: ['camara_deputados_orgaos', 'camara_eventos_orgaos', 'camara_orgaos'],
+    rawResources: ['orgaos'],
+    checkpointDatasets: ['orgaos'],
+  },
+  eventos: {
+    label: 'Eventos',
+    tables: ['camara_deputados_eventos', 'camara_eventos_orgaos', 'camara_eventos'],
+    rawResources: ['eventos'],
+    checkpointDatasets: ['eventos'],
+  },
+  frentes: {
+    label: 'Frentes',
+    tables: ['camara_deputados_frentes', 'camara_frentes'],
+    rawResources: ['frentes'],
+    checkpointDatasets: ['frentes'],
+  },
+  proposicoes: {
+    label: 'Proposições',
+    tables: [
+      'camara_proposicoes_autores',
+      'camara_proposicoes_temas',
+      'camara_proposicoes_tramitacoes',
+      'camara_proposicoes_relacionadas',
+      'camara_proposicoes',
+    ],
+    rawResources: ['proposicoes', 'proposicoes_autores'],
+    checkpointDatasets: ['proposicoes'],
+  },
+  referencias: {
+    label: 'Referências',
+    tables: ['camara_referencias'],
+    rawResources: ['referencias'],
+    checkpointDatasets: ['referencias'],
+  },
+};
+
+const cleanupOrder = [
+  'despesas',
+  'votacoes',
+  'deputados',
+  'proposicoes',
+  'eventos',
+  'frentes',
+  'orgaos',
+  'blocos',
+  'partidos',
+  'legislaturas',
+  'referencias',
+];
+
 const releaseStaleIngestionCheckpoints = async (minutes = 30) => {
   await pool.query(
     `
@@ -220,6 +405,8 @@ const emptyLogStats = () => ({
   starts: 0,
   okItems: 0,
   okZero: 0,
+  progressUpdates: 0,
+  progressItems: 0,
   retries: 0,
   skips: 0,
   httpRetries: 0,
@@ -231,12 +418,21 @@ const emptyLogStats = () => ({
 const parseIngestionLogStats = (content: string) => {
   const stats = emptyLogStats();
   const lines = content.split(/\r?\n/).filter((line) => line.trim().length > 0);
+  const progressByWindow = new Map<string, number>();
   stats.totalLines = lines.length;
 
   for (const line of lines) {
     if (line.includes('[start]')) stats.starts += 1;
     if (line.includes('[ok-items]')) stats.okItems += 1;
     if (line.includes('[ok-zero]')) stats.okZero += 1;
+    if (line.includes('[progress]')) {
+      stats.progressUpdates += 1;
+      const progressMatch = line.match(/\[progress\]\s+(\S+)\s+([^:]+):.*?(\d+)\s+registros/);
+      const progressItems = Number(progressMatch?.[3] ?? 0);
+      if (progressMatch && Number.isFinite(progressItems)) {
+        progressByWindow.set(`${progressMatch[1]}:${progressMatch[2]}`, progressItems);
+      }
+    }
     if (line.includes('[retry]')) stats.retries += 1;
     if (line.includes('[skip]')) stats.skips += 1;
 
@@ -251,7 +447,52 @@ const parseIngestionLogStats = (content: string) => {
     if (timestamp) stats.lastActivityAt = timestamp;
   }
 
+  stats.progressItems = Array.from(progressByWindow.values()).reduce((sum, value) => sum + value, 0);
+
   return stats;
+};
+
+const enrichLogStatsWithDatabaseProgress = async (stats: ReturnType<typeof emptyLogStats>) => {
+  const result = await pool.query(
+    `
+    SELECT
+      COUNT(*)::int AS windows,
+      COALESCE(SUM(votacoes_total + votos_total + orientacoes_total), 0)::int AS total
+    FROM (
+      SELECT
+        (
+          SELECT COUNT(*)::int
+          FROM votacoes v
+          WHERE v.data_hora_votacao::date BETWEEN ic.period_start AND ic.period_end
+        ) AS votacoes_total,
+        (
+          SELECT COUNT(*)::int
+          FROM votos_deputados vd
+          JOIN votacoes v ON v.id = vd.votacao_id
+          WHERE v.data_hora_votacao::date BETWEEN ic.period_start AND ic.period_end
+        ) AS votos_total,
+        (
+          SELECT COUNT(*)::int
+          FROM camara_votacoes_orientacoes cvo
+          JOIN votacoes v ON v.id = cvo.votacao_id
+          WHERE v.data_hora_votacao::date BETWEEN ic.period_start AND ic.period_end
+        ) AS orientacoes_total
+      FROM ingestion_checkpoints ic
+      WHERE ic.source = 'camara'
+        AND ic.dataset = 'votacoes'
+        AND ic.status = 'running'
+    ) progress
+    `,
+  );
+
+  const databaseProgress = Number(result.rows[0]?.total ?? 0);
+  const runningWindows = Number(result.rows[0]?.windows ?? 0);
+  if (databaseProgress > stats.progressItems) {
+    stats.progressItems = databaseProgress;
+  }
+  if (runningWindows > 0 && stats.progressUpdates === 0 && databaseProgress > 0) {
+    stats.progressUpdates = runningWindows;
+  }
 };
 
 app.get('/api/politicos/novos', async (req, res) => {
@@ -1543,7 +1784,25 @@ app.get('/api/politicos/:politicoId/votacoes', async (req, res) => {
     params.push(limit);
     params.push(offset);
 
-    const result = await pool.query(
+    const result = await pool.query<{
+      votoId: string;
+      politicoId: string;
+      votacaoId: string;
+      siglaTipo: string | null;
+      numero: number | null;
+      ano: number | null;
+      ementa: string | null;
+      resultado: string | null;
+      proposicaoObjeto: string | null;
+      uriProposicaoObjeto: string | null;
+      proposicaoId: string | null;
+      proposicaoSiglaTipo: string | null;
+      proposicaoNumero: number | null;
+      proposicaoAno: number | null;
+      proposicaoEmenta: string | null;
+      dataVotacao: string | Date | null;
+      voto: string;
+    }>(
       `
       SELECT
         vd.id::text AS "votoId",
@@ -1553,10 +1812,21 @@ app.get('/api/politicos/:politicoId/votacoes', async (req, res) => {
         v.numero,
         v.ano,
         v.ementa,
+        v.resultado,
+        v.proposicao_objeto AS "proposicaoObjeto",
+        v.uri_proposicao_objeto AS "uriProposicaoObjeto",
+        cp.id::text AS "proposicaoId",
+        cp.sigla_tipo AS "proposicaoSiglaTipo",
+        cp.numero AS "proposicaoNumero",
+        cp.ano AS "proposicaoAno",
+        cp.ementa AS "proposicaoEmenta",
         v.data_hora_votacao AS "dataVotacao",
         vd.voto
       FROM votos_deputados vd
       JOIN votacoes v ON v.id = vd.votacao_id
+      LEFT JOIN camara_proposicoes cp ON cp.uri = v.uri_proposicao_objeto
+        OR cp.id::text = regexp_replace(COALESCE(v.uri_proposicao_objeto, ''), '^.*/', '')
+        OR cp.id::text = split_part(v.id, '-', 1)
       WHERE ${where.join(' AND ')}
       ORDER BY v.data_hora_votacao DESC NULLS LAST
       LIMIT $${params.length - 1}
@@ -1565,7 +1835,65 @@ app.get('/api/politicos/:politicoId/votacoes', async (req, res) => {
       params,
     );
 
-    sendJson(res, 200, {items: result.rows});
+    const items = await Promise.all(
+      result.rows.map(async (row) => {
+        let proposal = {
+          id: row.proposicaoId,
+          siglaTipo: row.proposicaoSiglaTipo,
+          numero: row.proposicaoNumero,
+          ano: row.proposicaoAno,
+          ementa: row.proposicaoEmenta,
+        };
+
+        if (!proposal.ementa) {
+          const reference = extractVoteSubjectReference(row.ementa);
+          if (reference) {
+            const proposalResult = await pool.query<{
+              id: string;
+              siglaTipo: string | null;
+              numero: number | null;
+              ano: number | null;
+              ementa: string | null;
+            }>(
+              `
+              SELECT
+                id::text AS id,
+                sigla_tipo AS "siglaTipo",
+                numero,
+                ano,
+                ementa
+              FROM camara_proposicoes
+              WHERE sigla_tipo = $1
+                AND numero = $2
+                AND ano = $3
+              ORDER BY atualizado_em DESC NULLS LAST
+              LIMIT 1
+              `,
+              [reference.type, reference.number, reference.year],
+            );
+            if (proposalResult.rows[0]) {
+              proposal = proposalResult.rows[0];
+            }
+          }
+        }
+
+        const tituloPublico = simplifyProposalTitle(proposal.ementa, row.ementa);
+        const resumoLeigo = buildPlainVoteSummary(tituloPublico, proposal.ementa, row.ementa);
+
+        return {
+          ...row,
+          proposicaoId: proposal.id,
+          proposicaoSiglaTipo: proposal.siglaTipo,
+          proposicaoNumero: proposal.numero,
+          proposicaoAno: proposal.ano,
+          proposicaoEmenta: proposal.ementa,
+          tituloPublico,
+          resumoLeigo,
+        };
+      }),
+    );
+
+    sendJson(res, 200, {items});
   } catch {
     sendJson(res, 500, {error: 'Erro ao processar requisição'});
   }
@@ -1737,31 +2065,63 @@ app.get('/api/admin/ingestion/summary', async (_req, res) => {
 
     const periodResult = await pool.query(
       `
-      WITH despesas_periodos AS (
+      WITH coverage AS (
         SELECT
           'despesas'::text AS dataset,
-          make_date(ano::int, mes::int, 1) AS period_start,
-          (make_date(ano::int, mes::int, 1) + INTERVAL '1 month - 1 day')::date AS period_end,
+          MIN(make_date(ano::int, mes::int, 1))::date AS period_start,
+          MAX((make_date(ano::int, mes::int, 1) + INTERVAL '1 month - 1 day')::date) AS period_end,
           COUNT(*)::int AS total
         FROM despesas
-        GROUP BY ano, mes
-      ),
-      votacoes_periodos AS (
+        UNION ALL
         SELECT
           'votacoes'::text AS dataset,
-          date_trunc('month', data_hora_votacao)::date AS period_start,
-          (date_trunc('month', data_hora_votacao)::date + INTERVAL '1 month - 1 day')::date AS period_end,
+          MIN(date_trunc('month', data_hora_votacao)::date) AS period_start,
+          MAX((date_trunc('month', data_hora_votacao)::date + INTERVAL '1 month - 1 day')::date) AS period_end,
           COUNT(*)::int AS total
         FROM votacoes
         WHERE data_hora_votacao IS NOT NULL
-        GROUP BY date_trunc('month', data_hora_votacao)::date
+        UNION ALL
+        SELECT
+          'proposicoes'::text AS dataset,
+          MIN(date_trunc('month', data_apresentacao)::date) AS period_start,
+          MAX((date_trunc('month', data_apresentacao)::date + INTERVAL '1 month - 1 day')::date) AS period_end,
+          COUNT(*)::int AS total
+        FROM camara_proposicoes
+        WHERE data_apresentacao IS NOT NULL
+        UNION ALL
+        SELECT
+          'eventos'::text AS dataset,
+          MIN(date_trunc('month', data_hora_inicio)::date) AS period_start,
+          MAX((date_trunc('month', data_hora_inicio)::date + INTERVAL '1 month - 1 day')::date) AS period_end,
+          COUNT(*)::int AS total
+        FROM camara_eventos
+        WHERE data_hora_inicio IS NOT NULL
+        UNION ALL
+        SELECT
+          'legislaturas'::text AS dataset,
+          MIN(date_trunc('month', data_inicio)::date) AS period_start,
+          MAX((date_trunc('month', data_fim)::date + INTERVAL '1 month - 1 day')::date) AS period_end,
+          COUNT(*)::int AS total
+        FROM camara_legislaturas
+        WHERE data_inicio IS NOT NULL
+        UNION ALL
+        SELECT
+          'deputados'::text AS dataset,
+          MIN(date_trunc('month', data_ultimo_status)::date) AS period_start,
+          MAX((date_trunc('month', data_ultimo_status)::date + INTERVAL '1 month - 1 day')::date) AS period_end,
+          COUNT(*)::int AS total
+        FROM politicos
+        WHERE data_ultimo_status IS NOT NULL
+        UNION ALL SELECT 'partidos'::text, NULL::date, NULL::date, COUNT(*)::int FROM camara_partidos
+        UNION ALL SELECT 'blocos'::text, NULL::date, NULL::date, COUNT(*)::int FROM camara_blocos
+        UNION ALL SELECT 'orgaos'::text, NULL::date, NULL::date, COUNT(*)::int FROM camara_orgaos
+        UNION ALL SELECT 'frentes'::text, NULL::date, NULL::date, COUNT(*)::int FROM camara_frentes
+        UNION ALL SELECT 'referencias'::text, NULL::date, NULL::date, COUNT(*)::int FROM camara_referencias
       )
       SELECT dataset, period_start::text AS "periodStart", period_end::text AS "periodEnd", total
-      FROM despesas_periodos
-      UNION ALL
-      SELECT dataset, period_start::text AS "periodStart", period_end::text AS "periodEnd", total
-      FROM votacoes_periodos
-      ORDER BY dataset ASC, "periodStart" DESC
+      FROM coverage
+      WHERE total > 0
+      ORDER BY dataset ASC, "periodStart" DESC NULLS LAST
       `,
     );
 
@@ -1798,6 +2158,7 @@ app.get('/api/admin/ingestion/logs', async (_req, res) => {
 
     const content = readFileSync(latest.path, 'utf8');
     const stats = parseIngestionLogStats(content);
+    await enrichLogStatsWithDatabaseProgress(stats);
     sendJson(res, 200, {
       file: latest.file,
       log: content.slice(-12000),
@@ -1947,6 +2308,92 @@ app.post('/api/admin/ingestion/cancel', async (req, res) => {
     });
   } catch {
     sendJson(res, 500, {error: 'Erro ao cancelar tarefas.'});
+  }
+});
+
+app.post('/api/admin/database/clear', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await ensureIngestionCheckpointTable();
+
+    const dataset = parseCleanupDataset(req.body?.dataset);
+    if (!dataset) {
+      sendJson(res, 400, {error: 'Informe uma categoria valida para limpar.'});
+      return;
+    }
+
+    const activeResult = await pool.query(
+      `
+      SELECT COUNT(*)::int AS total
+      FROM ingestion_checkpoints
+      WHERE source = 'camara'
+        AND status = 'running'
+      `,
+    );
+    const activeTotal = Number(activeResult.rows[0]?.total ?? 0);
+    if (activeTotal > 0) {
+      sendJson(res, 409, {
+        error: 'Existe ingestao em andamento. Cancele ou aguarde terminar antes de limpar dados.',
+        activeTotal,
+      });
+      return;
+    }
+
+    const targets = dataset === 'todos' ? cleanupOrder : [dataset];
+    const cleaned: Array<{dataset: string; deletedRows: number}> = [];
+
+    await client.query('BEGIN');
+    for (const target of targets) {
+      const definition = cleanupDefinitions[target];
+      if (!definition) continue;
+
+      let deletedRows = 0;
+      for (const table of definition.tables) {
+        const result = await client.query(`DELETE FROM ${table}`);
+        deletedRows += result.rowCount ?? 0;
+      }
+
+      if (definition.rawResources.length > 0) {
+        const result = await client.query(
+          `
+          DELETE FROM camara_api_raw_items
+          WHERE resource = ANY($1::text[])
+             OR parent_resource = ANY($1::text[])
+          `,
+          [definition.rawResources],
+        );
+        deletedRows += result.rowCount ?? 0;
+      }
+
+      if (definition.checkpointDatasets.length > 0) {
+        const result = await client.query(
+          `
+          DELETE FROM ingestion_checkpoints
+          WHERE source = 'camara'
+            AND dataset = ANY($1::text[])
+          `,
+          [definition.checkpointDatasets],
+        );
+        deletedRows += result.rowCount ?? 0;
+      }
+
+      cleaned.push({dataset: target, deletedRows});
+    }
+
+    await client.query('COMMIT');
+    sendJson(res, 200, {
+      message: 'Dados removidos.',
+      dataset,
+      cleaned,
+      deletedRows: cleaned.reduce((sum, item) => sum + item.deletedRows, 0),
+    });
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    sendJson(res, 500, {
+      error: error instanceof Error ? error.message : 'Erro ao limpar dados.',
+    });
+  } finally {
+    client.release();
   }
 });
 

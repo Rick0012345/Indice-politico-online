@@ -67,6 +67,16 @@ type VotacaoItem = {
   numero: number | null;
   ano: number | null;
   ementa: string | null;
+  resultado?: string | null;
+  proposicaoObjeto?: string | null;
+  uriProposicaoObjeto?: string | null;
+  proposicaoId?: string | null;
+  proposicaoSiglaTipo?: string | null;
+  proposicaoNumero?: number | null;
+  proposicaoAno?: number | null;
+  proposicaoEmenta?: string | null;
+  tituloPublico?: string | null;
+  resumoLeigo?: string | null;
   dataVotacao: string | null;
   voto: string;
 };
@@ -245,6 +255,106 @@ export const PoliticoProfile = () => {
   };
 
   const formatarDataVotacao = (value: string | null) => formatarData(value);
+
+  const normalizeVoteText = (value: string | null | undefined) => (value ?? '').replace(/\s+/g, ' ').trim();
+
+  const isGenericVoteSummary = (value: string | null | undefined) => {
+    const text = normalizeVoteText(value).toLowerCase();
+    if (!text) return true;
+    return (
+      /^aprovad[oa]s?(,|\s|\.|$)/.test(text) ||
+      /^rejeitad[oa]s?(,|\s|\.|$)/.test(text) ||
+      /^prejudicad[oa]s?(,|\s|\.|$)/.test(text) ||
+      /^retirad[oa]s?(,|\s|\.|$)/.test(text)
+    );
+  };
+
+  const buildTemaPublicoVotacao = (v: VotacaoItem) => {
+    const text = normalizeVoteText(
+      `${v.proposicaoObjeto ?? ''} ${v.proposicaoEmenta ?? ''} ${v.ementa ?? ''}`,
+    ).toLowerCase();
+
+    if (text.includes('6x1') || (text.includes('escala') && text.includes('jornada'))) {
+      return 'Redução da jornada de trabalho e fim da escala 6x1';
+    }
+
+    if (text.includes('violência doméstica') || text.includes('violencia domestica') || text.includes('agressores')) {
+      return 'Monitoramento de agressores em casos de violência doméstica';
+    }
+
+    if (text.includes('simples nacional')) {
+      return 'Mudanças no Simples Nacional';
+    }
+
+    if (
+      text.includes('alimentação escolar') ||
+      text.includes('alimentacao escolar') ||
+      text.includes('programa nacional de alimentação escolar') ||
+      text.includes('programa nacional de alimentacao escolar')
+    ) {
+      return 'Alimentação escolar nas escolas públicas';
+    }
+
+    return null;
+  };
+
+  const buildVotacaoDisplay = (v: VotacaoItem) => {
+    const tituloPublico = normalizeVoteText(v.tituloPublico);
+    const resumoLeigo = normalizeVoteText(v.resumoLeigo);
+    const assunto = normalizeVoteText(v.proposicaoEmenta);
+    const objeto = normalizeVoteText(v.proposicaoObjeto);
+    const decisao = normalizeVoteText(v.resultado ?? v.ementa);
+    const temaPublico = buildTemaPublicoVotacao(v);
+    const identificador =
+      objeto ||
+      (v.proposicaoSiglaTipo && v.proposicaoNumero && v.proposicaoAno
+        ? `${v.proposicaoSiglaTipo} ${v.proposicaoNumero}/${v.proposicaoAno}`
+        : v.siglaTipo && v.numero && v.ano
+          ? `${v.siglaTipo} ${v.numero}/${v.ano}`
+          : '');
+
+    if (tituloPublico) {
+      return {
+        titulo: tituloPublico,
+        contexto: resumoLeigo && resumoLeigo !== tituloPublico ? resumoLeigo : decisao || null,
+        assunto: resumoLeigo || tituloPublico,
+        identificador,
+      };
+    }
+
+    if (temaPublico) {
+      return {
+        titulo: temaPublico,
+        contexto: assunto || decisao || null,
+        assunto: temaPublico,
+        identificador,
+      };
+    }
+
+    if (assunto) {
+      return {
+        titulo: identificador ? `${identificador}: ${assunto}` : assunto,
+        contexto: decisao && decisao !== assunto ? decisao : null,
+        assunto,
+        identificador,
+      };
+    }
+
+    if (objeto && decisao) {
+      return {titulo: `${objeto}: ${decisao}`, contexto: null, assunto: decisao, identificador: objeto};
+    }
+
+    if (decisao && !isGenericVoteSummary(decisao)) {
+      return {titulo: decisao, contexto: null, assunto: decisao, identificador};
+    }
+
+    return {
+      titulo: identificador ? `Votação sobre ${identificador}` : decisao || 'Votação',
+      contexto: decisao || null,
+      assunto: decisao || null,
+      identificador,
+    };
+  };
 
   const formatarLinkLabel = (value: string, fallback: string) => {
     try {
@@ -1196,6 +1306,7 @@ export const PoliticoProfile = () => {
             )}
 
             {votacoesFiltradas.map((v) => {
+              const display = buildVotacaoDisplay(v);
               const titulo =
                 v.siglaTipo && v.numero && v.ano
                   ? `${v.siglaTipo} ${v.numero}/${v.ano}${v.ementa ? ` - ${v.ementa}` : ''}`
@@ -1220,7 +1331,12 @@ export const PoliticoProfile = () => {
                        v.voto === 'Não' ? <XCircle size={20} /> : <MinusCircle size={20} />}
                     </div>
                     <div className="min-w-0">
-                      <h4 className="break-words font-bold text-slate-900 dark:text-slate-50">{titulo}</h4>
+                      <h4 className="break-words font-bold text-slate-900 dark:text-slate-50">{display.titulo}</h4>
+                      {display.contexto && (
+                        <p className="mt-1 break-words text-sm text-slate-600 dark:text-slate-300">
+                          Resumo: {display.contexto}
+                        </p>
+                      )}
                       <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500 dark:text-slate-400">
                         <span className="flex items-center gap-1">
                           <Calendar size={12} />{' '}
@@ -1246,12 +1362,17 @@ export const PoliticoProfile = () => {
                   <div className="border-t border-slate-100 px-4 py-5 sm:px-6 dark:border-slate-800">
                     <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                       <div className="rounded-2xl bg-slate-50 p-4 dark:bg-slate-800">
-                        <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">Ementa</div>
-                        <div className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-50">{v.ementa || '—'}</div>
+                        <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">Assunto em linguagem simples</div>
+                        <div className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-50">{display.assunto || 'Sem resumo disponível'}</div>
+                        {display.identificador && (
+                          <div className="mt-2 text-xs text-slate-500 dark:text-slate-400">{display.identificador}</div>
+                        )}
                       </div>
                       <div className="rounded-2xl bg-slate-50 p-4 dark:bg-slate-800">
-                        <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">Identificadores</div>
+                        <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">Texto oficial da votação</div>
                         <div className="mt-2 grid grid-cols-1 gap-1 text-xs text-slate-600 dark:text-slate-400">
+                          <div className="text-sm font-semibold text-slate-900 dark:text-slate-50">{v.ementa || 'Sem texto oficial disponível'}</div>
+                          <div><span className="font-bold text-slate-800 dark:text-slate-200">Seu parlamentar votou:</span> {v.voto}</div>
                           <div><span className="font-bold text-slate-800 dark:text-slate-200">Voto ID:</span> {v.votoId}</div>
                           <div><span className="font-bold text-slate-800 dark:text-slate-200">Votação ID:</span> {v.votacaoId}</div>
                           <div><span className="font-bold text-slate-800 dark:text-slate-200">Político ID:</span> {v.politicoId}</div>

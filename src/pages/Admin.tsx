@@ -1,5 +1,5 @@
 import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
-import {Activity, CalendarDays, Database, Play, RefreshCw, ScrollText, Settings, XCircle} from 'lucide-react';
+import {Activity, CalendarDays, Database, Play, RefreshCw, ScrollText, Settings, Trash2, XCircle} from 'lucide-react';
 import {cn} from '../lib/utils';
 
 type CheckpointSummary = {
@@ -13,8 +13,8 @@ type CheckpointSummary = {
 
 type PopulatedPeriod = {
   dataset: string;
-  periodStart: string;
-  periodEnd: string;
+  periodStart: string | null;
+  periodEnd: string | null;
   total: number;
 };
 
@@ -23,6 +23,8 @@ type LogStats = {
   starts: number;
   okItems: number;
   okZero: number;
+  progressUpdates: number;
+  progressItems: number;
   retries: number;
   skips: number;
   httpRetries: number;
@@ -45,6 +47,8 @@ const datasetOptions = [
   {id: 'referencias', label: 'Referencias'},
 ];
 
+const cleanupOptions = [...datasetOptions, {id: 'todos', label: 'Tudo'}];
+
 const statusClasses: Record<string, string> = {
   done: 'bg-emerald-50 text-emerald-700 ring-emerald-100 dark:bg-emerald-950 dark:text-emerald-300 dark:ring-emerald-900',
   running: 'bg-blue-50 text-blue-700 ring-blue-100 dark:bg-blue-950 dark:text-blue-300 dark:ring-blue-900',
@@ -56,6 +60,12 @@ const statusClasses: Record<string, string> = {
 const formatDate = (value: string | null) => {
   if (!value) return '-';
   return new Intl.DateTimeFormat('pt-BR', {timeZone: 'UTC'}).format(new Date(value));
+};
+
+const formatPeriodRange = (start: string | null, end: string | null) => {
+  if (!start && !end) return 'Sem periodo associado';
+  if (start === end || !end) return formatDate(start);
+  return `${formatDate(start)} a ${formatDate(end)}`;
 };
 
 const calculatePercent = (completed: number, total: number) =>
@@ -101,6 +111,8 @@ const defaultLogStats = (): LogStats => ({
   starts: 0,
   okItems: 0,
   okZero: 0,
+  progressUpdates: 0,
+  progressItems: 0,
   retries: 0,
   skips: 0,
   httpRetries: 0,
@@ -155,6 +167,7 @@ export const Admin = () => {
   const [periods, setPeriods] = useState<PopulatedPeriod[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
+  const [clearingDataset, setClearingDataset] = useState<string | null>(null);
   const [isPolling, setIsPolling] = useState(false);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -320,6 +333,33 @@ export const Admin = () => {
     }
   };
 
+  const clearDataset = async (dataset: string, label: string) => {
+    const confirmation =
+      dataset === 'todos'
+        ? 'Isto vai limpar todos os dados oficiais e checkpoints da Camara. As avaliacoes ligadas a politicos tambem podem ser removidas por cascata. Continuar?'
+        : `Limpar dados de ${label}? Os checkpoints desta categoria tambem serao removidos.`;
+
+    if (!window.confirm(confirmation)) return;
+
+    setClearingDataset(dataset);
+    setMessage(null);
+    try {
+      const response = await fetch('/api/admin/database/clear', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({dataset}),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error ?? 'Erro ao limpar dados.');
+      setMessage(`${data.deletedRows ?? 0} registro(s) removido(s) de ${label}.`);
+      await refreshAdminData();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Erro ao limpar dados.');
+    } finally {
+      setClearingDataset(null);
+    }
+  };
+
   return (
     <div className="min-h-screen overflow-x-hidden bg-slate-50 py-8 dark:bg-slate-950">
       <div className="mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8">
@@ -345,6 +385,7 @@ export const Admin = () => {
         </div>
 
         <section className="grid min-w-0 gap-6 lg:grid-cols-[minmax(280px,340px)_minmax(0,1fr)] xl:grid-cols-[360px_minmax(0,1fr)]">
+          <div className="min-w-0 space-y-6">
           <div className="min-w-0 rounded-lg border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-900">
             <div className="mb-5 flex items-center gap-2">
               <CalendarDays size={20} className="text-blue-600 dark:text-blue-400" />
@@ -477,6 +518,45 @@ export const Admin = () => {
             </div>
           </div>
 
+          <div className="min-w-0 rounded-lg border border-rose-200 bg-white p-5 dark:border-rose-900 dark:bg-slate-900">
+            <div className="mb-4 flex items-center gap-2">
+              <Trash2 size={20} className="text-rose-600 dark:text-rose-400" />
+              <h2 className="text-lg font-black text-slate-900 dark:text-slate-50">Limpar banco</h2>
+            </div>
+            <p className="mb-4 text-sm font-semibold text-slate-600 dark:text-slate-300">
+              Remove dados oficiais e checkpoints por categoria. Use antes de reingerir uma base que ficou inconsistente.
+            </p>
+            <div className="grid grid-cols-2 gap-2">
+              {cleanupOptions.map((dataset) => {
+                const isAll = dataset.id === 'todos';
+                const isClearing = clearingDataset === dataset.id;
+                return (
+                  <button
+                    key={dataset.id}
+                    type="button"
+                    onClick={() => clearDataset(dataset.id, dataset.label)}
+                    disabled={clearingDataset != null || overallProgress.running > 0}
+                    className={cn(
+                      'inline-flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs font-black ring-1 ring-inset transition disabled:cursor-not-allowed disabled:opacity-50',
+                      isAll
+                        ? 'col-span-2 bg-rose-600 text-white ring-rose-600 hover:bg-rose-700'
+                        : 'bg-rose-50 text-rose-700 ring-rose-200 hover:bg-rose-100 dark:bg-rose-950 dark:text-rose-200 dark:ring-rose-900 dark:hover:bg-rose-900',
+                    )}
+                  >
+                    <Trash2 size={14} />
+                    {isClearing ? 'Limpando...' : `Limpar ${dataset.label}`}
+                  </button>
+                );
+              })}
+            </div>
+            {overallProgress.running > 0 && (
+              <div className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800 dark:bg-amber-950 dark:text-amber-200">
+                A limpeza fica bloqueada enquanto houver ingestao rodando.
+              </div>
+            )}
+          </div>
+          </div>
+
           <div className="min-w-0 space-y-6">
             <div className="grid min-w-0 gap-4 md:grid-cols-2 xl:grid-cols-3">
               {groupedCheckpoints.map((dataset) => (
@@ -571,7 +651,7 @@ export const Admin = () => {
                 </button>
               </div>
               <div className="p-5">
-                <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
                   <div className="rounded-lg bg-slate-50 p-3 dark:bg-slate-950">
                     <div className="flex items-center gap-2 text-xs font-black uppercase text-slate-500 dark:text-slate-400">
                       <Activity size={14} />
@@ -593,6 +673,17 @@ export const Admin = () => {
                     </div>
                     <div className="mt-1 text-xs font-bold text-slate-500 dark:text-slate-400">
                       gravaram 1+ item
+                    </div>
+                  </div>
+                  <div className="rounded-lg bg-slate-50 p-3 dark:bg-slate-950">
+                    <div className="text-xs font-black uppercase text-slate-500 dark:text-slate-400">
+                      Em andamento
+                    </div>
+                    <div className="mt-2 text-xl font-black tabular-nums text-blue-700 dark:text-blue-300">
+                      {formatNumber(logStats.progressItems)}
+                    </div>
+                    <div className="mt-1 text-xs font-bold text-slate-500 dark:text-slate-400">
+                      {formatNumber(logStats.progressUpdates)} atualizacoes
                     </div>
                   </div>
                   <div className="rounded-lg bg-slate-50 p-3 dark:bg-slate-950">
@@ -656,16 +747,18 @@ export const Admin = () => {
 
             <div className="min-w-0 rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900">
               <div className="border-b border-slate-200 p-5 dark:border-slate-700">
-                <h2 className="text-lg font-black text-slate-900 dark:text-slate-50">Meses populados</h2>
+                <h2 className="text-lg font-black text-slate-900 dark:text-slate-50">Cobertura populada</h2>
               </div>
               <div className="grid min-w-0 gap-2 p-5 sm:grid-cols-2 xl:grid-cols-3">
-                {periods.slice(0, 36).map((period) => (
-                  <div key={`${period.dataset}-${period.periodStart}`} className="rounded-lg bg-slate-50 p-3 dark:bg-slate-950">
+                {periods.map((period) => (
+                  <div key={`${period.dataset}-${period.periodStart ?? 'static'}-${period.periodEnd ?? 'static'}`} className="rounded-lg bg-slate-50 p-3 dark:bg-slate-950">
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-xs font-black uppercase text-slate-500 dark:text-slate-400">{period.dataset}</span>
                       <span className="text-xs font-bold text-slate-500 dark:text-slate-400">{period.total.toLocaleString('pt-BR')}</span>
                     </div>
-                    <div className="mt-2 text-sm font-black text-slate-900 dark:text-slate-50">{formatDate(period.periodStart)}</div>
+                    <div className="mt-2 text-sm font-black text-slate-900 dark:text-slate-50">
+                      {formatPeriodRange(period.periodStart, period.periodEnd)}
+                    </div>
                   </div>
                 ))}
                 {periods.length === 0 && <div className="text-sm text-slate-500 dark:text-slate-400">Nenhum periodo encontrado no banco.</div>}
