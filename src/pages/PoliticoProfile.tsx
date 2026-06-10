@@ -914,9 +914,14 @@ export const PoliticoProfile = () => {
       </Link>
 
       {/* Header Section */}
-      <div className="relative mb-10 overflow-hidden rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:mb-12 sm:p-10 dark:border-slate-700 dark:bg-slate-900">
-        <div className="flex flex-col items-center gap-6 md:flex-row md:items-start md:gap-8">
-          <div className="relative h-28 w-28 shrink-0 overflow-hidden rounded-2xl border-4 border-slate-50 shadow-md sm:h-40 sm:w-40 dark:border-slate-800">
+      <div className="reveal-card relative mb-10 overflow-hidden rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:mb-12 sm:p-10 dark:border-slate-700 dark:bg-slate-900">
+        <div className="civic-mesh opacity-40 dark:opacity-30" aria-hidden="true">
+          <span className="civic-node left-[18%] top-[22%]" />
+          <span className="civic-node left-[72%] top-[20%]" />
+          <span className="civic-node left-[58%] top-[74%]" />
+        </div>
+        <div className="relative flex flex-col items-center gap-6 md:flex-row md:items-start md:gap-8">
+          <div className="relative h-28 w-28 shrink-0 overflow-hidden rounded-2xl border-4 border-slate-50 shadow-xl shadow-blue-900/10 sm:h-40 sm:w-40 dark:border-slate-800">
             <img
               src={politico.foto}
               alt={politico.nome}
@@ -981,10 +986,11 @@ export const PoliticoProfile = () => {
       </div>
 
       <section className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {resumoCards.map((card) => (
+        {resumoCards.map((card, index) => (
           <div
             key={card.label}
-            className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-900"
+            className="reveal-card lift-card rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-900"
+            style={{animationDelay: `${index * 70}ms`}}
           >
             <div className="mb-4 flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 text-blue-600 dark:bg-blue-950 dark:text-blue-300">
               <card.icon size={20} />
@@ -1041,7 +1047,7 @@ export const PoliticoProfile = () => {
                   </div>
                   <div className="h-3 w-full rounded-full bg-slate-100 overflow-hidden dark:bg-slate-700">
                     <div
-                      className="h-full bg-emerald-500 rounded-full transition-all duration-1000"
+                      className="data-bar h-full rounded-full bg-emerald-500 transition-all duration-1000"
                       style={{ width: `${presencaValue}%` }}
                     />
                   </div>
@@ -1053,7 +1059,7 @@ export const PoliticoProfile = () => {
                   </div>
                   <div className="h-3 w-full rounded-full bg-slate-100 overflow-hidden dark:bg-slate-700">
                     <div
-                      className="h-full bg-blue-500 rounded-full transition-all duration-1000"
+                      className="data-bar h-full rounded-full bg-blue-500 transition-all duration-1000"
                       style={{ width: `${alinhamentoValue}%` }}
                     />
                   </div>

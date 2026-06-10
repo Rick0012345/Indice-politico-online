@@ -59,7 +59,7 @@ const RankingMobileCard: React.FC<{
   return (
     <Link
       to={`/politico/${politico.id}`}
-      className="block rounded-2xl border border-slate-200 bg-white p-4 transition hover:border-blue-200 hover:shadow-sm sm:p-5 dark:border-slate-700 dark:bg-slate-900 dark:hover:border-blue-900"
+      className="block reveal-card lift-card rounded-2xl border border-slate-200 bg-white p-4 sm:p-5 dark:border-slate-700 dark:bg-slate-900 dark:hover:border-blue-900"
     >
       <div className="flex items-start gap-3">
         <span
@@ -456,10 +456,11 @@ export const Ranking = () => {
 
       {activeView === 'parlamentares' && (
         <section className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          {summaryCards.map((card) => (
+          {summaryCards.map((card, index) => (
             <div
               key={card.label}
-              className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-900"
+              className="reveal-card lift-card rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-900"
+              style={{animationDelay: `${index * 70}ms`}}
             >
               <div className="mb-4 flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 text-blue-600 dark:bg-blue-950 dark:text-blue-300">
                 <card.icon size={20} />
@@ -506,7 +507,8 @@ export const Ranking = () => {
                   return (
                     <div
                       key={`${p.partido}-${index}`}
-                      className="rounded-2xl border border-slate-200 p-4 dark:border-slate-700"
+                      className="reveal-card lift-card rounded-2xl border border-slate-200 p-4 dark:border-slate-700"
+                      style={{animationDelay: `${index * 55}ms`}}
                     >
                       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                         <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
@@ -529,7 +531,10 @@ export const Ranking = () => {
                         className="mt-3 h-2 w-full overflow-hidden rounded-full bg-slate-100 dark:bg-slate-700"
                         aria-hidden="true"
                       >
-                        <div className="h-full rounded-full bg-blue-600" style={{width: `${pct}%`}} />
+                        <div
+                          className="data-bar h-full rounded-full bg-blue-600 transition-[width] duration-700 ease-out"
+                          style={{width: `${pct}%`}}
+                        />
                       </div>
                     </div>
                   );
@@ -606,7 +611,11 @@ export const Ranking = () => {
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                     {filteredItems.map((p, index) => (
-                      <tr key={p.id} className="group transition-colors hover:bg-slate-50/50 dark:hover:bg-slate-800/50">
+                    <tr
+                      key={p.id}
+                      className="reveal-card group transition-colors hover:bg-slate-50/50 dark:hover:bg-slate-800/50"
+                      style={{animationDelay: `${Math.min(index, 12) * 28}ms`}}
+                    >
                         <td className="px-6 py-6">
                           <span
                             className={cn(

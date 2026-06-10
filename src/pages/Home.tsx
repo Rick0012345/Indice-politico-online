@@ -305,9 +305,14 @@ export const Home = () => {
 
   return (
     <div className="flex flex-col gap-14 pb-20">
-      <section className="border-b border-slate-200 bg-white py-10 dark:border-slate-800 dark:bg-slate-950 sm:py-14">
-        <div className="mx-auto grid max-w-7xl gap-10 px-4 sm:px-6 lg:grid-cols-[minmax(0,1fr)_380px] lg:px-8">
-          <div>
+      <section className="relative overflow-hidden border-b border-slate-200 bg-white py-10 dark:border-slate-800 dark:bg-slate-950 sm:py-14">
+        <div className="civic-mesh opacity-90 dark:opacity-70" aria-hidden="true">
+          <span className="civic-node left-[18%] top-[24%]" />
+          <span className="civic-node left-[70%] top-[18%]" />
+          <span className="civic-node left-[58%] top-[72%]" />
+        </div>
+        <div className="relative mx-auto grid max-w-7xl gap-10 px-4 sm:px-6 lg:grid-cols-[minmax(0,1fr)_380px] lg:px-8">
+          <div className="reveal-card">
             <div className="mb-5 inline-flex items-center gap-2 rounded-full bg-blue-50 px-3 py-1 text-xs font-bold uppercase text-blue-700 ring-1 ring-inset ring-blue-100 dark:bg-blue-950 dark:text-blue-300 dark:ring-blue-900">
               <ShieldCheck size={14} />
               Dados oficiais organizados para leitura cidadã
@@ -336,7 +341,7 @@ export const Home = () => {
             </div>
           </div>
 
-          <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <div className="reveal-card rounded-3xl border border-slate-200 bg-slate-50/90 p-4 shadow-xl shadow-slate-200/50 backdrop-blur dark:border-slate-800 dark:bg-slate-900/90 dark:shadow-black/20">
             <div className="mb-3 px-1">
               <h2 className="text-sm font-black uppercase text-slate-500 dark:text-slate-400">
                 Comece por um nome
@@ -462,11 +467,12 @@ export const Home = () => {
 
       <section className="mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8">
         <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-          {discoveryCards.map((card) => (
+          {discoveryCards.map((card, index) => (
             <Link
               key={card.to}
               to={card.to}
-              className="group rounded-2xl border border-slate-200 bg-white p-5 transition hover:border-blue-200 hover:shadow-sm dark:border-slate-700 dark:bg-slate-900 dark:hover:border-blue-900"
+              className="group reveal-card lift-card rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-900 dark:hover:border-blue-900"
+              style={{animationDelay: `${120 + index * 90}ms`}}
             >
               <div className="mb-4 flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 text-blue-600 dark:bg-blue-950 dark:text-blue-300">
                 <card.icon size={20} />
