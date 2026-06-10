@@ -1,5 +1,15 @@
 import React, {useEffect, useState} from 'react';
-import {Search, Star, TrendingUp, TrendingDown, ChevronRight, Sparkles} from 'lucide-react';
+import {
+  Search,
+  Star,
+  TrendingUp,
+  TrendingDown,
+  ChevronRight,
+  Sparkles,
+  Landmark,
+  ShieldCheck,
+  Vote,
+} from 'lucide-react';
 import {Link} from 'react-router-dom';
 import {cn} from '../lib/utils';
 import {
@@ -272,20 +282,66 @@ export const Home = () => {
     }
   };
 
-  return (
-    <div className="flex flex-col gap-16 pb-20">
-      <section className="relative overflow-hidden bg-slate-50 py-12 sm:py-16 dark:bg-slate-950">
-        <div className="absolute inset-0 -z-10 bg-[radial-gradient(45rem_50rem_at_top,theme(colors.blue.100),theme(colors.white))] opacity-20 dark:bg-[radial-gradient(45rem_50rem_at_top,theme(colors.blue.950),theme(colors.slate.950))] dark:opacity-30" />
-        <div className="mx-auto max-w-7xl px-4 text-center sm:px-6 lg:px-8">
-          <h1 className="text-4xl font-extrabold tracking-tight text-slate-900 sm:text-6xl dark:text-slate-50">
-            Transparencia que gera <span className="text-blue-600">mudanca</span>.
-          </h1>
-          <p className="mx-auto mt-6 max-w-2xl text-lg leading-8 text-slate-600 dark:text-slate-400">
-            Acompanhe votos, gastos e o desempenho dos seus representantes. O poder da
-            informacao em suas maos.
-          </p>
+  const discoveryCards = [
+    {
+      to: '/ranking',
+      title: 'Comparar parlamentares',
+      desc: 'Veja notas, gastos e participação lado a lado.',
+      icon: TrendingUp,
+    },
+    {
+      to: '/camara',
+      title: 'Projetos em discussão',
+      desc: 'Explore proposições, eventos e frentes da Câmara.',
+      icon: Landmark,
+    },
+    {
+      to: '/partidos',
+      title: 'Analisar partidos',
+      desc: 'Entenda gastos e composição por sigla.',
+      icon: Vote,
+    },
+  ];
 
-          <div className="mt-10 flex flex-col items-center gap-4">
+  return (
+    <div className="flex flex-col gap-14 pb-20">
+      <section className="border-b border-slate-200 bg-white py-10 dark:border-slate-800 dark:bg-slate-950 sm:py-14">
+        <div className="mx-auto grid max-w-7xl gap-10 px-4 sm:px-6 lg:grid-cols-[minmax(0,1fr)_380px] lg:px-8">
+          <div>
+            <div className="mb-5 inline-flex items-center gap-2 rounded-full bg-blue-50 px-3 py-1 text-xs font-bold uppercase text-blue-700 ring-1 ring-inset ring-blue-100 dark:bg-blue-950 dark:text-blue-300 dark:ring-blue-900">
+              <ShieldCheck size={14} />
+              Dados oficiais organizados para leitura cidadã
+            </div>
+            <h1 className="max-w-4xl text-4xl font-extrabold tracking-tight text-slate-950 sm:text-6xl dark:text-slate-50">
+              Entenda políticos, votos e gastos sem decifrar planilhas públicas.
+            </h1>
+            <p className="mt-6 max-w-2xl text-lg leading-8 text-slate-600 dark:text-slate-400">
+              Busque um parlamentar, compare o ranking e acompanhe a atuação na Câmara com linguagem
+              mais direta.
+            </p>
+
+            <div className="mt-8 flex flex-wrap gap-3">
+              <Link
+                to="/ranking"
+                className="inline-flex items-center gap-2 rounded-2xl bg-blue-600 px-5 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-blue-700"
+              >
+                Ver ranking <ChevronRight size={16} />
+              </Link>
+              <Link
+                to="/camara"
+                className="inline-flex items-center gap-2 rounded-2xl bg-slate-100 px-5 py-3 text-sm font-bold text-slate-700 transition hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+              >
+                Projetos da Câmara
+              </Link>
+            </div>
+          </div>
+
+          <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+            <div className="mb-3 px-1">
+              <h2 className="text-sm font-black uppercase text-slate-500 dark:text-slate-400">
+                Comece por um nome
+              </h2>
+            </div>
             <div className="relative w-full max-w-2xl">
               <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-4">
                 <Search className="h-5 w-5 text-slate-400" />
@@ -340,7 +396,7 @@ export const Home = () => {
                       />
                       <div className="min-w-0 flex-1">
                         <p className="text-[11px] font-black uppercase tracking-[0.2em] text-blue-600">
-                          Sugestao em tempo real
+                          Sugestão em tempo real
                         </p>
                         <p className="truncate text-base font-black text-slate-900 sm:text-lg dark:text-slate-50">
                           {topSearchSuggestion.nome}
@@ -382,7 +438,7 @@ export const Home = () => {
               </div>
             ) : null}
 
-            <div className="flex flex-wrap justify-center gap-2">
+            <div className="mt-4 flex flex-wrap gap-2">
               <span className="py-2 text-sm font-medium text-slate-500 dark:text-slate-400">Status:</span>
               {politicoStatusOptions.map((option) => (
                 <button
@@ -401,6 +457,26 @@ export const Home = () => {
               ))}
             </div>
           </div>
+        </div>
+      </section>
+
+      <section className="mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+          {discoveryCards.map((card) => (
+            <Link
+              key={card.to}
+              to={card.to}
+              className="group rounded-2xl border border-slate-200 bg-white p-5 transition hover:border-blue-200 hover:shadow-sm dark:border-slate-700 dark:bg-slate-900 dark:hover:border-blue-900"
+            >
+              <div className="mb-4 flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 text-blue-600 dark:bg-blue-950 dark:text-blue-300">
+                <card.icon size={20} />
+              </div>
+              <h2 className="text-lg font-black text-slate-900 group-hover:text-blue-600 dark:text-slate-50 dark:group-hover:text-blue-400">
+                {card.title}
+              </h2>
+              <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-400">{card.desc}</p>
+            </Link>
+          ))}
         </div>
       </section>
 

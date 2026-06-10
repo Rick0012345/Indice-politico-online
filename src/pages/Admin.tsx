@@ -1,5 +1,21 @@
-import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
-import {Activity, CalendarDays, Database, Play, RefreshCw, ScrollText, Settings, Trash2, XCircle} from 'lucide-react';
+﻿import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
+import {
+  Activity,
+  AlertCircle,
+  Bot,
+  CalendarDays,
+  CheckCircle2,
+  Clock,
+  Database,
+  Layers3,
+  Loader2,
+  Play,
+  RefreshCw,
+  ScrollText,
+  Settings,
+  Trash2,
+  XCircle,
+} from 'lucide-react';
 import {cn} from '../lib/utils';
 
 type CheckpointSummary = {
@@ -33,10 +49,38 @@ type LogStats = {
   lastHttpError: string | null;
 };
 
+type LogEvent = {
+  stage: string;
+  label: string;
+  timestamp: string;
+  source?: 'ingestion' | 'ai';
+  dataset?: string;
+  periodStart?: string | null;
+  periodEnd?: string | null;
+  resourceId?: string | number | null;
+  url?: string;
+  path?: string;
+  progress?: number;
+  total?: number;
+  status?: number;
+  attempt?: number;
+  delay?: number;
+  error?: string;
+  model?: string;
+  reason?: string;
+};
+
+type AiSettings = {
+  enabled: boolean;
+  groqModel: string;
+  hasGroqApiKey: boolean;
+  maskedGroqApiKey: string;
+};
+
 const datasetOptions = [
   {id: 'deputados', label: 'Deputados'},
   {id: 'despesas', label: 'Despesas'},
-  {id: 'votacoes', label: 'Votacoes'},
+  {id: 'votacoes', label: 'Votações'},
   {id: 'legislaturas', label: 'Legislaturas'},
   {id: 'partidos', label: 'Partidos'},
   {id: 'blocos', label: 'Blocos'},
@@ -48,6 +92,16 @@ const datasetOptions = [
 ];
 
 const cleanupOptions = [...datasetOptions, {id: 'todos', label: 'Tudo'}];
+
+const adminSections = [
+  {id: 'coleta', label: 'Coleta', icon: CalendarDays},
+  {id: 'progresso', label: 'Progresso', icon: Database},
+  {id: 'logs', label: 'Logs', icon: ScrollText},
+  {id: 'cobertura', label: 'Cobertura', icon: Layers3},
+  {id: 'ia', label: 'IA', icon: Bot},
+] as const;
+
+type AdminSection = (typeof adminSections)[number]['id'];
 
 const statusClasses: Record<string, string> = {
   done: 'bg-emerald-50 text-emerald-700 ring-emerald-100 dark:bg-emerald-950 dark:text-emerald-300 dark:ring-emerald-900',
@@ -123,6 +177,74 @@ const defaultLogStats = (): LogStats => ({
 
 const formatNumber = (value: number) => value.toLocaleString('pt-BR');
 
+const formatEventTime = (value: string) => {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '--:--:--';
+  return date.toLocaleTimeString('pt-BR');
+};
+
+const formatEventDetail = (event: LogEvent) => {
+  const parts: string[] = [];
+  if (event.dataset) parts.push(event.dataset);
+  if (event.periodStart || event.periodEnd) parts.push(formatPeriodRange(event.periodStart ?? null, event.periodEnd ?? null));
+  if (event.resourceId) parts.push(`ID ${event.resourceId}`);
+  if (event.progress != null && event.total != null) parts.push(`${event.progress}/${event.total}`);
+  if (event.status) parts.push(`HTTP ${event.status}`);
+  if (event.model) parts.push(event.model);
+  return parts.join(' · ');
+};
+
+const getEventIcon = (stage: string) => {
+  if (stage.includes('failed') || stage.includes('fallback') || stage.includes('retry')) return AlertCircle;
+  if (stage.includes('done')) return CheckCircle2;
+  if (stage.includes('ai')) return Bot;
+  if (stage.includes('start') || stage.includes('fetch') || stage.includes('write')) return Loader2;
+  return Clock;
+};
+
+const getEventClass = (stage: string) => {
+  if (stage.includes('failed') || stage.includes('fallback')) {
+    return 'border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-100';
+  }
+  if (stage.includes('retry')) {
+    return 'border-rose-200 bg-rose-50 text-rose-900 dark:border-rose-900 dark:bg-rose-950 dark:text-rose-100';
+  }
+  if (stage.includes('done')) {
+    return 'border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-100';
+  }
+  if (stage.includes('ai')) {
+    return 'border-violet-200 bg-violet-50 text-violet-900 dark:border-violet-900 dark:bg-violet-950 dark:text-violet-100';
+  }
+  return 'border-blue-200 bg-blue-50 text-blue-900 dark:border-blue-900 dark:bg-blue-950 dark:text-blue-100';
+};
+
+const LogEventCard = ({event, compact = false}: {event: LogEvent; compact?: boolean; key?: React.Key}) => {
+  const Icon = getEventIcon(event.stage);
+  const detail = formatEventDetail(event);
+  return (
+    <div className={cn('rounded-lg border p-3', getEventClass(event.stage))}>
+      <div className="flex items-start gap-3">
+        <Icon size={18} className={cn('mt-0.5 shrink-0', event.stage.includes('fetch') || event.stage.includes('write') ? 'animate-spin' : '')} />
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm font-black">{event.label}</span>
+            <span className="rounded-full bg-white/60 px-2 py-0.5 text-[11px] font-black uppercase dark:bg-slate-950/40">
+              {event.source === 'ai' ? 'IA' : 'Ingestao'}
+            </span>
+          </div>
+          {detail && <div className="mt-1 truncate text-xs font-bold opacity-80">{detail}</div>}
+          {!compact && (event.url || event.path || event.error) && (
+            <div className="mt-2 truncate text-xs font-semibold opacity-75">
+              {event.error || event.url || event.path}
+            </div>
+          )}
+        </div>
+        <div className="shrink-0 text-xs font-black opacity-70">{formatEventTime(event.timestamp)}</div>
+      </div>
+    </div>
+  );
+};
+
 const summarizeCheckpointProgress = (rows: CheckpointSummary[]) => {
   const total = rows.reduce((sum, row) => sum + Number(row.total ?? 0), 0);
   const done = rows
@@ -150,6 +272,7 @@ const summarizeCheckpointProgress = (rows: CheckpointSummary[]) => {
 };
 
 export const Admin = () => {
+  const [activeSection, setActiveSection] = useState<AdminSection>('coleta');
   const [from, setFrom] = useState('2016-01-01');
   const [to, setTo] = useState('2020-12-31');
   const [windowSize, setWindowSize] = useState<'month' | 'quarter' | 'year'>('month');
@@ -174,6 +297,17 @@ export const Admin = () => {
   const [logFile, setLogFile] = useState<string | null>(null);
   const [logText, setLogText] = useState('');
   const [logStats, setLogStats] = useState<LogStats>(() => defaultLogStats());
+  const [logEvents, setLogEvents] = useState<LogEvent[]>([]);
+  const [currentStatus, setCurrentStatus] = useState<LogEvent[]>([]);
+  const [logTimeline, setLogTimeline] = useState<LogEvent[]>([]);
+  const [aiSettings, setAiSettings] = useState<AiSettings>({
+    enabled: true,
+    groqModel: 'llama-3.3-70b-versatile',
+    hasGroqApiKey: false,
+    maskedGroqApiKey: '',
+  });
+  const [groqApiKeyInput, setGroqApiKeyInput] = useState('');
+  const [isSavingAi, setIsSavingAi] = useState(false);
   const refreshInFlightRef = useRef(false);
 
   const loadSummary = useCallback(async () => {
@@ -200,8 +334,27 @@ export const Admin = () => {
       setLogFile(data.file ?? null);
       setLogText(data.log ?? '');
       setLogStats(data.stats ?? defaultLogStats());
+      setLogEvents(Array.isArray(data.events) ? data.events : []);
+      setCurrentStatus(Array.isArray(data.currentStatus) ? data.currentStatus : []);
+      setLogTimeline(Array.isArray(data.timeline) ? data.timeline : []);
     } catch {
       // Logs are auxiliary; keep the ingestion panel usable if this fails.
+    }
+  }, []);
+
+  const loadAiSettings = useCallback(async () => {
+    try {
+      const response = await fetch('/api/admin/settings/ai');
+      if (!response.ok) return;
+      const data = await response.json();
+      setAiSettings({
+        enabled: data.enabled !== false,
+        groqModel: data.groqModel || 'llama-3.3-70b-versatile',
+        hasGroqApiKey: Boolean(data.hasGroqApiKey),
+        maskedGroqApiKey: data.maskedGroqApiKey || '',
+      });
+    } catch {
+      // Configuracao auxiliar; a coleta deve continuar acessivel.
     }
   }, []);
 
@@ -209,11 +362,11 @@ export const Admin = () => {
     if (refreshInFlightRef.current) return;
     refreshInFlightRef.current = true;
     try {
-      await Promise.all([loadSummary(), loadLogs()]);
+      await Promise.all([loadSummary(), loadLogs(), loadAiSettings()]);
     } finally {
       refreshInFlightRef.current = false;
     }
-  }, [loadLogs, loadSummary]);
+  }, [loadAiSettings, loadLogs, loadSummary]);
 
   useEffect(() => {
     void refreshAdminData();
@@ -271,16 +424,26 @@ export const Admin = () => {
     [logStats.httpStatus],
   );
 
+  const currentAiEvents = useMemo(
+    () => currentStatus.filter((event) => event.source === 'ai').slice(0, 3),
+    [currentStatus],
+  );
+
+  const currentIngestionEvents = useMemo(
+    () => currentStatus.filter((event) => event.source !== 'ai').slice(0, 6),
+    [currentStatus],
+  );
+
   useEffect(() => {
     const hasActiveWork = checkpoints.some((row) => row.status === 'running' || row.status === 'pending');
-    if (!hasActiveWork && !isPolling) return;
+    if (!hasActiveWork && !isPolling && activeSection !== 'logs') return;
 
     const timer = window.setInterval(() => {
       void refreshAdminData();
     }, 1000);
 
     return () => window.clearInterval(timer);
-  }, [checkpoints, isPolling, refreshAdminData]);
+  }, [activeSection, checkpoints, isPolling, refreshAdminData]);
 
   useEffect(() => {
     const hasActiveWork = checkpoints.some((row) => row.status === 'running' || row.status === 'pending');
@@ -360,6 +523,36 @@ export const Admin = () => {
     }
   };
 
+  const saveAiSettings = async () => {
+    setIsSavingAi(true);
+    setMessage(null);
+    try {
+      const response = await fetch('/api/admin/settings/ai', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          enabled: aiSettings.enabled,
+          groqModel: aiSettings.groqModel,
+          groqApiKey: groqApiKeyInput,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error ?? 'Erro ao salvar IA.');
+      setAiSettings({
+        enabled: data.enabled !== false,
+        groqModel: data.groqModel || aiSettings.groqModel,
+        hasGroqApiKey: Boolean(data.hasGroqApiKey),
+        maskedGroqApiKey: data.maskedGroqApiKey || '',
+      });
+      setGroqApiKeyInput('');
+      setMessage(data.message ?? 'Configuracoes de IA salvas.');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Erro ao salvar IA.');
+    } finally {
+      setIsSavingAi(false);
+    }
+  };
+
   return (
     <div className="min-h-screen overflow-x-hidden bg-slate-50 py-8 dark:bg-slate-950">
       <div className="mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8">
@@ -384,8 +577,32 @@ export const Admin = () => {
           </button>
         </div>
 
-        <section className="grid min-w-0 gap-6 lg:grid-cols-[minmax(280px,340px)_minmax(0,1fr)] xl:grid-cols-[360px_minmax(0,1fr)]">
-          <div className="min-w-0 space-y-6">
+        <nav className="mb-6 flex gap-2 overflow-x-auto rounded-lg border border-slate-200 bg-white p-2 dark:border-slate-700 dark:bg-slate-900">
+          {adminSections.map((section) => {
+            const Icon = section.icon;
+            const isActive = activeSection === section.id;
+            return (
+              <button
+                key={section.id}
+                type="button"
+                onClick={() => setActiveSection(section.id)}
+                className={cn(
+                  'inline-flex shrink-0 items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-black transition',
+                  isActive
+                    ? 'bg-blue-600 text-white'
+                    : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800',
+                )}
+              >
+                <Icon size={16} />
+                {section.label}
+              </button>
+            );
+          })}
+        </nav>
+
+        {activeSection === 'coleta' && (
+        <section className="min-w-0">
+          <div className="grid min-w-0 gap-6 lg:grid-cols-[minmax(280px,420px)_minmax(280px,1fr)]">
           <div className="min-w-0 rounded-lg border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-900">
             <div className="mb-5 flex items-center gap-2">
               <CalendarDays size={20} className="text-blue-600 dark:text-blue-400" />
@@ -556,7 +773,10 @@ export const Admin = () => {
             )}
           </div>
           </div>
+        </section>
+        )}
 
+        {activeSection === 'progresso' && (
           <div className="min-w-0 space-y-6">
             <div className="grid min-w-0 gap-4 md:grid-cols-2 xl:grid-cols-3">
               {groupedCheckpoints.map((dataset) => (
@@ -592,7 +812,7 @@ export const Admin = () => {
                       <th className="px-4 py-3">Periodo</th>
                       <th className="px-4 py-3 text-right">Tarefas</th>
                       <th className="px-4 py-3 text-right">Itens</th>
-                      <th className="px-4 py-3 text-right">Acao</th>
+                      <th className="px-4 py-3 text-right">Ação</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -633,7 +853,10 @@ export const Admin = () => {
                 </table>
               </div>
             </div>
+          </div>
+        )}
 
+        {activeSection === 'logs' && (
             <div className="min-w-0 rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900">
               <div className="flex items-center justify-between gap-3 border-b border-slate-200 p-5 dark:border-slate-700">
                 <div className="flex items-center gap-2">
@@ -735,6 +958,84 @@ export const Admin = () => {
                   </div>
                 )}
 
+                <div className="mb-5 rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-950">
+                  <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <div className="text-sm font-black text-slate-900 dark:text-slate-50">
+                        Etapa atual em tempo real
+                      </div>
+                      <div className="text-xs font-bold text-slate-500 dark:text-slate-400">
+                        {logEvents.length > 0
+                          ? `${formatNumber(logEvents.length)} eventos estruturados recentes`
+                          : 'Aguardando eventos da ingestao ou da IA'}
+                      </div>
+                    </div>
+                    <div className="inline-flex items-center gap-2 rounded-full bg-white px-3 py-1 text-xs font-black text-slate-500 ring-1 ring-slate-200 dark:bg-slate-900 dark:text-slate-300 dark:ring-slate-700">
+                      <RefreshCw size={13} className={cn((isPolling || activeSection === 'logs') && 'animate-spin')} />
+                      Atualiza a cada 1s
+                    </div>
+                  </div>
+
+                  {(currentIngestionEvents.length > 0 || currentAiEvents.length > 0) ? (
+                    <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(280px,420px)]">
+                      <div>
+                        <div className="mb-2 text-xs font-black uppercase text-slate-500 dark:text-slate-400">
+                          Ingestao
+                        </div>
+                        <div className="grid gap-2 lg:grid-cols-2">
+                          {currentIngestionEvents.length > 0 ? (
+                            currentIngestionEvents.map((event, index) => (
+                              <LogEventCard key={`${event.timestamp}-${event.stage}-${index}`} event={event} />
+                            ))
+                          ) : (
+                            <div className="rounded-lg border border-slate-200 bg-white px-3 py-4 text-sm font-bold text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
+                              Nenhuma etapa de ingestao ativa no momento.
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div>
+                        <div className="mb-2 text-xs font-black uppercase text-slate-500 dark:text-slate-400">
+                          IA de votacoes
+                        </div>
+                        <div className="grid gap-2">
+                          {currentAiEvents.length > 0 ? (
+                            currentAiEvents.map((event, index) => (
+                              <LogEventCard key={`${event.timestamp}-${event.stage}-${index}`} event={event} />
+                            ))
+                          ) : (
+                            <div className="rounded-lg border border-slate-200 bg-white px-3 py-4 text-sm font-bold text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
+                              Nenhuma refatoracao de titulo por IA detectada agora.
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="rounded-lg border border-dashed border-slate-300 px-3 py-6 text-center text-sm font-bold text-slate-500 dark:border-slate-700 dark:text-slate-400">
+                      Inicie uma coleta ou abra votacoes com IA ativa para ver as etapas aqui.
+                    </div>
+                  )}
+
+                  {logTimeline.length > 0 && (
+                    <div className="mt-4">
+                      <div className="mb-2 text-xs font-black uppercase text-slate-500 dark:text-slate-400">
+                        Linha do tempo recente
+                      </div>
+                      <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+                        {logTimeline.slice(0, 8).map((event, index) => (
+                          <LogEventCard
+                            key={`timeline-${event.timestamp}-${event.stage}-${index}`}
+                            event={event}
+                            compact
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
                 <div className="mb-3 flex items-center justify-between gap-3 text-xs font-bold text-slate-500 dark:text-slate-400">
                   <span>{logFile ?? 'Nenhum arquivo de log'}</span>
                   <span>{logText ? `${logText.split('\n').length} linhas` : 'sem saida'}</span>
@@ -744,7 +1045,9 @@ export const Admin = () => {
                 </pre>
               </div>
             </div>
+        )}
 
+        {activeSection === 'cobertura' && (
             <div className="min-w-0 rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900">
               <div className="border-b border-slate-200 p-5 dark:border-slate-700">
                 <h2 className="text-lg font-black text-slate-900 dark:text-slate-50">Cobertura populada</h2>
@@ -764,9 +1067,78 @@ export const Admin = () => {
                 {periods.length === 0 && <div className="text-sm text-slate-500 dark:text-slate-400">Nenhum periodo encontrado no banco.</div>}
               </div>
             </div>
+        )}
+
+        {activeSection === 'ia' && (
+          <div className="grid gap-6 lg:grid-cols-[minmax(280px,520px)_minmax(0,1fr)]">
+            <div className="rounded-lg border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-900">
+              <div className="mb-5 flex items-center gap-2">
+                <Bot size={20} className="text-blue-600 dark:text-blue-400" />
+                <h2 className="text-lg font-black text-slate-900 dark:text-slate-50">Resumo por IA</h2>
+              </div>
+              <div className="space-y-4">
+                <label className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 px-3 py-3 text-sm font-bold text-slate-700 dark:border-slate-700 dark:text-slate-200">
+                  Ativar IA nas votacoes
+                  <input
+                    type="checkbox"
+                    checked={aiSettings.enabled}
+                    onChange={(event) => setAiSettings((current) => ({...current, enabled: event.target.checked}))}
+                    className="h-5 w-5 rounded border-slate-300 text-blue-600"
+                  />
+                </label>
+
+                <label className="text-sm font-bold text-slate-700 dark:text-slate-200">
+                  Modelo Groq
+                  <input
+                    value={aiSettings.groqModel}
+                    onChange={(event) => setAiSettings((current) => ({...current, groqModel: event.target.value}))}
+                    placeholder="llama-3.3-70b-versatile"
+                    className="mt-2 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-50"
+                  />
+                </label>
+
+                <label className="text-sm font-bold text-slate-700 dark:text-slate-200">
+                  Token da Groq
+                  <input
+                    type="password"
+                    value={groqApiKeyInput}
+                    onChange={(event) => setGroqApiKeyInput(event.target.value)}
+                    placeholder={aiSettings.hasGroqApiKey ? aiSettings.maskedGroqApiKey : 'Cole o token da Groq'}
+                    className="mt-2 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-50"
+                  />
+                </label>
+
+                <button
+                  type="button"
+                  onClick={saveAiSettings}
+                  disabled={isSavingAi || !aiSettings.groqModel.trim()}
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-3 text-sm font-black text-white transition hover:bg-blue-700 disabled:opacity-60"
+                >
+                  <Settings size={18} />
+                  {isSavingAi ? 'Salvando...' : 'Salvar IA'}
+                </button>
+              </div>
+            </div>
+
+            <div className="rounded-lg border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-900">
+              <h2 className="text-lg font-black text-slate-900 dark:text-slate-50">Como sera usado</h2>
+              <div className="mt-4 space-y-3 text-sm font-semibold text-slate-600 dark:text-slate-300">
+                <p>
+                  Modelo recomendado: <span className="font-black text-slate-900 dark:text-slate-50">llama-3.3-70b-versatile</span>.
+                </p>
+                <p>
+                  A IA gera um titulo curto e um resumo em linguagem simples para cada votacao exibida. Se a Groq falhar, o sistema usa o resumo local automaticamente.
+                </p>
+                <p>
+                  A chave fica salva no banco e aparece mascarada nesta tela.
+                </p>
+              </div>
+            </div>
           </div>
-        </section>
+        )}
       </div>
     </div>
   );
 };
+
+

@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import {createHash} from 'node:crypto';
 import {spawn} from 'node:child_process';
-import {createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, statSync} from 'node:fs';
+import {appendFileSync, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, statSync} from 'node:fs';
 import {join} from 'node:path';
 import express, {type Request, type Response} from 'express';
 import {Pool} from 'pg';
@@ -23,6 +23,47 @@ const pool = databaseUrl
     });
 
 let isStartingIngestion = false;
+let appSettingsReady = false;
+let cachedAiSettings: AiSettings | null = null;
+let cachedAiSettingsAt = 0;
+
+type AiSettings = {
+  groqApiKey: string;
+  groqModel: string;
+  enabled: boolean;
+};
+
+type ActivityEventStage =
+  | 'api_fetch'
+  | 'api_retry'
+  | 'db_write'
+  | 'checkpoint_start'
+  | 'checkpoint_done'
+  | 'checkpoint_failed'
+  | 'vote_ai_start'
+  | 'vote_ai_done'
+  | 'vote_ai_fallback';
+
+type ActivityEvent = {
+  stage: ActivityEventStage;
+  label: string;
+  timestamp: string;
+  source?: 'ingestion' | 'ai';
+  dataset?: string;
+  periodStart?: string | null;
+  periodEnd?: string | null;
+  resourceId?: string | number | null;
+  url?: string;
+  path?: string;
+  progress?: number;
+  total?: number;
+  status?: number;
+  attempt?: number;
+  delay?: number;
+  error?: string;
+  model?: string;
+  reason?: string;
+};
 
 const sendJson = (res: Response, statusCode: number, body: unknown) => {
   res.status(statusCode).json(body);
@@ -205,6 +246,226 @@ const buildPlainVoteSummary = (title: string | null, ementa: unknown, decision: 
   }
 
   return officialDecision || null;
+};
+
+const writeActivityEvent = (event: Omit<ActivityEvent, 'timestamp' | 'source'> & {source?: ActivityEvent['source']}) => {
+  try {
+    const logsDir = join(process.cwd(), 'logs');
+    mkdirSync(logsDir, {recursive: true});
+    const payload: ActivityEvent = {
+      timestamp: new Date().toISOString(),
+      source: event.source ?? 'ai',
+      ...event,
+    };
+    appendFileSync(join(logsDir, 'activity-events.log'), `[event] ${JSON.stringify(payload)}\n`, 'utf8');
+  } catch {
+    // Eventos operacionais nao devem interromper a resposta principal.
+  }
+};
+
+const ensureAppSettingsTable = async () => {
+  if (appSettingsReady) return;
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  appSettingsReady = true;
+};
+
+const getSettingMap = async () => {
+  await ensureAppSettingsTable();
+  const result = await pool.query<{key: string; value: string}>(
+    'SELECT key, value FROM app_settings WHERE key = ANY($1::text[])',
+    [['groq_api_key', 'groq_model', 'groq_enabled']],
+  );
+  return new Map<string, string>(result.rows.map((row) => [row.key, row.value]));
+};
+
+const getAiSettings = async (): Promise<AiSettings> => {
+  const now = Date.now();
+  if (cachedAiSettings && now - cachedAiSettingsAt < 30_000) return cachedAiSettings;
+
+  const settings = await getSettingMap();
+  cachedAiSettings = {
+    groqApiKey: settings.get('groq_api_key')?.trim() || process.env.GROQ_API_KEY?.trim() || '',
+    groqModel: settings.get('groq_model')?.trim() || process.env.GROQ_MODEL?.trim() || 'llama-3.3-70b-versatile',
+    enabled: settings.get('groq_enabled') !== 'false',
+  };
+  cachedAiSettingsAt = now;
+  return cachedAiSettings;
+};
+
+const setAppSetting = async (key: string, value: string) => {
+  await ensureAppSettingsTable();
+  await pool.query(
+    `
+    INSERT INTO app_settings (key, value, updated_at)
+    VALUES ($1, $2, NOW())
+    ON CONFLICT (key)
+    DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
+    `,
+    [key, value],
+  );
+};
+
+const maskSecret = (value: string) => {
+  if (!value) return '';
+  if (value.length <= 8) return '********';
+  return `${value.slice(0, 4)}...${value.slice(-4)}`;
+};
+
+const parseGroqSummary = (content: unknown) => {
+  if (typeof content !== 'string') return null;
+  try {
+    const parsed = JSON.parse(content) as {titulo?: unknown; resumo?: unknown};
+    const titulo = normalizeText(parsed.titulo).slice(0, 120);
+    const resumo = normalizeText(parsed.resumo).slice(0, 260);
+    if (!titulo && !resumo) return null;
+    return {titulo: titulo || null, resumo: resumo || null};
+  } catch {
+    return null;
+  }
+};
+
+const buildAiVoteSummary = async (
+  officialTitle: string | null,
+  ementa: unknown,
+  decision: unknown,
+  resourceId?: string | null,
+) => {
+  const settings = await getAiSettings();
+  const source = normalizeText(ementa);
+  const officialDecision = normalizeText(decision);
+  if (!settings.enabled) {
+    writeActivityEvent({
+      stage: 'vote_ai_fallback',
+      label: 'IA desativada, usando resumo local',
+      source: 'ai',
+      dataset: 'votacoes',
+      resourceId,
+      reason: 'disabled',
+    });
+    return null;
+  }
+
+  if (!settings.groqApiKey) {
+    writeActivityEvent({
+      stage: 'vote_ai_fallback',
+      label: 'IA sem token configurado, usando resumo local',
+      source: 'ai',
+      dataset: 'votacoes',
+      resourceId,
+      reason: 'missing_token',
+    });
+    return null;
+  }
+
+  if (!source && !officialTitle && !officialDecision) return null;
+
+  writeActivityEvent({
+    stage: 'vote_ai_start',
+    label: 'IA refinando titulo da votacao',
+    source: 'ai',
+    dataset: 'votacoes',
+    resourceId,
+    model: settings.groqModel,
+  });
+
+  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${settings.groqApiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: settings.groqModel,
+      temperature: 0.1,
+      max_tokens: 180,
+      response_format: {type: 'json_object'},
+      messages: [
+        {
+          role: 'system',
+          content:
+            'Voce resume votacoes da Camara para cidadaos leigos. Responda apenas JSON com titulo e resumo. Titulo: ate 12 palavras, simples, sem juridiquês. Resumo: uma frase curta e clara.',
+        },
+        {
+          role: 'user',
+          content: JSON.stringify({
+            tituloOficial: officialTitle,
+            ementa: source,
+            decisaoTecnica: officialDecision,
+          }),
+        },
+      ],
+    }),
+  });
+
+  if (!response.ok) {
+    writeActivityEvent({
+      stage: 'vote_ai_fallback',
+      label: 'IA indisponivel, usando resumo local',
+      source: 'ai',
+      dataset: 'votacoes',
+      resourceId,
+      status: response.status,
+      reason: 'http_error',
+    });
+    return null;
+  }
+  const data = (await response.json()) as {choices?: Array<{message?: {content?: unknown}}>;};
+  const summary = parseGroqSummary(data.choices?.[0]?.message?.content);
+  if (!summary) {
+    writeActivityEvent({
+      stage: 'vote_ai_fallback',
+      label: 'IA retornou resposta invalida, usando resumo local',
+      source: 'ai',
+      dataset: 'votacoes',
+      resourceId,
+      reason: 'invalid_response',
+    });
+    return null;
+  }
+
+  writeActivityEvent({
+    stage: 'vote_ai_done',
+    label: 'Titulo refinado pela IA',
+    source: 'ai',
+    dataset: 'votacoes',
+    resourceId,
+    model: settings.groqModel,
+  });
+  return summary;
+};
+
+const getPublicVoteText = async (ementa: unknown, fallback: unknown, resourceId?: string | null) => {
+  const tituloLocal = simplifyProposalTitle(ementa, fallback);
+  const resumoLocal = buildPlainVoteSummary(tituloLocal, ementa, fallback);
+
+  try {
+    const ai = await buildAiVoteSummary(tituloLocal, ementa, fallback, resourceId);
+    if (ai?.titulo || ai?.resumo) {
+      return {
+        tituloPublico: ai.titulo || tituloLocal,
+        resumoLeigo: ai.resumo || resumoLocal,
+      };
+    }
+  } catch (error) {
+    writeActivityEvent({
+      stage: 'vote_ai_fallback',
+      label: 'IA indisponivel, usando resumo local',
+      source: 'ai',
+      dataset: 'votacoes',
+      resourceId,
+      error: error instanceof Error ? error.message : String(error),
+      reason: 'exception',
+    });
+    // A IA melhora a leitura, mas a tela nao deve depender dela para funcionar.
+  }
+
+  return {tituloPublico: tituloLocal, resumoLeigo: resumoLocal};
 };
 
 const ensureIngestionCheckpointTable = async () => {
@@ -450,6 +711,84 @@ const parseIngestionLogStats = (content: string) => {
   stats.progressItems = Array.from(progressByWindow.values()).reduce((sum, value) => sum + value, 0);
 
   return stats;
+};
+
+const isActivityEventStage = (value: unknown): value is ActivityEventStage =>
+  typeof value === 'string' &&
+  [
+    'api_fetch',
+    'api_retry',
+    'db_write',
+    'checkpoint_start',
+    'checkpoint_done',
+    'checkpoint_failed',
+    'vote_ai_start',
+    'vote_ai_done',
+    'vote_ai_fallback',
+  ].includes(value);
+
+const toOptionalNumber = (value: unknown) => {
+  const num = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(num) ? num : undefined;
+};
+
+const parseStructuredLogEvents = (content: string, source: ActivityEvent['source']) => {
+  const events: ActivityEvent[] = [];
+  const lines = content.split(/\r?\n/).filter((line) => line.includes('[event]'));
+
+  for (const line of lines) {
+    const jsonStart = line.indexOf('{');
+    if (jsonStart < 0) continue;
+    try {
+      const parsed = JSON.parse(line.slice(jsonStart)) as Record<string, unknown>;
+      if (!isActivityEventStage(parsed.stage)) continue;
+      const timestamp =
+        normalizeText(parsed.timestamp) ||
+        line.match(/^\[(\d{4}-\d{2}-\d{2}T[^\]]+Z)\]/)?.[1] ||
+        new Date().toISOString();
+      events.push({
+        stage: parsed.stage,
+        label: normalizeText(parsed.label) || 'Atividade em andamento',
+        timestamp,
+        source: (parsed.source === 'ai' || parsed.source === 'ingestion' ? parsed.source : source) ?? source,
+        dataset: normalizeText(parsed.dataset) || undefined,
+        periodStart: normalizeText(parsed.periodStart) || null,
+        periodEnd: normalizeText(parsed.periodEnd) || null,
+        resourceId:
+          typeof parsed.resourceId === 'string' || typeof parsed.resourceId === 'number'
+            ? parsed.resourceId
+            : null,
+        url: normalizeText(parsed.url) || undefined,
+        path: normalizeText(parsed.path) || undefined,
+        progress: toOptionalNumber(parsed.progress),
+        total: toOptionalNumber(parsed.total),
+        status: toOptionalNumber(parsed.status),
+        attempt: toOptionalNumber(parsed.attempt),
+        delay: toOptionalNumber(parsed.delay),
+        error: normalizeText(parsed.error) || undefined,
+        model: normalizeText(parsed.model) || undefined,
+        reason: normalizeText(parsed.reason) || undefined,
+      });
+    } catch {
+      // Linhas de log antigas ou truncadas continuam sendo exibidas no log bruto.
+    }
+  }
+
+  return events;
+};
+
+const buildCurrentStatus = (events: ActivityEvent[]) => {
+  const latestByFlow = new Map<string, ActivityEvent>();
+  for (const event of events) {
+    const key =
+      event.source === 'ai'
+        ? `ai:${event.resourceId ?? 'global'}`
+        : `ingestion:${event.dataset ?? 'geral'}:${event.periodStart ?? ''}:${event.periodEnd ?? ''}`;
+    if (!latestByFlow.has(key)) {
+      latestByFlow.set(key, event);
+    }
+  }
+  return Array.from(latestByFlow.values()).slice(0, 8);
 };
 
 const enrichLogStatsWithDatabaseProgress = async (stats: ReturnType<typeof emptyLogStats>) => {
@@ -1877,8 +2216,11 @@ app.get('/api/politicos/:politicoId/votacoes', async (req, res) => {
           }
         }
 
-        const tituloPublico = simplifyProposalTitle(proposal.ementa, row.ementa);
-        const resumoLeigo = buildPlainVoteSummary(tituloPublico, proposal.ementa, row.ementa);
+        const {tituloPublico, resumoLeigo} = await getPublicVoteText(
+          proposal.ementa,
+          row.ementa,
+          row.votacaoId,
+        );
 
         return {
           ...row,
@@ -2138,7 +2480,7 @@ app.get('/api/admin/ingestion/logs', async (_req, res) => {
   try {
     const logsDir = join(process.cwd(), 'logs');
     if (!existsSync(logsDir)) {
-      sendJson(res, 200, {log: '', file: null});
+      sendJson(res, 200, {log: '', file: null, events: [], currentStatus: [], timeline: []});
       return;
     }
 
@@ -2152,20 +2494,80 @@ app.get('/api/admin/ingestion/logs', async (_req, res) => {
 
     const latest = files[0];
     if (!latest) {
-      sendJson(res, 200, {log: '', file: null});
+      const activityPath = join(logsDir, 'activity-events.log');
+      const activityContent = existsSync(activityPath) ? readFileSync(activityPath, 'utf8') : '';
+      const activityEvents = parseStructuredLogEvents(activityContent, 'ai').sort(
+        (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
+      );
+      sendJson(res, 200, {
+        log: '',
+        file: null,
+        events: activityEvents.slice(0, 80),
+        currentStatus: buildCurrentStatus(activityEvents),
+        timeline: activityEvents.slice(0, 16),
+      });
       return;
     }
 
     const content = readFileSync(latest.path, 'utf8');
+    const activityPath = join(logsDir, 'activity-events.log');
+    const activityContent = existsSync(activityPath) ? readFileSync(activityPath, 'utf8') : '';
     const stats = parseIngestionLogStats(content);
     await enrichLogStatsWithDatabaseProgress(stats);
+    const events = [
+      ...parseStructuredLogEvents(content, 'ingestion'),
+      ...parseStructuredLogEvents(activityContent, 'ai'),
+    ].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
     sendJson(res, 200, {
       file: latest.file,
       log: content.slice(-12000),
       stats,
+      events: events.slice(0, 80),
+      currentStatus: buildCurrentStatus(events),
+      timeline: events.slice(0, 16),
     });
   } catch {
     sendJson(res, 500, {error: 'Erro ao carregar logs de ingestao.'});
+  }
+});
+
+app.get('/api/admin/settings/ai', async (_req, res) => {
+  try {
+    const settings = await getAiSettings();
+    sendJson(res, 200, {
+      enabled: settings.enabled,
+      groqModel: settings.groqModel,
+      hasGroqApiKey: settings.groqApiKey.length > 0,
+      maskedGroqApiKey: maskSecret(settings.groqApiKey),
+    });
+  } catch {
+    sendJson(res, 500, {error: 'Erro ao carregar configuracoes de IA.'});
+  }
+});
+
+app.post('/api/admin/settings/ai', async (req, res) => {
+  try {
+    const enabled = req.body?.enabled !== false;
+    const model = normalizeText(req.body?.groqModel) || 'llama-3.3-70b-versatile';
+    const apiKey = typeof req.body?.groqApiKey === 'string' ? req.body.groqApiKey.trim() : '';
+
+    await setAppSetting('groq_enabled', enabled ? 'true' : 'false');
+    await setAppSetting('groq_model', model);
+    if (apiKey) {
+      await setAppSetting('groq_api_key', apiKey);
+    }
+
+    cachedAiSettings = null;
+    const settings = await getAiSettings();
+    sendJson(res, 200, {
+      message: 'Configuracoes de IA salvas.',
+      enabled: settings.enabled,
+      groqModel: settings.groqModel,
+      hasGroqApiKey: settings.groqApiKey.length > 0,
+      maskedGroqApiKey: maskSecret(settings.groqApiKey),
+    });
+  } catch {
+    sendJson(res, 500, {error: 'Erro ao salvar configuracoes de IA.'});
   }
 });
 

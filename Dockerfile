@@ -1,11 +1,13 @@
+# syntax=docker/dockerfile:1.7
+
 # Estágio de desenvolvimento
-FROM node:22-alpine AS development
+FROM node:22-slim AS development
 
 WORKDIR /app
 
 COPY package*.json ./
 
-RUN npm install
+RUN --mount=type=cache,target=/root/.npm npm ci
 
 COPY . .
 
@@ -18,13 +20,13 @@ ENTRYPOINT ["sh", "/app/docker-entrypoint.sh"]
 CMD ["npm", "run", "dev", "--", "--host"]
 
 # Estágio de build para produção
-FROM node:22-alpine AS builder
+FROM node:22-slim AS builder
 
 WORKDIR /app
 
 COPY package*.json ./
 
-RUN npm install
+RUN --mount=type=cache,target=/root/.npm npm ci
 
 COPY . .
 

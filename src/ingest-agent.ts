@@ -184,6 +184,20 @@ const writeLog = (level: LogLevel, message: string) => {
   console[level](`[${new Date().toISOString()}] ${message}`);
 };
 
+const writeEvent = (
+  stage:
+    | 'api_fetch'
+    | 'api_retry'
+    | 'db_write'
+    | 'checkpoint_start'
+    | 'checkpoint_done'
+    | 'checkpoint_failed',
+  label: string,
+  details: Record<string, unknown> = {},
+) => {
+  writeLog('log', `[event] ${JSON.stringify({stage, label, timestamp: new Date().toISOString(), ...details})}`);
+};
+
 const waitForHttpSlot = async () => {
   const wait = httpRequestQueue.then(async () => {
     const delay = Math.max(0, nextHttpRequestAt - Date.now());
@@ -435,6 +449,12 @@ const fetchJson = async <T>(url: string, attempt = 1): Promise<T> => {
         'warn',
         `[http-retry] tentativa=${attempt} status=${response.status} delay=${delay} url=${url}`,
       );
+      writeEvent('api_retry', `Tentando novamente apos erro HTTP ${response.status}`, {
+        url,
+        status: response.status,
+        attempt,
+        delay,
+      });
       await sleep(delay);
       return fetchJson<T>(url, attempt + 1);
     }
@@ -454,6 +474,12 @@ const fetchJson = async <T>(url: string, attempt = 1): Promise<T> => {
         'warn',
         `[http-retry] tentativa=${attempt} erro=${isAbort ? 'timeout' : error instanceof Error ? error.message : String(error)} delay=${delay} url=${url}`,
       );
+      writeEvent('api_retry', isAbort ? 'Tentando novamente apos timeout' : 'Tentando novamente apos erro de rede', {
+        url,
+        attempt,
+        delay,
+        error: isAbort ? 'timeout' : error instanceof Error ? error.message : String(error),
+      });
       await sleep(delay);
       return fetchJson<T>(url, attempt + 1);
     }
@@ -484,6 +510,11 @@ const fetchPaged = async <T>(
 
     let data: CamaraListResponse<T>;
     try {
+      writeEvent('api_fetch', 'Carregando dados da API da Camara', {
+        path,
+        url: url.toString(),
+        page,
+      });
       data = await fetchJson<CamaraListResponse<T>>(url.toString());
     } catch (error) {
       if (options.ignoreBadRequest && error instanceof HttpError && error.status === 400) {
@@ -517,6 +548,10 @@ const fetchList = async <T>(
   }
 
   try {
+    writeEvent('api_fetch', 'Carregando dados da API da Camara', {
+      path,
+      url: url.toString(),
+    });
     const data = await fetchJson<CamaraListResponse<T>>(url.toString());
     return data.dados ?? [];
   } catch (error) {
@@ -1094,6 +1129,11 @@ const upsertVoteOrientations = async (voteSessionId: string, orientations: RawIt
 };
 
 const ingestVoteWindow = async (start: string, end: string, checkpointId?: string) => {
+  writeEvent('api_fetch', 'Carregando votacoes da API da Camara', {
+    dataset: 'votacoes',
+    periodStart: start,
+    periodEnd: end,
+  });
   const voteSessions = await fetchPaged<VoteSession>('/votacoes', {
     dataInicio: start,
     dataFim: end,
@@ -1104,17 +1144,51 @@ const ingestVoteWindow = async (start: string, end: string, checkpointId?: strin
   let voteRows = 0;
   let orientationRows = 0;
   await mapConcurrent(voteSessions, 4, async (voteSession) => {
+    writeEvent('db_write', 'Inserindo sessao de votacao no banco', {
+      dataset: 'votacoes',
+      periodStart: start,
+      periodEnd: end,
+      resourceId: voteSession.id,
+      progress: processed,
+      total: voteSessions.length,
+    });
     await upsertVoteSession(voteSession);
+    writeEvent('api_fetch', 'Buscando votos nominais da votacao', {
+      dataset: 'votacoes',
+      periodStart: start,
+      periodEnd: end,
+      resourceId: voteSession.id,
+      progress: processed,
+      total: voteSessions.length,
+    });
     const votes = await fetchList<DeputyVote>(
       `/votacoes/${voteSession.id}/votos`,
       {},
       {ignoreBadRequest: true},
     );
+    writeEvent('api_fetch', 'Buscando orientacoes de bancada da votacao', {
+      dataset: 'votacoes',
+      periodStart: start,
+      periodEnd: end,
+      resourceId: voteSession.id,
+      progress: processed,
+      total: voteSessions.length,
+    });
     const orientations = await fetchList<RawItem>(
       `/votacoes/${voteSession.id}/orientacoes`,
       {},
       {ignoreBadRequest: true},
     );
+    writeEvent('db_write', 'Inserindo votos e orientacoes no banco', {
+      dataset: 'votacoes',
+      periodStart: start,
+      periodEnd: end,
+      resourceId: voteSession.id,
+      progress: processed,
+      total: voteSessions.length,
+      votes: votes.length,
+      orientations: orientations.length,
+    });
     const insertedVotes = await upsertVotes(voteSession.id, votes);
     const insertedOrientations = await upsertVoteOrientations(voteSession.id, orientations);
     count += insertedVotes + insertedOrientations;
@@ -1569,8 +1643,17 @@ const ingestPagedResource = async (
   params: Record<string, string | number>,
   upsert: (item: RawItem) => Promise<number>,
 ) => {
+  writeEvent('api_fetch', `Carregando ${dataset} da API da Camara`, {
+    dataset,
+    path,
+  });
   const items = await fetchPaged<RawItem>(path, params, {ignoreBadRequest: true});
   let count = 0;
+  writeEvent('db_write', `Inserindo ${dataset} no banco de dados`, {
+    dataset,
+    path,
+    total: items.length,
+  });
   for (const item of items) {
     count += await upsert(item);
   }
@@ -1598,6 +1681,11 @@ const ingestParties = async () => {
 };
 
 const ingestProposalsWindow = async (start: string, end: string, checkpointId?: string) => {
+  writeEvent('api_fetch', 'Carregando proposicoes da API da Camara', {
+    dataset: 'proposicoes',
+    periodStart: start,
+    periodEnd: end,
+  });
   const proposals = await fetchPaged<RawItem>('/proposicoes', {dataInicio: start, dataFim: end});
   let count = 0;
   let processed = 0;
@@ -1610,6 +1698,16 @@ const ingestProposalsWindow = async (start: string, end: string, checkpointId?: 
       item = detail.dados ?? summary;
     } catch {
       item = summary;
+    }
+    if (processed % 25 === 0) {
+      writeEvent('db_write', 'Inserindo proposicoes e dados relacionados', {
+        dataset: 'proposicoes',
+        periodStart: start,
+        periodEnd: end,
+        resourceId: id,
+        progress: processed,
+        total: proposals.length,
+      });
     }
     count += await upsertProposal(item);
     count += await upsertProposalChildren(id, item);
@@ -1702,12 +1800,25 @@ const runCheckpointWorkers = async (
           'log',
           `[start] ${dataset} ${checkpoint.entity_id} ${checkpoint.period_start}..${checkpoint.period_end}`,
         );
+        writeEvent('checkpoint_start', 'Checkpoint iniciado', {
+          dataset,
+          entityId: checkpoint.entity_id,
+          periodStart: checkpoint.period_start,
+          periodEnd: checkpoint.period_end,
+        });
         const itemsCount = await handler(checkpoint);
         await finishCheckpoint(checkpoint.id, 'done', itemsCount, null);
         writeLog(
           'log',
           `[${itemsCount > 0 ? 'ok-items' : 'ok-zero'}] ${dataset} ${checkpoint.entity_id} ${checkpoint.period_start}..${checkpoint.period_end}: ${itemsCount}`,
         );
+        writeEvent('checkpoint_done', itemsCount > 0 ? 'Checkpoint concluido com dados' : 'Checkpoint concluido sem itens', {
+          dataset,
+          entityId: checkpoint.entity_id,
+          periodStart: checkpoint.period_start,
+          periodEnd: checkpoint.period_end,
+          total: itemsCount,
+        });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         await finishCheckpoint(checkpoint.id, 'failed', 0, message);
@@ -1715,6 +1826,13 @@ const runCheckpointWorkers = async (
           'warn',
           `[retry] ${dataset} ${checkpoint.entity_id} ${checkpoint.period_start}..${checkpoint.period_end}: ${message}`,
         );
+        writeEvent('checkpoint_failed', 'Checkpoint falhou e sera reprocessado', {
+          dataset,
+          entityId: checkpoint.entity_id,
+          periodStart: checkpoint.period_start,
+          periodEnd: checkpoint.period_end,
+          error: message,
+        });
       }
 
       await sleep(options.minDelayMs);

@@ -805,7 +805,7 @@ export const PoliticoProfile = () => {
 
   const tabs = [
     { id: 'geral', label: 'Visão Geral', icon: BarChart3 },
-    { id: 'atuacao', label: 'Atuacao', icon: Landmark },
+    { id: 'atuacao', label: 'Atuação', icon: Landmark },
     { id: 'votacoes', label: 'Votações', icon: CheckCircle2 },
     { id: 'despesas', label: 'Despesas', icon: DollarSign },
     { id: 'noticias', label: 'Notícias', icon: FileText },
@@ -815,7 +815,7 @@ export const PoliticoProfile = () => {
     return (
       <div className="mx-auto max-w-7xl px-4 py-12 sm:px-6 lg:px-8">
         <div className="rounded-3xl border border-slate-200 bg-white p-8 text-center text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
-          Carregando perfil…
+          Carregando perfil...
         </div>
       </div>
     );
@@ -830,9 +830,9 @@ export const PoliticoProfile = () => {
     );
   }
 
-  const presencaLabel = politico.presenca == null ? '—' : `${politico.presenca}%`;
+  const presencaLabel = politico.presenca == null ? '-' : `${politico.presenca}%`;
   const presencaValue = politico.presenca ?? 0;
-  const alinhamentoLabel = politico.alinhamentoGoverno == null ? '—' : `${politico.alinhamentoGoverno}%`;
+  const alinhamentoLabel = politico.alinhamentoGoverno == null ? '-' : `${politico.alinhamentoGoverno}%`;
   const alinhamentoValue = politico.alinhamentoGoverno ?? 0;
   const situacaoLabel = getPoliticoSituacaoLabel(politico);
   const sexoLabel =
@@ -879,6 +879,32 @@ export const PoliticoProfile = () => {
       typeof item.value === 'string' && item.value.trim().length > 0,
   );
   const temDadosOficiais = dadosOficiais.length > 0 || Boolean(politico.urlWebsite) || redesSociais.length > 0;
+  const resumoCards = [
+    {
+      label: 'Nota popular',
+      value: politico.notaMedia.toFixed(1),
+      hint: `${politico.totalAvaliacoes.toLocaleString('pt-BR')} avaliações registradas`,
+      icon: Star,
+    },
+    {
+      label: 'Presença',
+      value: presencaLabel,
+      hint: 'Sessões com presença registrada',
+      icon: Calendar,
+    },
+    {
+      label: 'Alinhamento',
+      value: alinhamentoLabel,
+      hint: 'Comparado à orientação do governo',
+      icon: Landmark,
+    },
+    {
+      label: 'Atuação mapeada',
+      value: String(atuacao.proposicoes.length + atuacao.orgaos.length + atuacao.frentes.length),
+      hint: 'Proposições, órgãos e frentes vinculadas',
+      icon: BriefcaseBusiness,
+    },
+  ];
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
@@ -953,6 +979,22 @@ export const PoliticoProfile = () => {
           </div>
         </div>
       </div>
+
+      <section className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {resumoCards.map((card) => (
+          <div
+            key={card.label}
+            className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-900"
+          >
+            <div className="mb-4 flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 text-blue-600 dark:bg-blue-950 dark:text-blue-300">
+              <card.icon size={20} />
+            </div>
+            <div className="text-xs font-black uppercase text-slate-500 dark:text-slate-400">{card.label}</div>
+            <div className="mt-2 text-2xl font-black text-slate-950 dark:text-slate-50">{card.value}</div>
+            <div className="mt-1 text-sm leading-5 text-slate-500 dark:text-slate-400">{card.hint}</div>
+          </div>
+        ))}
+      </section>
 
       {/* Tabs Section */}
       <div className="mb-8 -mx-4 flex overflow-x-auto border-b border-slate-200 px-4 no-scrollbar sm:mx-0 sm:px-0 dark:border-slate-700">
@@ -1100,7 +1142,7 @@ export const PoliticoProfile = () => {
           <div className="space-y-6">
             {isLoadingAtuacao ? (
               <div className="rounded-3xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
-                Carregando atuaÃ§Ã£o parlamentar...
+                Carregando atuação parlamentar...
               </div>
             ) : (
               <>
@@ -1235,7 +1277,7 @@ export const PoliticoProfile = () => {
                   <input
                     type="text"
                     className="mt-1 block w-full rounded-2xl border-0 py-2 px-3 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:ring-2 focus:ring-inset focus:ring-blue-600 sm:text-sm sm:leading-6 dark:bg-slate-800 dark:text-slate-50 dark:ring-slate-700 dark:placeholder:text-slate-500"
-                    placeholder="Ementa, tipo, número/ano…"
+                    placeholder="Ementa, tipo, número/ano..."
                     value={votacoesFiltro.texto}
                     onChange={(e) => setVotacoesFiltro((curr) => ({...curr, texto: e.target.value}))}
                   />
@@ -1295,7 +1337,7 @@ export const PoliticoProfile = () => {
 
             {isLoadingVotacoes && (
               <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
-                Carregando votações…
+                Carregando votações...
               </div>
             )}
 
@@ -1380,12 +1422,12 @@ export const PoliticoProfile = () => {
                       </div>
                       <div className="rounded-2xl bg-slate-50 p-4 dark:bg-slate-800">
                         <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">Tipo</div>
-                        <div className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-50">{v.siglaTipo || '—'}</div>
+                        <div className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-50">{v.siglaTipo || '-'}</div>
                       </div>
                       <div className="rounded-2xl bg-slate-50 p-4 dark:bg-slate-800">
                         <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">Número/Ano</div>
                         <div className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-50">
-                          {v.numero != null && v.ano != null ? `${v.numero}/${v.ano}` : '—'}
+                          {v.numero != null && v.ano != null ? `${v.numero}/${v.ano}` : '-'}
                         </div>
                       </div>
                     </div>
@@ -1403,7 +1445,7 @@ export const PoliticoProfile = () => {
                   disabled={isLoadingMoreVotacoes}
                   className="rounded-2xl bg-slate-100 px-6 py-3 text-sm font-bold text-slate-700 hover:bg-slate-200 disabled:opacity-50 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
                 >
-                  {isLoadingMoreVotacoes ? 'Carregando…' : 'Carregar mais'}
+                  {isLoadingMoreVotacoes ? 'Carregando...' : 'Carregar mais'}
                 </button>
               </div>
             )}
@@ -1425,7 +1467,7 @@ export const PoliticoProfile = () => {
                   <input
                     type="text"
                     className="mt-1 block w-full rounded-2xl border-0 py-2 px-3 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:ring-2 focus:ring-inset focus:ring-blue-600 sm:text-sm sm:leading-6 dark:bg-slate-800 dark:text-slate-50 dark:ring-slate-700 dark:placeholder:text-slate-500"
-                    placeholder="Ex: Divulgação, Passagens…"
+                    placeholder="Ex: Divulgação, Passagens..."
                     value={despesasFiltro.tipo}
                     onChange={(e) => setDespesasFiltro((curr) => ({...curr, tipo: e.target.value}))}
                     list="despesas-tipos"
@@ -1539,7 +1581,7 @@ export const PoliticoProfile = () => {
                   {isLoadingDespesas ? (
                     <tr>
                       <td colSpan={3} className="px-6 py-8 text-center text-sm text-slate-600 dark:text-slate-400">
-                        Carregando despesas…
+                        Carregando despesas...
                       </td>
                     </tr>
                   ) : despesasFiltradas.length === 0 ? (
@@ -1583,7 +1625,7 @@ export const PoliticoProfile = () => {
                   disabled={isLoadingMoreDespesas}
                   className="rounded-2xl bg-slate-100 px-6 py-3 text-sm font-bold text-slate-700 hover:bg-slate-200 disabled:opacity-50 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
                 >
-                  {isLoadingMoreDespesas ? 'Carregando…' : 'Carregar mais'}
+                  {isLoadingMoreDespesas ? 'Carregando...' : 'Carregar mais'}
                 </button>
               </div>
             )}

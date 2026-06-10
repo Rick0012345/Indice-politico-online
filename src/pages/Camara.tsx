@@ -1,4 +1,4 @@
-import React, {useEffect, useMemo, useState} from 'react';
+﻿import React, {useEffect, useMemo, useState} from 'react';
 import {CalendarDays, ExternalLink, FileText, Landmark, Search, Users} from 'lucide-react';
 import {Link} from 'react-router-dom';
 import {cn} from '../lib/utils';
@@ -127,7 +127,7 @@ export const Camara = () => {
   return (
     <div className="mx-auto max-w-7xl px-4 py-12 sm:px-6 lg:px-8">
       <div className="mb-10">
-        <h1 className="text-4xl font-extrabold text-slate-900 dark:text-slate-50">Atuacao Parlamentar</h1>
+        <h1 className="text-4xl font-extrabold text-slate-900 dark:text-slate-50">Atuação Parlamentar</h1>
         <p className="mt-4 max-w-3xl text-lg text-slate-600 dark:text-slate-400">
           Explore proposicoes, eventos, orgaos e frentes com dados sincronizados da API da Camara.
         </p>
@@ -240,3 +240,5 @@ export const Camara = () => {
     </div>
   );
 };
+
+

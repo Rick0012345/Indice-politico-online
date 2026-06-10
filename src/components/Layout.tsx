@@ -1,13 +1,13 @@
 import React, {useEffect, useState} from 'react';
 import {Link, useLocation} from 'react-router-dom';
-import {Menu, Moon, Sun, User, X} from 'lucide-react';
+import {Menu, Moon, Search, Sun, X} from 'lucide-react';
 import {useTheme} from '../context/ThemeContext';
 
 const navItems = [
   {to: '/', label: 'Início'},
   {to: '/ranking', label: 'Ranking'},
   {to: '/partidos', label: 'Partidos'},
-  {to: '/camara', label: 'Camara'},
+  {to: '/camara', label: 'Câmara'},
   {to: '/admin', label: 'Admin'},
   {to: '/sobre', label: 'Sobre'},
   {to: '/metodologia', label: 'Metodologia'},
@@ -41,15 +41,15 @@ export const Navbar = () => {
   };
 
   return (
-    <nav className="sticky top-0 z-50 w-full border-b border-slate-200 bg-white/80 backdrop-blur-md dark:border-slate-700 dark:bg-slate-900/80">
+    <nav className="sticky top-0 z-50 w-full border-b border-slate-200 bg-white/85 backdrop-blur-md dark:border-slate-700 dark:bg-slate-900/85">
       <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
         <div className="min-w-0 flex items-center gap-2">
           <Link to="/" className="flex min-w-0 items-center gap-2">
             <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-blue-600 text-sm font-bold text-white">
-              VC
+              CP
             </div>
             <span className="truncate text-base font-bold tracking-tight text-slate-900 sm:text-xl dark:text-slate-50">
-              Voto<span className="text-blue-600">Consciente</span>
+              Catálogo<span className="text-blue-600">Político</span>
             </span>
           </Link>
         </div>
@@ -71,10 +71,13 @@ export const Navbar = () => {
           >
             {theme === 'dark' ? <Sun size={20} /> : <Moon size={20} />}
           </button>
-          <button className="hidden items-center gap-2 rounded-full bg-slate-100 px-4 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-200 md:flex dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
-            <User size={18} />
-            <span>Entrar</span>
-          </button>
+          <Link
+            to="/"
+            className="hidden items-center gap-2 rounded-full bg-slate-100 px-4 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-200 md:flex dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
+          >
+            <Search size={18} />
+            <span>Buscar político</span>
+          </Link>
           <button
             type="button"
             className="rounded-full p-2 text-slate-600 transition-colors hover:bg-slate-100 md:hidden dark:text-slate-400 dark:hover:bg-slate-800"
@@ -96,13 +99,13 @@ export const Navbar = () => {
               </Link>
             ))}
 
-            <button
-              type="button"
+            <Link
+              to="/"
               className="mt-2 flex items-center justify-center gap-2 rounded-2xl bg-slate-100 px-4 py-3 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
             >
-              <User size={18} />
-              <span>Entrar</span>
-            </button>
+              <Search size={18} />
+              <span>Buscar político</span>
+            </Link>
           </div>
         </div>
       )}
@@ -118,25 +121,24 @@ export const Footer = () => {
           <div className="col-span-1 md:col-span-2">
             <div className="mb-4 flex items-center gap-2">
               <div className="flex h-6 w-6 items-center justify-center rounded bg-blue-600 text-xs font-bold text-white">
-                VC
+                CP
               </div>
               <span className="text-lg font-bold tracking-tight text-slate-900 dark:text-slate-50">
                 Catálogo Político
               </span>
             </div>
             <p className="max-w-xs text-sm text-slate-500 dark:text-slate-400">
-              Promovendo a transparência e a participação cidadã através de dados abertos e
-              tecnologia cívica.
+              Dados abertos da Câmara organizados para comparação, acompanhamento e participação cidadã.
             </p>
           </div>
           <div>
             <h4 className="mb-4 text-sm font-semibold uppercase tracking-wider text-slate-900 dark:text-slate-50">
-              Links Úteis
+              Links úteis
             </h4>
             <ul className="space-y-2 text-sm text-slate-600 dark:text-slate-400">
               <li>
                 <Link to="/ranking" className="hover:text-blue-600 dark:hover:text-blue-400">
-                  Ranking Geral
+                  Ranking geral
                 </Link>
               </li>
               <li>
@@ -146,29 +148,29 @@ export const Footer = () => {
               </li>
               <li>
                 <Link to="/sobre" className="hover:text-blue-600 dark:hover:text-blue-400">
-                  Sobre o Projeto
+                  Sobre o projeto
                 </Link>
               </li>
             </ul>
           </div>
           <div>
             <h4 className="mb-4 text-sm font-semibold uppercase tracking-wider text-slate-900 dark:text-slate-50">
-              Contato
+              Dados
             </h4>
             <ul className="space-y-2 text-sm text-slate-600 dark:text-slate-400">
               <li>
-                <Link to="#" className="hover:text-blue-600 dark:hover:text-blue-400">
-                  Fale Conosco
+                <Link to="/camara" className="hover:text-blue-600 dark:hover:text-blue-400">
+                  Câmara
                 </Link>
               </li>
               <li>
-                <Link to="#" className="hover:text-blue-600 dark:hover:text-blue-400">
-                  Imprensa
+                <Link to="/partidos" className="hover:text-blue-600 dark:hover:text-blue-400">
+                  Partidos
                 </Link>
               </li>
               <li>
-                <Link to="#" className="hover:text-blue-600 dark:hover:text-blue-400">
-                  Privacidade
+                <Link to="/admin" className="hover:text-blue-600 dark:hover:text-blue-400">
+                  Ingestão
                 </Link>
               </li>
             </ul>

@@ -1,5 +1,6 @@
 services:
   app:
+    image: catalogo-politico-dev:latest
     build:
       context: .
       target: development
@@ -29,6 +30,7 @@ services:
     tty: true
 
   api:
+    image: catalogo-politico-dev:latest
     build:
       context: .
       target: development
