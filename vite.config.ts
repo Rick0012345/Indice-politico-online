@@ -91,6 +91,12 @@ export default defineConfig(({mode}) => {
               const metricParam = url.searchParams.get('metric');
               const directionParam = url.searchParams.get('direction');
               const filter = url.searchParams.get('filter');
+              const search = (url.searchParams.get('search') ?? '').trim();
+              const params: Array<string | number> = [];
+
+              if (search) {
+                params.push(`%${search}%`);
+              }
 
               const metric =
                 metricParam === 'despesas' || metricParam === 'votacoes' || metricParam === 'nota'
@@ -140,6 +146,11 @@ export default defineConfig(({mode}) => {
                     GROUP BY politico_id
                   ) vcnt ON vcnt.politico_id = p.id
                   WHERE p.ativo IS DISTINCT FROM false
+                    ${
+                      search
+                        ? `AND (p.nome ILIKE $${params.length} OR p.sigla_partido ILIKE $${params.length} OR p.sigla_uf ILIKE $${params.length} OR 'Deputado Federal' ILIKE $${params.length})`
+                        : ''
+                    }
                   GROUP BY
                     p.id,
                     p.nome,
@@ -150,9 +161,10 @@ export default defineConfig(({mode}) => {
                     dsum.total_despesas,
                     vcnt.total_votacoes
                   ORDER BY ${orderBy}
-                  LIMIT $1
+                  LIMIT $${params.length + 1}
+                  OFFSET $${params.length + 2}
                   `,
-                  [limit],
+                  [...params, limit, offset],
                 );
 
               sendJson(res, 200, {items: result.rows});

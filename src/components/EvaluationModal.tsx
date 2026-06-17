@@ -159,6 +159,8 @@ export const EvaluationModal = ({
               {[1, 2, 3, 4, 5].map((star) => (
                 <button
                   key={star}
+                  type="button"
+                  aria-label={`Dar ${star} ${star === 1 ? 'estrela' : 'estrelas'}`}
                   onMouseEnter={() => setHoveredRating(star)}
                   onMouseLeave={() => setHoveredRating(0)}
                   onClick={() => {
@@ -250,13 +252,15 @@ export const EvaluationModal = ({
 
             <div className="flex flex-col gap-3">
               <button
+                type="button"
                 disabled={rating === 0 || cpfDigits.length !== 11 || isSubmitting}
                 onClick={handleConfirm}
-                className="w-full rounded-2xl bg-blue-600 py-4 text-sm font-bold text-white shadow-lg shadow-blue-200 transition-all hover:bg-blue-700 disabled:opacity-50 disabled:hover:bg-blue-600"
+                className="w-full rounded-2xl bg-blue-600 py-4 text-sm font-bold text-white shadow-lg shadow-blue-200 transition-colors hover:bg-blue-700 disabled:opacity-50 disabled:hover:bg-blue-600"
               >
                 {isSubmitting ? 'Salvando avaliacao...' : 'Confirmar voto'}
               </button>
               <button
+                type="button"
                 onClick={onClose}
                 className="w-full py-2 text-sm font-semibold text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
               >

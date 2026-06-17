@@ -1,4 +1,4 @@
-import React, {useEffect, useMemo, useState} from 'react';
+import React, {useCallback, useEffect, useMemo, useState} from 'react';
 import {BarChart3, ChevronRight, Landmark, Search, Star, TrendingDown, TrendingUp, Users} from 'lucide-react';
 import {Link} from 'react-router-dom';
 import {cn} from '../lib/utils';
@@ -37,11 +37,7 @@ const metricOptions = [
   {value: 'votacoes', label: 'Votações', description: 'registros de votação encontrados'},
 ] as const;
 
-const getMetricValue = (politico: PoliticoRankingItem, metric: (typeof metricOptions)[number]['value']) => {
-  if (metric === 'despesas') return politico.totalDespesas ?? 0;
-  if (metric === 'votacoes') return politico.totalVotacoes ?? 0;
-  return politico.notaMedia ?? 0;
-};
+const RANKING_PAGE_SIZE = 50;
 
 const RankingMobileCard: React.FC<{
   politico: PoliticoRankingItem;
@@ -59,7 +55,7 @@ const RankingMobileCard: React.FC<{
   return (
     <Link
       to={`/politico/${politico.id}`}
-      className="block reveal-card lift-card rounded-2xl border border-slate-200 bg-white p-4 sm:p-5 dark:border-slate-700 dark:bg-slate-900 dark:hover:border-blue-900"
+      className="block rounded-2xl border border-slate-200 bg-white p-4 transition-colors hover:border-blue-200 hover:bg-slate-50 sm:p-5 dark:border-slate-700 dark:bg-slate-900 dark:hover:border-blue-900 dark:hover:bg-slate-800/60"
     >
       <div className="flex items-start gap-3">
         <span
@@ -81,6 +77,8 @@ const RankingMobileCard: React.FC<{
           src={politico.foto}
           alt={politico.nome}
           className="h-12 w-12 shrink-0 rounded-xl border border-slate-100 object-cover dark:border-slate-700"
+          loading="lazy"
+          decoding="async"
           referrerPolicy="no-referrer"
         />
 
@@ -140,6 +138,8 @@ export const Ranking = () => {
   const [search, setSearch] = useState('');
   const [items, setItems] = useState<PoliticoRankingItem[]>([]);
   const [partidos, setPartidos] = useState<PartidoGastosItem[]>([]);
+  const [hasMoreRankingItems, setHasMoreRankingItems] = useState(false);
+  const [isLoadingRanking, setIsLoadingRanking] = useState(false);
   const [isLoadingPartidos, setIsLoadingPartidos] = useState(false);
 
   const money = useMemo(
@@ -154,6 +154,40 @@ export const Ranking = () => {
 
   const selectedCargo = cargo === 'Todos' || cargo === 'Todos os Cargos' ? '' : cargo;
   const isUnsupportedCargo = Boolean(selectedCargo && selectedCargo !== 'Deputado Federal');
+  const rankingSearch = search.trim();
+
+  const loadRankingPage = useCallback(
+    async (offset: number, signal?: AbortSignal) => {
+      const params = new URLSearchParams({
+        metric,
+        direction,
+        limit: String(RANKING_PAGE_SIZE + 1),
+        offset: String(offset),
+        status,
+      });
+
+      if (rankingSearch) params.set('search', rankingSearch);
+
+      const response = await fetch(`/api/politicos/ranking?${params.toString()}`, {signal});
+      if (!response.ok) return;
+
+      const data = (await response.json()) as {items?: PoliticoRankingItem[]};
+      const nextItems = (data.items ?? []).map((p) => ({
+        ...p,
+        foto: p.foto || `https://picsum.photos/seed/${p.id}/400/400`,
+      }));
+      const visibleItems = nextItems.slice(0, RANKING_PAGE_SIZE);
+
+      setHasMoreRankingItems(nextItems.length > RANKING_PAGE_SIZE);
+      setItems((current) => {
+        if (offset === 0) return visibleItems;
+
+        const seen = new Set(current.map((item) => item.id));
+        return [...current, ...visibleItems.filter((item) => !seen.has(item.id))];
+      });
+    },
+    [direction, metric, rankingSearch, status],
+  );
 
   useEffect(() => {
     const controller = new AbortController();
@@ -161,37 +195,25 @@ export const Ranking = () => {
     const run = async () => {
       if (isUnsupportedCargo) {
         setItems([]);
+        setHasMoreRankingItems(false);
         return;
       }
 
+      setIsLoadingRanking(true);
+      setItems([]);
+      setHasMoreRankingItems(false);
+
       try {
-        const params = new URLSearchParams({
-          metric,
-          direction,
-          limit: '1000',
-          status,
-        });
-
-        const response = await fetch(`/api/politicos/ranking?${params.toString()}`, {
-          signal: controller.signal,
-        });
-
-        if (!response.ok) return;
-
-        const data = (await response.json()) as {items?: PoliticoRankingItem[]};
-        setItems(
-          (data.items ?? []).map((p) => ({
-            ...p,
-            foto: p.foto || `https://picsum.photos/seed/${p.id}/400/400`,
-          })),
-        );
+        await loadRankingPage(0, controller.signal);
       } catch {
+      } finally {
+        setIsLoadingRanking(false);
       }
     };
 
     run();
     return () => controller.abort();
-  }, [direction, isUnsupportedCargo, metric, status]);
+  }, [isUnsupportedCargo, loadRankingPage]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -236,21 +258,7 @@ export const Ranking = () => {
     return () => controller.abort();
   }, [direction, isUnsupportedCargo, status]);
 
-  const filteredItems = useMemo(() => {
-    const q = search.trim().toLocaleLowerCase('pt-BR');
-    const filtered = q
-      ? items.filter((p) =>
-          [p.nome, p.partido, p.estado, p.cargo].some((value) =>
-            value.toLocaleLowerCase('pt-BR').includes(q),
-          ),
-        )
-      : items;
-
-    return [...filtered].sort((a, b) => {
-      const diff = getMetricValue(a, metric) - getMetricValue(b, metric);
-      return direction === 'asc' ? diff : -diff;
-    });
-  }, [direction, items, metric, search]);
+  const filteredItems = items;
 
   const filteredPartidos = useMemo(() => {
     const q = search.trim().toLocaleLowerCase('pt-BR');
@@ -456,11 +464,10 @@ export const Ranking = () => {
 
       {activeView === 'parlamentares' && (
         <section className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          {summaryCards.map((card, index) => (
+          {summaryCards.map((card) => (
             <div
               key={card.label}
-              className="reveal-card lift-card rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-900"
-              style={{animationDelay: `${index * 70}ms`}}
+              className="rounded-2xl border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-900"
             >
               <div className="mb-4 flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 text-blue-600 dark:bg-blue-950 dark:text-blue-300">
                 <card.icon size={20} />
@@ -507,8 +514,7 @@ export const Ranking = () => {
                   return (
                     <div
                       key={`${p.partido}-${index}`}
-                      className="reveal-card lift-card rounded-2xl border border-slate-200 p-4 dark:border-slate-700"
-                      style={{animationDelay: `${index * 55}ms`}}
+                      className="rounded-2xl border border-slate-200 p-4 transition-colors hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800/60"
                     >
                       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                         <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
@@ -545,7 +551,11 @@ export const Ranking = () => {
         </section>
       ) : (
         <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-900">
-          {filteredItems.length === 0 ? (
+          {isLoadingRanking && filteredItems.length === 0 ? (
+            <div className="px-6 py-10 text-center text-sm font-medium text-slate-500 dark:text-slate-400">
+              Carregando ranking...
+            </div>
+          ) : filteredItems.length === 0 ? (
             <div className="px-6 py-10 text-center">
               <div className="text-base font-black text-slate-900 dark:text-slate-50">
                 Nenhum parlamentar encontrado com esse filtro.
@@ -613,8 +623,7 @@ export const Ranking = () => {
                     {filteredItems.map((p, index) => (
                     <tr
                       key={p.id}
-                      className="reveal-card group transition-colors hover:bg-slate-50/50 dark:hover:bg-slate-800/50"
-                      style={{animationDelay: `${Math.min(index, 12) * 28}ms`}}
+                      className="group transition-colors hover:bg-slate-50/50 dark:hover:bg-slate-800/50"
                     >
                         <td className="px-6 py-6">
                           <span
@@ -638,6 +647,8 @@ export const Ranking = () => {
                               src={p.foto}
                               alt={p.nome}
                               className="h-10 w-10 rounded-full border border-slate-100 object-cover dark:border-slate-700"
+                              loading="lazy"
+                              decoding="async"
                               referrerPolicy="no-referrer"
                             />
                             <div>
@@ -690,6 +701,26 @@ export const Ranking = () => {
                   </tbody>
                 </table>
               </div>
+
+              {hasMoreRankingItems && (
+                <div className="border-t border-slate-100 px-4 py-5 text-center dark:border-slate-800 sm:px-6">
+                  <button
+                    type="button"
+                    disabled={isLoadingRanking}
+                    onClick={async () => {
+                      setIsLoadingRanking(true);
+                      try {
+                        await loadRankingPage(items.length);
+                      } finally {
+                        setIsLoadingRanking(false);
+                      }
+                    }}
+                    className="rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-black text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {isLoadingRanking ? 'Carregando...' : 'Carregar mais'}
+                  </button>
+                </div>
+              )}
             </>
           )}
         </div>

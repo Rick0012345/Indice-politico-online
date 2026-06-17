@@ -140,7 +140,7 @@ export const Camara = () => {
             type="button"
             onClick={() => setActiveTab(tab.id)}
             className={cn(
-              'flex items-center gap-2 whitespace-nowrap border-b-2 px-4 py-3 text-sm font-bold transition-all sm:px-6 sm:py-4',
+              'flex items-center gap-2 whitespace-nowrap border-b-2 px-4 py-3 text-sm font-bold transition-colors sm:px-6 sm:py-4',
               activeTab === tab.id
                 ? 'border-blue-600 text-blue-600 dark:text-blue-400'
                 : 'border-transparent text-slate-400 hover:text-slate-600 dark:text-slate-500 dark:hover:text-slate-300',
@@ -189,7 +189,7 @@ export const Camara = () => {
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           {activeTab === 'proposicoes' &&
             (items as ProposicaoItem[]).map((item) => (
-              <Link key={item.id} to={`/camara/proposicoes/${item.id}`} className="group rounded-3xl border border-slate-200 bg-white p-5 shadow-sm transition-all hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-md dark:border-slate-700 dark:bg-slate-900 dark:hover:border-blue-900">
+              <Link key={item.id} to={`/camara/proposicoes/${item.id}`} className="group rounded-3xl border border-slate-200 bg-white p-5 shadow-sm transition-colors hover:border-blue-200 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:hover:border-blue-900 dark:hover:bg-slate-800/60">
                 <div className="flex flex-wrap items-center gap-2 text-xs font-bold uppercase text-slate-400 dark:text-slate-500">
                   <span>{item.siglaTipo} {item.numero}/{item.ano}</span>
                   {item.situacao && <span className="rounded-full bg-blue-50 px-2 py-1 text-blue-700 dark:bg-blue-950 dark:text-blue-300">{item.situacao}</span>}

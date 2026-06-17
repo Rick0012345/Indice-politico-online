@@ -1,10 +1,10 @@
 import 'dotenv/config';
-import {createHash} from 'node:crypto';
 import {spawn} from 'node:child_process';
 import {appendFileSync, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, statSync} from 'node:fs';
 import {join} from 'node:path';
 import express, {type Request, type Response} from 'express';
 import {Pool} from 'pg';
+import {hashCpf, isValidCpf, normalizeCpf, parseComentario, parseNota} from './lib/evaluationRules';
 
 const app = express();
 app.disable('x-powered-by');
@@ -101,66 +101,6 @@ const buildPoliticoStatusWhereSql = (status: PoliticoStatusFilter) => {
   if (status === 'inativo') return 'p.ativo = false';
   return 'p.ativo IS DISTINCT FROM false';
 };
-
-const normalizeCpf = (value: unknown) => {
-  if (typeof value !== 'string') return '';
-  return value.replace(/\D/g, '').slice(0, 11);
-};
-
-const calculateCpfCheckDigit = (baseDigits: string) => {
-  let sum = 0;
-  const startWeight = baseDigits.length + 1;
-
-  for (let index = 0; index < baseDigits.length; index += 1) {
-    sum += Number(baseDigits[index]) * (startWeight - index);
-  }
-
-  const remainder = sum % 11;
-  return remainder < 2 ? 0 : 11 - remainder;
-};
-
-const isValidCpf = (cpf: string) => {
-  if (cpf.length !== 11) return false;
-  if (/^(\d)\1{10}$/.test(cpf)) return false;
-
-  const firstDigit = calculateCpfCheckDigit(cpf.slice(0, 9));
-  const secondDigit = calculateCpfCheckDigit(cpf.slice(0, 10));
-
-  return firstDigit === Number(cpf[9]) && secondDigit === Number(cpf[10]);
-};
-
-const parseNota = (value: unknown) => {
-  const parsed =
-    typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : Number.NaN;
-
-  if (!Number.isInteger(parsed)) return null;
-  if (parsed < 1 || parsed > 5) return null;
-  return parsed;
-};
-
-const parseComentario = (value: unknown) => {
-  if (value == null) {
-    return {comentario: null, error: null};
-  }
-
-  if (typeof value !== 'string') {
-    return {comentario: null, error: 'O comentario informado e invalido.'};
-  }
-
-  const comentario = value.trim();
-
-  if (comentario.length === 0) {
-    return {comentario: null, error: null};
-  }
-
-  if (comentario.length > 500) {
-    return {comentario: null, error: 'O comentario deve ter no maximo 500 caracteres.'};
-  }
-
-  return {comentario, error: null};
-};
-
-const hashCpf = (cpf: string) => createHash('sha256').update(cpf).digest('hex');
 
 const parseJsonStringArray = (value: unknown) => {
   const normalize = (items: unknown[]) =>
@@ -927,11 +867,21 @@ app.get('/api/politicos/novos', async (req, res) => {
 app.get('/api/politicos/ranking', async (req, res) => {
   try {
     const limit = parseLimit(req);
+    const offset = parseOffset(req);
+    const search = typeof req.query.search === 'string' ? req.query.search.trim() : '';
     const metricParam = typeof req.query.metric === 'string' ? req.query.metric : undefined;
     const directionParam = typeof req.query.direction === 'string' ? req.query.direction : undefined;
     const filterParam = typeof req.query.filter === 'string' ? req.query.filter : undefined;
     const status = parsePoliticoStatusFilter(req);
-    const statusWhere = buildPoliticoStatusWhereSql(status);
+    const where: string[] = [buildPoliticoStatusWhereSql(status)];
+    const params: Array<string | number> = [];
+
+    if (search) {
+      params.push(`%${search}%`);
+      where.push(
+        `(p.nome ILIKE $${params.length} OR p.sigla_partido ILIKE $${params.length} OR p.sigla_uf ILIKE $${params.length} OR 'Deputado Federal' ILIKE $${params.length})`,
+      );
+    }
 
     const metric =
       metricParam === 'despesas' || metricParam === 'votacoes' || metricParam === 'nota'
@@ -1030,7 +980,7 @@ app.get('/api/politicos/ranking', async (req, res) => {
         FROM votos_deputados
         GROUP BY politico_id
       ) vcnt ON vcnt.politico_id = p.id
-      WHERE ${statusWhere}
+      WHERE ${where.join(' AND ')}
       GROUP BY
         p.id,
         p.nome,
@@ -1043,9 +993,10 @@ app.get('/api/politicos/ranking', async (req, res) => {
         dsum.total_despesas,
         vcnt.total_votacoes
       ORDER BY ${orderBy}
-      LIMIT $1
+      LIMIT $${params.length + 1}
+      OFFSET $${params.length + 2}
       `,
-      [limit],
+      [...params, limit, offset],
     );
 
     sendJson(res, 200, {items: result.rows});
@@ -1098,7 +1049,6 @@ app.get('/api/partidos', async (req, res) => {
     const dirSql = direction === 'desc' ? 'DESC' : 'ASC';
     const status = parsePoliticoStatusFilter(req);
     const statusWhere = buildPoliticoStatusWhereSql(status);
-
     const params: Array<string | number> = [];
     const where: string[] = [];
 

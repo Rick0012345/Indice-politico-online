@@ -973,11 +973,11 @@ export const PoliticoProfile = () => {
             <div className="mt-8 flex flex-col justify-center gap-3 sm:flex-row sm:flex-wrap md:justify-start">
               <button
                 onClick={() => setIsModalOpen(true)}
-                className="w-full rounded-2xl bg-blue-600 px-8 py-3 text-sm font-bold text-white shadow-lg shadow-blue-200 transition-all hover:bg-blue-700 sm:w-auto"
+                className="w-full rounded-2xl bg-blue-600 px-8 py-3 text-sm font-bold text-white shadow-lg shadow-blue-200 transition-colors hover:bg-blue-700 sm:w-auto"
               >
                 Avalie este político
               </button>
-              <button className="w-full rounded-2xl bg-slate-100 px-8 py-3 text-sm font-bold text-slate-600 transition-all hover:bg-slate-200 sm:w-auto dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
+              <button className="w-full rounded-2xl bg-slate-100 px-8 py-3 text-sm font-bold text-slate-600 transition-colors hover:bg-slate-200 sm:w-auto dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
                 Seguir atualizações
               </button>
             </div>
@@ -1009,7 +1009,7 @@ export const PoliticoProfile = () => {
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
             className={cn(
-              "flex items-center gap-2 whitespace-nowrap border-b-2 px-4 py-3 text-sm font-bold transition-all sm:px-6 sm:py-4",
+              "flex items-center gap-2 whitespace-nowrap border-b-2 px-4 py-3 text-sm font-bold transition-colors sm:px-6 sm:py-4",
               activeTab === tab.id
                 ? "border-blue-600 text-blue-600 dark:text-blue-400"
                 : "border-transparent text-slate-400 hover:text-slate-600 dark:text-slate-500 dark:hover:text-slate-300"
@@ -1047,7 +1047,7 @@ export const PoliticoProfile = () => {
                   </div>
                   <div className="h-3 w-full rounded-full bg-slate-100 overflow-hidden dark:bg-slate-700">
                     <div
-                      className="data-bar h-full rounded-full bg-emerald-500 transition-all duration-1000"
+                      className="data-bar h-full rounded-full bg-emerald-500 transition-[width] duration-500"
                       style={{ width: `${presencaValue}%` }}
                     />
                   </div>
@@ -1059,7 +1059,7 @@ export const PoliticoProfile = () => {
                   </div>
                   <div className="h-3 w-full rounded-full bg-slate-100 overflow-hidden dark:bg-slate-700">
                     <div
-                      className="data-bar h-full rounded-full bg-blue-500 transition-all duration-1000"
+                      className="data-bar h-full rounded-full bg-blue-500 transition-[width] duration-500"
                       style={{ width: `${alinhamentoValue}%` }}
                     />
                   </div>
@@ -1361,7 +1361,7 @@ export const PoliticoProfile = () => {
                   : v.ementa || 'Votação';
               const isExpanded = expandedVotoId === v.votoId;
               return (
-              <div key={v.votoId} className="rounded-2xl border border-slate-200 bg-white transition-all hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:hover:border-slate-600">
+              <div key={v.votoId} className="rounded-2xl border border-slate-200 bg-white transition-colors hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:hover:border-slate-600">
                 <button
                   onClick={() => setExpandedVotoId((curr) => (curr === v.votoId ? null : v.votoId))}
                   className="flex w-full items-start justify-between gap-4 p-4 text-left sm:p-6"

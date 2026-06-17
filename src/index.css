@@ -38,7 +38,6 @@
       radial-gradient(circle at 62% 78%, rgba(234, 179, 8, 0.12), transparent 12rem),
       linear-gradient(115deg, transparent 0 42%, rgba(37, 99, 235, 0.08) 43% 44%, transparent 45% 100%);
     filter: saturate(1.08);
-    animation: civic-drift 18s ease-in-out infinite alternate;
   }
 
   .civic-mesh::after {
@@ -50,7 +49,6 @@
       linear-gradient(90deg, rgba(15, 23, 42, 0.07) 1px, transparent 1px);
     background-size: 42px 42px;
     mask-image: radial-gradient(circle at 50% 35%, black, transparent 68%);
-    animation: civic-grid 14s linear infinite;
   }
 
   .civic-node {
@@ -60,19 +58,16 @@
     border-radius: 9999px;
     background: rgba(37, 99, 235, 0.78);
     box-shadow: 0 0 0 8px rgba(37, 99, 235, 0.08), 0 0 28px rgba(37, 99, 235, 0.34);
-    animation: civic-pulse 3.8s ease-in-out infinite;
   }
 
   .civic-node:nth-child(2) {
     background: rgba(20, 184, 166, 0.78);
     box-shadow: 0 0 0 8px rgba(20, 184, 166, 0.08), 0 0 28px rgba(20, 184, 166, 0.32);
-    animation-delay: -1.2s;
   }
 
   .civic-node:nth-child(3) {
     background: rgba(234, 179, 8, 0.72);
     box-shadow: 0 0 0 8px rgba(234, 179, 8, 0.08), 0 0 28px rgba(234, 179, 8, 0.24);
-    animation-delay: -2.1s;
   }
 
   .reveal-card {
@@ -93,44 +88,6 @@
     overflow: hidden;
   }
 
-  .data-bar::after {
-    content: "";
-    position: absolute;
-    inset: 0;
-    width: 42%;
-    transform: translateX(-130%);
-    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.58), transparent);
-    animation: data-shine 2.8s ease-in-out infinite;
-  }
-}
-
-@keyframes civic-drift {
-  from {
-    transform: translate3d(-1.5%, -1%, 0) scale(1);
-  }
-  to {
-    transform: translate3d(1.5%, 1%, 0) scale(1.04);
-  }
-}
-
-@keyframes civic-grid {
-  from {
-    background-position: 0 0, 0 0;
-  }
-  to {
-    background-position: 42px 42px, 42px 42px;
-  }
-}
-
-@keyframes civic-pulse {
-  0%, 100% {
-    transform: scale(1);
-    opacity: 0.72;
-  }
-  50% {
-    transform: scale(1.38);
-    opacity: 1;
-  }
 }
 
 @keyframes reveal-card {
@@ -144,21 +101,8 @@
   }
 }
 
-@keyframes data-shine {
-  0% {
-    transform: translateX(-130%);
-  }
-  52%, 100% {
-    transform: translateX(260%);
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
-  .civic-mesh::before,
-  .civic-mesh::after,
-  .civic-node,
-  .reveal-card,
-  .data-bar::after {
+  .reveal-card {
     animation: none;
   }
 }

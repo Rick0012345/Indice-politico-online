@@ -93,7 +93,7 @@ const PartidoCard: React.FC<{
       }
     }}
     className={cn(
-      'w-full cursor-pointer rounded-3xl border bg-white p-4 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-blue-200 dark:bg-slate-900 dark:focus:ring-blue-900',
+      'w-full cursor-pointer rounded-3xl border bg-white p-4 text-left shadow-sm transition-colors hover:border-blue-200 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-200 dark:bg-slate-900 dark:hover:border-blue-900 dark:hover:bg-slate-800/60 dark:focus:ring-blue-900',
       isSelected
         ? 'border-blue-300 ring-2 ring-blue-100 dark:border-blue-700 dark:ring-blue-950'
         : 'border-slate-200 dark:border-slate-700',
@@ -181,7 +181,7 @@ const DeputadosDoPartido: React.FC<{
             <Link
               key={deputado.id}
               to={`/politico/${deputado.id}`}
-              className="group rounded-2xl border border-slate-200 p-4 transition-all hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-sm dark:border-slate-700 dark:hover:border-blue-900"
+              className="group rounded-2xl border border-slate-200 p-4 transition-colors hover:border-blue-200 hover:bg-slate-50 dark:border-slate-700 dark:hover:border-blue-900 dark:hover:bg-slate-800/60"
             >
               <div className="flex items-start gap-3">
                 <img
@@ -424,7 +424,7 @@ export const Partidos = () => {
               type="button"
               onClick={() => setDirection('asc')}
               className={cn(
-                'flex-1 rounded-xl px-4 py-2 text-sm font-bold transition-all',
+                'flex-1 rounded-xl px-4 py-2 text-sm font-bold transition-colors',
                 direction === 'asc'
                   ? 'bg-white text-blue-600 shadow-sm dark:bg-slate-700'
                   : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200',
@@ -436,7 +436,7 @@ export const Partidos = () => {
               type="button"
               onClick={() => setDirection('desc')}
               className={cn(
-                'flex-1 rounded-xl px-4 py-2 text-sm font-bold transition-all',
+                'flex-1 rounded-xl px-4 py-2 text-sm font-bold transition-colors',
                 direction === 'desc'
                   ? 'bg-white text-blue-600 shadow-sm dark:bg-slate-700'
                   : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200',

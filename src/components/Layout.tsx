@@ -1,6 +1,6 @@
 import React, {useEffect, useState} from 'react';
 import {Link, useLocation} from 'react-router-dom';
-import {Menu, Moon, Search, Sun, X} from 'lucide-react';
+import {Menu, Moon, Sun, X} from 'lucide-react';
 import {useTheme} from '../context/ThemeContext';
 
 const navItems = [
@@ -71,13 +71,6 @@ export const Navbar = () => {
           >
             {theme === 'dark' ? <Sun size={20} /> : <Moon size={20} />}
           </button>
-          <Link
-            to="/"
-            className="hidden items-center gap-2 rounded-full bg-slate-100 px-4 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-200 md:flex dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
-          >
-            <Search size={18} />
-            <span>Buscar político</span>
-          </Link>
           <button
             type="button"
             className="rounded-full p-2 text-slate-600 transition-colors hover:bg-slate-100 md:hidden dark:text-slate-400 dark:hover:bg-slate-800"
@@ -98,14 +91,6 @@ export const Navbar = () => {
                 {item.label}
               </Link>
             ))}
-
-            <Link
-              to="/"
-              className="mt-2 flex items-center justify-center gap-2 rounded-2xl bg-slate-100 px-4 py-3 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
-            >
-              <Search size={18} />
-              <span>Buscar político</span>
-            </Link>
           </div>
         </div>
       )}

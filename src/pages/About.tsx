@@ -55,7 +55,7 @@ export const About = () => {
         <p className="text-blue-100 mb-8 max-w-xl mx-auto">
           Somos um projeto de código aberto e aceitamos contribuições de desenvolvedores, designers e especialistas em dados.
         </p>
-        <button className="rounded-2xl bg-white px-8 py-3 text-sm font-bold text-blue-600 hover:bg-blue-50 transition-all">
+        <button className="rounded-2xl bg-white px-8 py-3 text-sm font-bold text-blue-600 transition-colors hover:bg-blue-50">
           Ver no GitHub
         </button>
       </div>

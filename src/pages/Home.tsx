@@ -37,7 +37,7 @@ const PoliticoCard: React.FC<{politico: PoliticoCardModel; type: 'best' | 'worst
   return (
     <Link
       to={`/politico/${politico.id}`}
-      className="group relative flex flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white p-4 transition-all hover:-translate-y-1 hover:shadow-lg dark:border-slate-700 dark:bg-slate-900"
+      className="group relative flex flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white p-4 transition-colors hover:border-blue-200 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:hover:border-blue-900 dark:hover:bg-slate-800/60"
     >
       <div className="flex items-center gap-4">
         <div className="relative h-16 w-16 overflow-hidden rounded-full border-2 border-slate-100 dark:border-slate-700">
@@ -87,7 +87,7 @@ const NovoPoliticoCard: React.FC<{politico: PoliticoCardModel}> = ({politico}) =
   return (
     <Link
       to={`/politico/${politico.id}`}
-      className="group relative flex flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white p-4 transition-all hover:-translate-y-1 hover:shadow-lg dark:border-slate-700 dark:bg-slate-900"
+      className="group relative flex flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white p-4 transition-colors hover:border-blue-200 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:hover:border-blue-900 dark:hover:bg-slate-800/60"
     >
       <div className="flex items-center gap-4">
         <div className="relative h-16 w-16 overflow-hidden rounded-full border-2 border-slate-100 dark:border-slate-700">
