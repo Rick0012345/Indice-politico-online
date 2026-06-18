@@ -717,18 +717,66 @@ const parseStructuredLogEvents = (content: string, source: ActivityEvent['source
   return events;
 };
 
-const buildCurrentStatus = (events: ActivityEvent[]) => {
+const buildIngestionFlowKey = (event: Pick<ActivityEvent, 'dataset' | 'periodStart' | 'periodEnd'>) =>
+  `ingestion:${event.dataset ?? 'geral'}:${event.periodStart ?? ''}:${event.periodEnd ?? ''}`;
+
+const isTerminalActivityStage = (stage: ActivityEventStage) =>
+  stage === 'checkpoint_done' ||
+  stage === 'checkpoint_failed' ||
+  stage === 'vote_ai_done' ||
+  stage === 'vote_ai_fallback';
+
+const buildCurrentStatus = (events: ActivityEvent[], activeIngestionKeys: Set<string> = new Set<string>()) => {
   const latestByFlow = new Map<string, ActivityEvent>();
+  const now = Date.now();
   for (const event of events) {
-    const key =
-      event.source === 'ai'
-        ? `ai:${event.resourceId ?? 'global'}`
-        : `ingestion:${event.dataset ?? 'geral'}:${event.periodStart ?? ''}:${event.periodEnd ?? ''}`;
+    const key = event.source === 'ai' ? `ai:${event.resourceId ?? 'global'}` : buildIngestionFlowKey(event);
     if (!latestByFlow.has(key)) {
       latestByFlow.set(key, event);
     }
   }
-  return Array.from(latestByFlow.values()).slice(0, 8);
+
+  return Array.from(latestByFlow.values())
+    .filter((event) => {
+      if (isTerminalActivityStage(event.stage)) return false;
+      if (event.source !== 'ai') return activeIngestionKeys.has(buildIngestionFlowKey(event));
+
+      const eventTime = new Date(event.timestamp).getTime();
+      return Number.isFinite(eventTime) && now - eventTime <= 2 * 60 * 1000;
+    })
+    .slice(0, 6);
+};
+
+const buildRecentTimeline = (events: ActivityEvent[]) =>
+  events
+    .filter(
+      (event) =>
+        isTerminalActivityStage(event.stage) ||
+        event.stage === 'api_retry',
+    )
+    .slice(0, 16);
+
+const loadActiveIngestionKeys = async (): Promise<Set<string>> => {
+  await ensureIngestionCheckpointTable();
+  await releaseStaleIngestionCheckpoints();
+
+  const result = await pool.query<{
+    dataset: string | null;
+    periodStart: string | null;
+    periodEnd: string | null;
+  }>(
+    `
+    SELECT
+      dataset,
+      period_start::text AS "periodStart",
+      period_end::text AS "periodEnd"
+    FROM ingestion_checkpoints
+    WHERE source = 'camara'
+      AND status = 'running'
+    `,
+  );
+
+  return new Set<string>(result.rows.map((row) => buildIngestionFlowKey(row)));
 };
 
 const enrichLogStatsWithDatabaseProgress = async (stats: ReturnType<typeof emptyLogStats>) => {
@@ -2428,6 +2476,7 @@ app.get('/api/admin/ingestion/summary', async (_req, res) => {
 
 app.get('/api/admin/ingestion/logs', async (_req, res) => {
   try {
+    const activeIngestionKeys = await loadActiveIngestionKeys();
     const logsDir = join(process.cwd(), 'logs');
     if (!existsSync(logsDir)) {
       sendJson(res, 200, {log: '', file: null, events: [], currentStatus: [], timeline: []});
@@ -2453,8 +2502,8 @@ app.get('/api/admin/ingestion/logs', async (_req, res) => {
         log: '',
         file: null,
         events: activityEvents.slice(0, 80),
-        currentStatus: buildCurrentStatus(activityEvents),
-        timeline: activityEvents.slice(0, 16),
+        currentStatus: buildCurrentStatus(activityEvents, activeIngestionKeys),
+        timeline: buildRecentTimeline(activityEvents),
       });
       return;
     }
@@ -2473,8 +2522,8 @@ app.get('/api/admin/ingestion/logs', async (_req, res) => {
       log: content.slice(-12000),
       stats,
       events: events.slice(0, 80),
-      currentStatus: buildCurrentStatus(events),
-      timeline: events.slice(0, 16),
+      currentStatus: buildCurrentStatus(events, activeIngestionKeys),
+      timeline: buildRecentTimeline(events),
     });
   } catch {
     sendJson(res, 500, {error: 'Erro ao carregar logs de ingestao.'});
@@ -2534,10 +2583,8 @@ app.post('/api/admin/ingestion/run', async (req, res) => {
     const from = parseIsoDateInput(req.body?.from, '2016-01-01');
     const to = parseIsoDateInput(req.body?.to, '2020-12-31');
     const datasets = parseDatasetList(req.body?.datasets);
-    const window = ['month', 'quarter', 'year'].includes(req.body?.window)
-      ? String(req.body.window)
-      : 'month';
-    const concurrency = Math.max(1, Math.min(10, Number(req.body?.concurrency) || 4));
+    const window = 'month';
+    const concurrency = 2;
 
     if (datasets.length === 0) {
       sendJson(res, 400, {error: 'Selecione pelo menos um conjunto de dados.'});

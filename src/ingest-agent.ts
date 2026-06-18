@@ -157,9 +157,9 @@ const pool = databaseUrl
 
 const API_BASE = 'https://dadosabertos.camara.leg.br/api/v2';
 const HTTP_TIMEOUT_MS = 45000;
-const MAX_HTTP_ATTEMPTS = 2;
+const MAX_HTTP_ATTEMPTS = 3;
 const MAX_PAGES_PER_REQUEST = 200;
-const HTTP_REQUEST_MIN_INTERVAL_MS = 500;
+const HTTP_REQUEST_MIN_INTERVAL_MS = 1000;
 const OPTIONAL_CHILD_BREAKER_MIN_ATTEMPTS = 24;
 const OPTIONAL_CHILD_BREAKER_BAD_RATIO = 0.85;
 
@@ -284,7 +284,7 @@ const parseArgs = (): CliOptions => {
     to: get('to', '2020-12-31') ?? '2020-12-31',
     datasets,
     window: (get('window', 'month') ?? 'month') as CliOptions['window'],
-    concurrency: Math.max(1, Number(get('concurrency', '2')) || 2),
+    concurrency: Math.max(1, Math.min(2, Number(get('concurrency', '2')) || 2)),
     minDelayMs: Math.max(0, Number(get('min-delay-ms', '750')) || 750),
     maxAttempts: Math.max(1, Number(get('max-attempts', '5')) || 5),
     staleMinutes: Math.max(5, Number(get('stale-minutes', '30')) || 30),
@@ -425,6 +425,11 @@ const retryDelayForStatus = (status: number, retryAfterHeader: string | null, at
   return jitter(Math.min(120000, baseByStatus * 2 ** (attempt - 1)));
 };
 
+const retryWaitLabel = (delay: number, reason: string) => {
+  const seconds = Math.max(1, Math.ceil(delay / 1000));
+  return `Aguardando ${seconds} segundos para retomar apos ${reason}`;
+};
+
 const fetchJson = async <T>(url: string, attempt = 1): Promise<T> => {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), HTTP_TIMEOUT_MS);
@@ -447,9 +452,9 @@ const fetchJson = async <T>(url: string, attempt = 1): Promise<T> => {
       }
       writeLog(
         'warn',
-        `[http-retry] tentativa=${attempt} status=${response.status} delay=${delay} url=${url}`,
+        `[http-retry] tentativa=${attempt}/${MAX_HTTP_ATTEMPTS} status=${response.status} aguardando=${Math.ceil(delay / 1000)}s url=${url}`,
       );
-      writeEvent('api_retry', `Tentando novamente apos erro HTTP ${response.status}`, {
+      writeEvent('api_retry', retryWaitLabel(delay, `erro HTTP ${response.status}`), {
         url,
         status: response.status,
         attempt,
@@ -472,9 +477,9 @@ const fetchJson = async <T>(url: string, attempt = 1): Promise<T> => {
       const delay = jitter(Math.min(30000, 1000 * 2 ** attempt));
       writeLog(
         'warn',
-        `[http-retry] tentativa=${attempt} erro=${isAbort ? 'timeout' : error instanceof Error ? error.message : String(error)} delay=${delay} url=${url}`,
+        `[http-retry] tentativa=${attempt}/${MAX_HTTP_ATTEMPTS} erro=${isAbort ? 'timeout' : error instanceof Error ? error.message : String(error)} aguardando=${Math.ceil(delay / 1000)}s url=${url}`,
       );
-      writeEvent('api_retry', isAbort ? 'Tentando novamente apos timeout' : 'Tentando novamente apos erro de rede', {
+      writeEvent('api_retry', retryWaitLabel(delay, isAbort ? 'timeout' : 'erro de rede'), {
         url,
         attempt,
         delay,

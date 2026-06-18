@@ -190,6 +190,8 @@ const formatEventDetail = (event: LogEvent) => {
   if (event.resourceId) parts.push(`ID ${event.resourceId}`);
   if (event.progress != null && event.total != null) parts.push(`${event.progress}/${event.total}`);
   if (event.status) parts.push(`HTTP ${event.status}`);
+  if (event.delay != null) parts.push(`espera ${Math.max(1, Math.ceil(event.delay / 1000))}s`);
+  if (event.attempt != null) parts.push(`tentativa ${event.attempt}`);
   if (event.model) parts.push(event.model);
   return parts.join(' · ');
 };
@@ -222,13 +224,20 @@ const LogEventCard = ({event, compact = false}: {event: LogEvent; compact?: bool
   const Icon = getEventIcon(event.stage);
   const detail = formatEventDetail(event);
   return (
-    <div className={cn('rounded-lg border p-3', getEventClass(event.stage))}>
-      <div className="flex items-start gap-3">
-        <Icon size={18} className={cn('mt-0.5 shrink-0', event.stage.includes('fetch') || event.stage.includes('write') ? 'animate-spin' : '')} />
+    <div className={cn('rounded-lg border', compact ? 'px-3 py-2' : 'p-3', getEventClass(event.stage))}>
+      <div className={cn('flex gap-3', compact ? 'items-center' : 'items-start')}>
+        <Icon
+          size={compact ? 16 : 18}
+          className={cn(
+            'shrink-0',
+            !compact && 'mt-0.5',
+            !compact && (event.stage.includes('fetch') || event.stage.includes('write')) ? 'animate-spin' : '',
+          )}
+        />
         <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-sm font-black">{event.label}</span>
-            <span className="rounded-full bg-white/60 px-2 py-0.5 text-[11px] font-black uppercase dark:bg-slate-950/40">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className={cn('truncate font-black', compact ? 'text-xs' : 'text-sm')}>{event.label}</span>
+            <span className="shrink-0 rounded-full bg-white/60 px-2 py-0.5 text-[10px] font-black uppercase dark:bg-slate-950/40">
               {event.source === 'ai' ? 'IA' : 'Ingestao'}
             </span>
           </div>
@@ -275,8 +284,6 @@ export const Admin = () => {
   const [activeSection, setActiveSection] = useState<AdminSection>('coleta');
   const [from, setFrom] = useState('2016-01-01');
   const [to, setTo] = useState('2020-12-31');
-  const [windowSize, setWindowSize] = useState<'month' | 'quarter' | 'year'>('month');
-  const [concurrency, setConcurrency] = useState(4);
   const [selectedDatasets, setSelectedDatasets] = useState<string[]>([
     'deputados',
     'despesas',
@@ -404,10 +411,10 @@ export const Admin = () => {
   const estimatedQueueTotal = useMemo(() => {
     return selectedDatasets.reduce((sum, dataset) => {
       if (dataset === 'deputados') return sum + countLegislatures(from, to);
-      if (dataset === 'votacoes') return sum + countWindows(from, to, windowSize);
+      if (dataset === 'votacoes') return sum + countWindows(from, to, 'month');
       return sum;
     }, 0);
-  }, [from, selectedDatasets, to, windowSize]);
+  }, [from, selectedDatasets, to]);
 
   const queuePercent =
     estimatedQueueTotal > 0
@@ -425,12 +432,12 @@ export const Admin = () => {
   );
 
   const currentAiEvents = useMemo(
-    () => currentStatus.filter((event) => event.source === 'ai').slice(0, 3),
+    () => currentStatus.filter((event) => event.source === 'ai').slice(0, 2),
     [currentStatus],
   );
 
   const currentIngestionEvents = useMemo(
-    () => currentStatus.filter((event) => event.source !== 'ai').slice(0, 6),
+    () => currentStatus.filter((event) => event.source !== 'ai').slice(0, 2),
     [currentStatus],
   );
 
@@ -465,7 +472,7 @@ export const Admin = () => {
       const response = await fetch('/api/admin/ingestion/run', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({from, to, datasets: selectedDatasets, window: windowSize, concurrency}),
+        body: JSON.stringify({from, to, datasets: selectedDatasets}),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? 'Erro ao iniciar ingestao.');
@@ -639,21 +646,6 @@ export const Admin = () => {
                     </button>
                   ))}
                 </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <label className="text-sm font-bold text-slate-700 dark:text-slate-200">
-                  Janela
-                  <select value={windowSize} onChange={(event) => setWindowSize(event.target.value as typeof windowSize)} className="mt-2 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-50">
-                    <option value="month">Mensal</option>
-                    <option value="quarter">Trimestral</option>
-                    <option value="year">Anual</option>
-                  </select>
-                </label>
-                <label className="text-sm font-bold text-slate-700 dark:text-slate-200">
-                  Paralelo
-                  <input type="number" min={1} max={10} value={concurrency} onChange={(event) => setConcurrency(Number(event.target.value))} className="mt-2 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-50" />
-                </label>
               </div>
 
               <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-950">
@@ -962,12 +954,14 @@ export const Admin = () => {
                   <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                     <div>
                       <div className="text-sm font-black text-slate-900 dark:text-slate-50">
-                        Etapa atual em tempo real
+                        Status operacional
                       </div>
                       <div className="text-xs font-bold text-slate-500 dark:text-slate-400">
-                        {logEvents.length > 0
-                          ? `${formatNumber(logEvents.length)} eventos estruturados recentes`
-                          : 'Aguardando eventos da ingestao ou da IA'}
+                        {currentStatus.length > 0
+                          ? `${formatNumber(currentStatus.length)} fluxo(s) ativo(s) agora`
+                          : logEvents.length > 0
+                            ? 'Sem processo ativo; exibindo historico recente abaixo'
+                            : 'Aguardando eventos da ingestao ou da IA'}
                       </div>
                     </div>
                     <div className="inline-flex items-center gap-2 rounded-full bg-white px-3 py-1 text-xs font-black text-slate-500 ring-1 ring-slate-200 dark:bg-slate-900 dark:text-slate-300 dark:ring-slate-700">
@@ -977,36 +971,38 @@ export const Admin = () => {
                   </div>
 
                   {(currentIngestionEvents.length > 0 || currentAiEvents.length > 0) ? (
-                    <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(280px,420px)]">
-                      <div>
-                        <div className="mb-2 text-xs font-black uppercase text-slate-500 dark:text-slate-400">
-                          Ingestao
+                    <div className="grid gap-3 lg:grid-cols-2">
+                      <div className="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900">
+                        <div className="mb-2 flex items-center justify-between gap-2">
+                          <span className="text-xs font-black uppercase text-slate-500 dark:text-slate-400">Ingestao ativa</span>
+                          <span className="text-[11px] font-bold text-slate-400">{currentIngestionEvents.length} agora</span>
                         </div>
-                        <div className="grid gap-2 lg:grid-cols-2">
+                        <div className="grid gap-2">
                           {currentIngestionEvents.length > 0 ? (
                             currentIngestionEvents.map((event, index) => (
-                              <LogEventCard key={`${event.timestamp}-${event.stage}-${index}`} event={event} />
+                              <LogEventCard key={`${event.timestamp}-${event.stage}-${index}`} event={event} compact />
                             ))
                           ) : (
-                            <div className="rounded-lg border border-slate-200 bg-white px-3 py-4 text-sm font-bold text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
+                            <div className="rounded-lg border border-dashed border-slate-200 px-3 py-3 text-xs font-bold text-slate-500 dark:border-slate-700 dark:text-slate-400">
                               Nenhuma etapa de ingestao ativa no momento.
                             </div>
                           )}
                         </div>
                       </div>
 
-                      <div>
-                        <div className="mb-2 text-xs font-black uppercase text-slate-500 dark:text-slate-400">
-                          IA de votacoes
+                      <div className="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900">
+                        <div className="mb-2 flex items-center justify-between gap-2">
+                          <span className="text-xs font-black uppercase text-slate-500 dark:text-slate-400">IA em execucao</span>
+                          <span className="text-[11px] font-bold text-slate-400">{currentAiEvents.length} agora</span>
                         </div>
                         <div className="grid gap-2">
                           {currentAiEvents.length > 0 ? (
                             currentAiEvents.map((event, index) => (
-                              <LogEventCard key={`${event.timestamp}-${event.stage}-${index}`} event={event} />
+                              <LogEventCard key={`${event.timestamp}-${event.stage}-${index}`} event={event} compact />
                             ))
                           ) : (
-                            <div className="rounded-lg border border-slate-200 bg-white px-3 py-4 text-sm font-bold text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
-                              Nenhuma refatoracao de titulo por IA detectada agora.
+                            <div className="rounded-lg border border-dashed border-slate-200 px-3 py-3 text-xs font-bold text-slate-500 dark:border-slate-700 dark:text-slate-400">
+                              Nenhuma chamada de IA ativa agora.
                             </div>
                           )}
                         </div>
@@ -1023,8 +1019,8 @@ export const Admin = () => {
                       <div className="mb-2 text-xs font-black uppercase text-slate-500 dark:text-slate-400">
                         Linha do tempo recente
                       </div>
-                      <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
-                        {logTimeline.slice(0, 8).map((event, index) => (
+                      <div className="grid gap-2">
+                        {logTimeline.slice(0, 6).map((event, index) => (
                           <LogEventCard
                             key={`timeline-${event.timestamp}-${event.stage}-${index}`}
                             event={event}
