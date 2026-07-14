@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, {Suspense, lazy, useEffect, useMemo, useState} from 'react';
 import { useParams, Link } from 'react-router-dom';
 import {
   Star,
@@ -23,8 +23,13 @@ import {
   getPoliticoStatusClasses,
   getPoliticoStatusLabel,
 } from '../lib/politicoStatus';
-import { EvaluationModal } from '../components/EvaluationModal';
-import { SpendingChart } from '../components/SpendingChart';
+
+const EvaluationModal = lazy(() =>
+  import('../components/EvaluationModal').then((module) => ({default: module.EvaluationModal})),
+);
+const SpendingChart = lazy(() =>
+  import('../components/SpendingChart').then((module) => ({default: module.SpendingChart})),
+);
 
 type PoliticoDetail = {
   id: string;
@@ -77,8 +82,33 @@ type VotacaoItem = {
   proposicaoEmenta?: string | null;
   tituloPublico?: string | null;
   resumoLeigo?: string | null;
+  tipoVotacao: string;
+  ehSubvotacao: boolean;
+  classificacaoFonte: string;
+  classificacaoConfianca: string;
+  classificacaoVersao: string;
+  classificacaoJustificativa?: string | null;
+  proposicaoPrincipalId?: string | null;
+  proposicaoPrincipalSiglaTipo?: string | null;
+  proposicaoPrincipalNumero?: number | null;
+  proposicaoPrincipalAno?: number | null;
+  proposicaoPrincipalEmenta?: string | null;
   dataVotacao: string | null;
   voto: string;
+};
+
+type VotacaoDetail = {
+  votacaoId: string;
+  textoOficial: string | null;
+  proposicaoObjeto: string | null;
+  tipoVotacao: string;
+  ehSubvotacao: boolean;
+  classificacaoFonte: string;
+  classificacaoConfianca: string;
+  classificacaoVersao: string;
+  classificacaoJustificativa: string | null;
+  objetosPossiveis: Array<{id: string | null; siglaTipo: string | null; numero: number | null; ano: number | null; ementa: string | null}>;
+  proposicoesAfetadas: Array<{id: string | null; siglaTipo: string | null; numero: number | null; ano: number | null; ementa: string | null; efeito: string | null}>;
 };
 
 type DespesaItem = {
@@ -229,11 +259,15 @@ export const PoliticoProfile = () => {
     valorMin: '',
     valorMax: '',
   });
-  const [votacoesOffset, setVotacoesOffset] = useState(0);
+  const [votacoesNextCursor, setVotacoesNextCursor] = useState<string | null>(null);
+  const [votacaoDetails, setVotacaoDetails] = useState<Record<string, VotacaoDetail>>({});
+  const [loadingVotacaoDetailId, setLoadingVotacaoDetailId] = useState<string | null>(null);
   const [despesasOffset, setDespesasOffset] = useState(0);
   const [votacoesHasMore, setVotacoesHasMore] = useState(false);
   const [despesasHasMore, setDespesasHasMore] = useState(false);
   const [votacoesAnosDisponiveis, setVotacoesAnosDisponiveis] = useState<number[]>([]);
+  const [votacoesTiposDisponiveis, setVotacoesTiposDisponiveis] = useState<string[]>([]);
+  const [votacoesVotosDisponiveis, setVotacoesVotosDisponiveis] = useState<string[]>([]);
   const [despesasAnosDisponiveis, setDespesasAnosDisponiveis] = useState<number[]>([]);
   const [despesasResumo, setDespesasResumo] = useState<{ano: number; mes: number; total: number}[]>([]);
   const [despesasMedia, setDespesasMedia] = useState<{ano: number; mes: number; media: number}[]>([]);
@@ -407,7 +441,7 @@ export const PoliticoProfile = () => {
 
   useEffect(() => {
     const politicoId = id?.trim();
-    if (!politicoId) return;
+    if (!politicoId || activeTab !== 'despesas') return;
 
     const controller = new AbortController();
 
@@ -424,17 +458,10 @@ export const PoliticoProfile = () => {
           return Array.from(new Set<number>(parsed)).sort((a, b) => b - a);
         };
 
-        const [votacoesAnosRes, despesasAnosRes] = await Promise.all([
-          fetch(`/api/politicos/${encodeURIComponent(politicoId)}/votacoes/anos`, {signal: controller.signal}),
-          fetch(`/api/politicos/${encodeURIComponent(politicoId)}/despesas/anos`, {signal: controller.signal}),
-        ]);
-
-        if (votacoesAnosRes.ok) {
-          const data = (await votacoesAnosRes.json()) as {items?: unknown[]};
-          setVotacoesAnosDisponiveis(normalizarAnos(data.items));
-        } else {
-          setVotacoesAnosDisponiveis([]);
-        }
+        const despesasAnosRes = await fetch(
+          `/api/politicos/${encodeURIComponent(politicoId)}/despesas/anos`,
+          {signal: controller.signal},
+        );
 
         if (despesasAnosRes.ok) {
           const data = (await despesasAnosRes.json()) as {items?: unknown[]};
@@ -443,34 +470,35 @@ export const PoliticoProfile = () => {
           setDespesasAnosDisponiveis([]);
         }
       } catch {
-        setVotacoesAnosDisponiveis([]);
         setDespesasAnosDisponiveis([]);
       }
     };
 
     run();
     return () => controller.abort();
-  }, [id]);
+  }, [activeTab, id]);
 
   useEffect(() => {
     const politicoId = id?.trim();
-    if (!politicoId) return;
+    if (!politicoId || activeTab !== 'votacoes') return;
 
     const controller = new AbortController();
-    const pageSize = 200;
+    const pageSize = 30;
     const ano = votacoesFiltro.ano ? Number(votacoesFiltro.ano) : null;
 
     setIsLoadingVotacoes(true);
     setVotacoes([]);
-    setVotacoesOffset(0);
+    setVotacoesNextCursor(null);
     setVotacoesHasMore(false);
 
     const run = async () => {
       try {
         const params = new URLSearchParams();
         params.set('limit', String(pageSize));
-        params.set('offset', '0');
         if (ano != null && Number.isFinite(ano)) params.set('ano', String(ano));
+        if (votacoesFiltro.voto) params.set('voto', votacoesFiltro.voto);
+        if (votacoesFiltro.tipo) params.set('tipoVotacao', votacoesFiltro.tipo);
+        if (votacoesFiltro.texto.trim()) params.set('q', votacoesFiltro.texto.trim());
 
         const res = await fetch(
           `/api/politicos/${encodeURIComponent(politicoId)}/votacoes?${params.toString()}`,
@@ -481,10 +509,18 @@ export const PoliticoProfile = () => {
           return;
         }
 
-        const data = (await res.json()) as {items?: VotacaoItem[]};
+        const data = (await res.json()) as {
+          items?: VotacaoItem[];
+          nextCursor?: string | null;
+          meta?: {anos?: number[]; tiposVotacao?: string[]; votos?: string[]};
+        };
         const items = data.items ?? [];
         setVotacoes(items);
-        setVotacoesHasMore(items.length === pageSize);
+        setVotacoesNextCursor(data.nextCursor ?? null);
+        setVotacoesHasMore(Boolean(data.nextCursor));
+        setVotacoesAnosDisponiveis(data.meta?.anos ?? []);
+        setVotacoesTiposDisponiveis(data.meta?.tiposVotacao ?? []);
+        setVotacoesVotosDisponiveis(data.meta?.votos ?? []);
       } catch {
         setVotacoes([]);
       } finally {
@@ -492,13 +528,16 @@ export const PoliticoProfile = () => {
       }
     };
 
-    run();
-    return () => controller.abort();
-  }, [id, votacoesFiltro.ano]);
+    const timer = window.setTimeout(run, 300);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [activeTab, id, votacoesFiltro.ano, votacoesFiltro.texto, votacoesFiltro.tipo, votacoesFiltro.voto]);
 
   useEffect(() => {
     const politicoId = id?.trim();
-    if (!politicoId) return;
+    if (!politicoId || activeTab !== 'despesas') return;
 
     const controller = new AbortController();
     const pageSize = 200;
@@ -540,11 +579,11 @@ export const PoliticoProfile = () => {
 
     run();
     return () => controller.abort();
-  }, [id, despesasFiltro.ano, despesasFiltro.mes]);
+  }, [activeTab, id, despesasFiltro.ano, despesasFiltro.mes]);
 
   useEffect(() => {
     const politicoId = id?.trim();
-    if (!politicoId) return;
+    if (!politicoId || activeTab !== 'despesas') return;
 
     const controller = new AbortController();
     const ano = despesasFiltro.ano ? Number(despesasFiltro.ano) : null;
@@ -585,11 +624,11 @@ export const PoliticoProfile = () => {
 
     run();
     return () => controller.abort();
-  }, [id, despesasFiltro.ano]);
+  }, [activeTab, id, despesasFiltro.ano]);
 
   useEffect(() => {
     const politicoId = id?.trim();
-    if (!politicoId) return;
+    if (!politicoId || activeTab !== 'atuacao') return;
 
     const controller = new AbortController();
     setIsLoadingAtuacao(true);
@@ -618,30 +657,67 @@ export const PoliticoProfile = () => {
 
     run();
     return () => controller.abort();
-  }, [id]);
+  }, [activeTab, id]);
+
+  const toggleVotacaoDetail = async (votacao: VotacaoItem) => {
+    if (expandedVotoId === votacao.votoId) {
+      setExpandedVotoId(null);
+      return;
+    }
+
+    setExpandedVotoId(votacao.votoId);
+    if (votacaoDetails[votacao.votacaoId]) return;
+
+    setLoadingVotacaoDetailId(votacao.votacaoId);
+    try {
+      const response = await fetch(`/api/votacoes/${encodeURIComponent(votacao.votacaoId)}`);
+      if (!response.ok) return;
+      const payload = (await response.json()) as {votacao: VotacaoDetail};
+      const detail = payload.votacao;
+      setVotacaoDetails((current) => ({...current, [votacao.votacaoId]: detail}));
+    } finally {
+      setLoadingVotacaoDetailId((current) => current === votacao.votacaoId ? null : current);
+    }
+  };
+
+  const getVoteTypeLabel = (votacao: VotacaoItem) => {
+    if (votacao.classificacaoConfianca === 'ambigua') return 'Objeto não identificado';
+    const labels: Record<string, string> = {
+      principal: 'Votação principal',
+      requerimento: 'Requerimento',
+      destaque: 'Destaque',
+      emenda: 'Emenda',
+      substitutivo: 'Substitutivo',
+      parecer: 'Parecer',
+      procedimental: 'Procedimental',
+    };
+    return labels[votacao.tipoVotacao] ?? 'Votação';
+  };
 
   const loadMoreVotacoes = async () => {
     const politicoId = id?.trim();
     if (!politicoId) return;
     if (isLoadingMoreVotacoes || isLoadingVotacoes || !votacoesHasMore) return;
 
-    const pageSize = 200;
+    const pageSize = 30;
     const ano = votacoesFiltro.ano ? Number(votacoesFiltro.ano) : null;
-    const nextOffset = votacoesOffset + pageSize;
 
     setIsLoadingMoreVotacoes(true);
     try {
       const params = new URLSearchParams();
       params.set('limit', String(pageSize));
-      params.set('offset', String(nextOffset));
+      if (votacoesNextCursor) params.set('cursor', votacoesNextCursor);
       if (ano != null && Number.isFinite(ano)) params.set('ano', String(ano));
+      if (votacoesFiltro.voto) params.set('voto', votacoesFiltro.voto);
+      if (votacoesFiltro.tipo) params.set('tipoVotacao', votacoesFiltro.tipo);
+      if (votacoesFiltro.texto.trim()) params.set('q', votacoesFiltro.texto.trim());
 
       const res = await fetch(
         `/api/politicos/${encodeURIComponent(politicoId)}/votacoes?${params.toString()}`,
       );
       if (!res.ok) return;
 
-      const data = (await res.json()) as {items?: VotacaoItem[]};
+      const data = (await res.json()) as {items?: VotacaoItem[]; nextCursor?: string | null};
       const items = data.items ?? [];
 
       setVotacoes((curr) => {
@@ -649,8 +725,8 @@ export const PoliticoProfile = () => {
         const appended = items.filter((v) => !seen.has(v.votoId));
         return appended.length === 0 ? curr : [...curr, ...appended];
       });
-      setVotacoesOffset(nextOffset);
-      setVotacoesHasMore(items.length === pageSize);
+      setVotacoesNextCursor(data.nextCursor ?? null);
+      setVotacoesHasMore(Boolean(data.nextCursor));
     } finally {
       setIsLoadingMoreVotacoes(false);
     }
@@ -705,40 +781,10 @@ export const PoliticoProfile = () => {
       despesasFiltro.valorMax.trim(),
   );
 
-  const votacoesOpcoesVoto = useMemo(() => {
-    const values: string[] = votacoes.map((v) => v.voto).filter((v) => typeof v === 'string' && v.trim().length > 0);
-    return Array.from(new Set<string>(values)).sort((a, b) => a.localeCompare(b, 'pt-BR'));
-  }, [votacoes]);
-
-  const votacoesOpcoesTipo = useMemo(() => {
-    const values: string[] = votacoes
-      .map((v) => v.siglaTipo)
-      .filter((v): v is string => typeof v === 'string' && v.trim().length > 0);
-    return Array.from(new Set<string>(values)).sort((a, b) => a.localeCompare(b, 'pt-BR'));
-  }, [votacoes]);
-
-  const votacoesOpcoesAno = useMemo(() => {
-    const values: number[] = votacoes
-      .map((v) => v.ano)
-      .filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
-    return Array.from(new Set<number>([...votacoesAnosDisponiveis, ...values])).sort((a, b) => b - a);
-  }, [votacoes, votacoesAnosDisponiveis]);
-
-  const votacoesFiltradas = useMemo(() => {
-    const texto = votacoesFiltro.texto.trim().toLowerCase();
-    const ano = votacoesFiltro.ano ? Number(votacoesFiltro.ano) : null;
-
-    return votacoes.filter((v) => {
-      if (votacoesFiltro.voto && v.voto !== votacoesFiltro.voto) return false;
-      if (votacoesFiltro.tipo && v.siglaTipo !== votacoesFiltro.tipo) return false;
-      if (ano != null && Number.isFinite(ano) && v.ano !== ano) return false;
-      if (texto) {
-        const haystack = `${v.siglaTipo ?? ''} ${v.numero ?? ''}/${v.ano ?? ''} ${v.ementa ?? ''}`.toLowerCase();
-        if (!haystack.includes(texto)) return false;
-      }
-      return true;
-    });
-  }, [votacoes, votacoesFiltro]);
+  const votacoesOpcoesVoto = votacoesVotosDisponiveis;
+  const votacoesOpcoesTipo = votacoesTiposDisponiveis;
+  const votacoesOpcoesAno = votacoesAnosDisponiveis;
+  const votacoesFiltradas = votacoes;
 
   const despesasOpcoesTipo = useMemo(() => {
     const values: string[] = despesas.map((d) => d.tipo).filter((v) => typeof v === 'string' && v.trim().length > 0);
@@ -1355,15 +1401,12 @@ export const PoliticoProfile = () => {
 
             {votacoesFiltradas.map((v) => {
               const display = buildVotacaoDisplay(v);
-              const titulo =
-                v.siglaTipo && v.numero && v.ano
-                  ? `${v.siglaTipo} ${v.numero}/${v.ano}${v.ementa ? ` - ${v.ementa}` : ''}`
-                  : v.ementa || 'Votação';
               const isExpanded = expandedVotoId === v.votoId;
+              const detail = votacaoDetails[v.votacaoId];
               return (
-              <div key={v.votoId} className="rounded-2xl border border-slate-200 bg-white transition-colors hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:hover:border-slate-600">
+              <div key={v.votoId} className="vote-list-item rounded-2xl border border-slate-200 bg-white transition-colors hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:hover:border-slate-600">
                 <button
-                  onClick={() => setExpandedVotoId((curr) => (curr === v.votoId ? null : v.votoId))}
+                  onClick={() => void toggleVotacaoDetail(v)}
                   className="flex w-full items-start justify-between gap-4 p-4 text-left sm:p-6"
                 >
                   <div className="flex min-w-0 gap-4 items-start">
@@ -1379,6 +1422,21 @@ export const PoliticoProfile = () => {
                        v.voto === 'Não' ? <XCircle size={20} /> : <MinusCircle size={20} />}
                     </div>
                     <div className="min-w-0">
+                      <div className="mb-2 flex flex-wrap gap-2">
+                        <span className={cn(
+                          'rounded-full px-2.5 py-1 text-[10px] font-extrabold uppercase tracking-wide',
+                          v.classificacaoConfianca === 'ambigua'
+                            ? 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'
+                            : 'bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-300',
+                        )}>
+                          {getVoteTypeLabel(v)}
+                        </span>
+                        {v.ehSubvotacao && v.classificacaoConfianca !== 'ambigua' && (
+                          <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-extrabold uppercase tracking-wide text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                            Subvotação
+                          </span>
+                        )}
+                      </div>
                       <h4 className="break-words font-bold text-slate-900 dark:text-slate-50">{display.titulo}</h4>
                       {display.contexto && (
                         <p className="mt-1 break-words text-sm text-slate-600 dark:text-slate-300">
@@ -1408,6 +1466,9 @@ export const PoliticoProfile = () => {
 
                 {isExpanded && (
                   <div className="border-t border-slate-100 px-4 py-5 sm:px-6 dark:border-slate-800">
+                    {loadingVotacaoDetailId === v.votacaoId && (
+                      <div className="mb-3 text-sm font-medium text-slate-500">Carregando contexto oficial...</div>
+                    )}
                     <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                       <div className="rounded-2xl bg-slate-50 p-4 dark:bg-slate-800">
                         <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">Assunto em linguagem simples</div>
@@ -1419,7 +1480,7 @@ export const PoliticoProfile = () => {
                       <div className="rounded-2xl bg-slate-50 p-4 dark:bg-slate-800">
                         <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">Texto oficial da votação</div>
                         <div className="mt-2 grid grid-cols-1 gap-1 text-xs text-slate-600 dark:text-slate-400">
-                          <div className="text-sm font-semibold text-slate-900 dark:text-slate-50">{v.ementa || 'Sem texto oficial disponível'}</div>
+                          <div className="text-sm font-semibold text-slate-900 dark:text-slate-50">{detail?.textoOficial || v.ementa || 'Sem texto oficial disponível'}</div>
                           <div><span className="font-bold text-slate-800 dark:text-slate-200">Seu parlamentar votou:</span> {v.voto}</div>
                           <div><span className="font-bold text-slate-800 dark:text-slate-200">Voto ID:</span> {v.votoId}</div>
                           <div><span className="font-bold text-slate-800 dark:text-slate-200">Votação ID:</span> {v.votacaoId}</div>
@@ -1427,8 +1488,16 @@ export const PoliticoProfile = () => {
                         </div>
                       </div>
                       <div className="rounded-2xl bg-slate-50 p-4 dark:bg-slate-800">
-                        <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">Tipo</div>
-                        <div className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-50">{v.siglaTipo || '-'}</div>
+                        <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">Classificação e proveniência</div>
+                        <div className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-50">{getVoteTypeLabel(v)}</div>
+                        <div className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                          Fonte: {v.classificacaoFonte} · confiança: {v.classificacaoConfianca} · versão: {v.classificacaoVersao}
+                        </div>
+                        {(detail?.classificacaoJustificativa || v.classificacaoJustificativa) && (
+                          <div className="mt-2 text-xs text-slate-600 dark:text-slate-300">
+                            {detail?.classificacaoJustificativa || v.classificacaoJustificativa}
+                          </div>
+                        )}
                       </div>
                       <div className="rounded-2xl bg-slate-50 p-4 dark:bg-slate-800">
                         <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">Número/Ano</div>
@@ -1436,6 +1505,23 @@ export const PoliticoProfile = () => {
                           {v.numero != null && v.ano != null ? `${v.numero}/${v.ano}` : '-'}
                         </div>
                       </div>
+                      {detail && (detail.objetosPossiveis.length > 0 || detail.proposicoesAfetadas.length > 0) && (
+                        <div className="rounded-2xl bg-amber-50 p-4 md:col-span-2 dark:bg-amber-950/40">
+                          <div className="text-[10px] font-bold uppercase tracking-widest text-amber-700 dark:text-amber-300">Contexto oficial relacionado</div>
+                          {detail.objetosPossiveis.length > 0 && (
+                            <div className="mt-2 text-xs text-slate-700 dark:text-slate-300">
+                              <span className="font-bold">Objetos possíveis:</span>{' '}
+                              {detail.objetosPossiveis.map((item) => item.siglaTipo && item.numero && item.ano ? `${item.siglaTipo} ${item.numero}/${item.ano}` : item.ementa || 'não identificado').join('; ')}
+                            </div>
+                          )}
+                          {detail.proposicoesAfetadas.length > 0 && (
+                            <div className="mt-2 text-xs text-slate-700 dark:text-slate-300">
+                              <span className="font-bold">Proposições afetadas:</span>{' '}
+                              {detail.proposicoesAfetadas.map((item) => item.siglaTipo && item.numero && item.ano ? `${item.siglaTipo} ${item.numero}/${item.ano}` : item.ementa || 'não identificada').join('; ')}
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}
@@ -1460,11 +1546,13 @@ export const PoliticoProfile = () => {
 
         {activeTab === 'despesas' && (
           <div className="space-y-4">
-            <SpendingChart
-              resumo={despesasResumo}
-              media={despesasMedia}
-              nomePolitico={politico.nome}
-            />
+            <Suspense fallback={<div className="rounded-2xl bg-white p-6 text-slate-500 dark:bg-slate-900">Carregando gráfico...</div>}>
+              <SpendingChart
+                resumo={despesasResumo}
+                media={despesasMedia}
+                nomePolitico={politico.nome}
+              />
+            </Suspense>
 
             <div className="rounded-2xl border border-slate-200 bg-white p-4 sm:p-5 dark:border-slate-700 dark:bg-slate-900">
               <div className="flex flex-col gap-4 md:flex-row md:items-end">
@@ -1645,13 +1733,17 @@ export const PoliticoProfile = () => {
         )}
       </div>
 
-      <EvaluationModal
-        isOpen={isModalOpen}
-        onClose={() => setIsModalOpen(false)}
-        politicoId={politico.id}
-        politicoName={politico.nome}
-        onEvaluationSaved={handleEvaluationSaved}
-      />
+      {isModalOpen && (
+        <Suspense fallback={null}>
+          <EvaluationModal
+            isOpen={isModalOpen}
+            onClose={() => setIsModalOpen(false)}
+            politicoId={politico.id}
+            politicoName={politico.nome}
+            onEvaluationSaved={handleEvaluationSaved}
+          />
+        </Suspense>
+      )}
     </div>
   );
 };

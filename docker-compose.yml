@@ -41,7 +41,8 @@ services:
       - .:/app
       - api_node_modules:/app/node_modules
     environment:
-      - RUN_PRISMA_MIGRATIONS=false
+      - RUN_PRISMA_MIGRATIONS=true
+      - ADMIN_API_TOKEN=${ADMIN_API_TOKEN:-change-me-local-admin-token}
       - HOST=0.0.0.0
       - PORT=4000
       - CHOKIDAR_USEPOLLING=true
@@ -60,6 +61,7 @@ services:
 
   db:
     image: postgres:16-alpine
+    command: ["postgres", "-c", "shared_preload_libraries=pg_stat_statements"]
     ports:
       - "5434:5432"
     environment:

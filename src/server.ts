@@ -1,14 +1,37 @@
 import 'dotenv/config';
 import {spawn} from 'node:child_process';
-import {appendFileSync, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, statSync} from 'node:fs';
+import {timingSafeEqual} from 'node:crypto';
+import {createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, statSync} from 'node:fs';
 import {join} from 'node:path';
-import express, {type Request, type Response} from 'express';
+import express, {type NextFunction, type Request, type Response} from 'express';
 import {Pool} from 'pg';
+import {getGroqModelValidationError} from './lib/aiSettings';
 import {hashCpf, isValidCpf, normalizeCpf, parseComentario, parseNota} from './lib/evaluationRules';
+
+type ApiDurationMetric = {requests: number; errors: number; durations: number[]};
+const apiDurationMetrics = new Map<string, ApiDurationMetric>();
 
 const app = express();
 app.disable('x-powered-by');
 app.use(express.json({limit: '1mb'}));
+app.use((req, res, next) => {
+  const startedAt = process.hrtime.bigint();
+  res.on('finish', () => {
+    const durationMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
+    const routePath = req.route?.path ? `${req.baseUrl}${String(req.route.path)}` : req.path;
+    const key = `${req.method} ${routePath}`;
+    const metric = apiDurationMetrics.get(key) ?? {requests: 0, errors: 0, durations: []};
+    metric.requests += 1;
+    if (res.statusCode >= 500) metric.errors += 1;
+    metric.durations.push(durationMs);
+    if (metric.durations.length > 500) metric.durations.shift();
+    apiDurationMetrics.set(key, metric);
+    if (durationMs >= 500) {
+      process.stdout.write(`[api-slow] ${req.method} ${req.path} ${res.statusCode} ${durationMs.toFixed(1)}ms\n`);
+    }
+  });
+  next();
+});
 
 const databaseUrl = process.env.DATABASE_URL?.trim();
 
@@ -23,7 +46,6 @@ const pool = databaseUrl
     });
 
 let isStartingIngestion = false;
-let appSettingsReady = false;
 let cachedAiSettings: AiSettings | null = null;
 let cachedAiSettingsAt = 0;
 
@@ -67,6 +89,46 @@ type ActivityEvent = {
 
 const sendJson = (res: Response, statusCode: number, body: unknown) => {
   res.status(statusCode).json(body);
+};
+
+const secureTextEquals = (left: string, right: string) => {
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
+};
+
+const requireAdminAuthorization = (req: Request, res: Response, next: NextFunction) => {
+  const expectedToken = process.env.ADMIN_API_TOKEN?.trim() ?? '';
+  if (!expectedToken) {
+    sendJson(res, 503, {error: 'ADMIN_API_TOKEN nao configurado no servidor.'});
+    return;
+  }
+
+  const authorization = req.header('authorization') ?? '';
+  const suppliedToken = authorization.startsWith('Bearer ') ? authorization.slice(7).trim() : '';
+  if (!suppliedToken || !secureTextEquals(suppliedToken, expectedToken)) {
+    sendJson(res, 401, {error: 'Acesso administrativo nao autorizado.'});
+    return;
+  }
+  next();
+};
+
+const evaluationWindows = new Map<string, {count: number; resetAt: number}>();
+const limitEvaluations = (req: Request, res: Response, next: NextFunction) => {
+  const now = Date.now();
+  const key = `${req.ip}:${req.params.politicoId}`;
+  const current = evaluationWindows.get(key);
+  const window = !current || current.resetAt <= now
+    ? {count: 0, resetAt: now + 60 * 60 * 1000}
+    : current;
+  if (window.count >= 10) {
+    res.setHeader('Retry-After', String(Math.max(1, Math.ceil((window.resetAt - now) / 1000))));
+    sendJson(res, 429, {error: 'Limite de avaliacoes excedido. Tente novamente mais tarde.'});
+    return;
+  }
+  window.count += 1;
+  evaluationWindows.set(key, window);
+  next();
 };
 
 const parseLimit = (req: Request) => {
@@ -117,109 +179,37 @@ const parseJsonStringArray = (value: unknown) => {
   }
 };
 
+const parseVoteLimit = (req: Request) => {
+  const raw = typeof req.query.limit === 'string' ? req.query.limit : undefined;
+  const num = raw != null && raw !== '' && Number.isFinite(Number(raw)) ? Number(raw) : 30;
+  return Math.max(1, Math.min(50, Math.trunc(num)));
+};
+
+type VoteCursor = {dataVotacao: string; votacaoId: string};
+
+const parseVoteCursor = (raw: unknown): VoteCursor | null => {
+  if (typeof raw !== 'string' || !raw.trim()) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8')) as Partial<VoteCursor>;
+    if (typeof parsed.dataVotacao !== 'string' || typeof parsed.votacaoId !== 'string') return null;
+    const date = new Date(parsed.dataVotacao);
+    if (Number.isNaN(date.getTime()) || !parsed.votacaoId.trim()) return null;
+    return {dataVotacao: date.toISOString(), votacaoId: parsed.votacaoId};
+  } catch {
+    return null;
+  }
+};
+
+const buildVoteCursor = (value: VoteCursor) =>
+  Buffer.from(JSON.stringify(value), 'utf8').toString('base64url');
+
 const normalizeText = (value: unknown) =>
   typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : '';
 
-const extractVoteSubjectReference = (value: unknown) => {
-  const text = normalizeText(value);
-  const patterns: Array<{regex: RegExp; type: string}> = [
-    {regex: /(?:Projeto\s+de\s+Lei|PL)\s*(?:n[ºo.]*)?\s*([\d.]+)\s*(?:\/|,\s*de\s*)(\d{4})/i, type: 'PL'},
-    {regex: /(?:Proposta\s+de\s+Emenda\s+(?:à|a)\s+Constitui[cç][aã]o|PEC)\s*(?:n[ºo.]*)?\s*([\d.]+)\s*(?:\/|,\s*de\s*)(\d{4})/i, type: 'PEC'},
-    {regex: /(?:Projeto\s+de\s+Lei\s+Complementar|PLP)\s*(?:n[ºo.]*)?\s*([\d.]+)\s*(?:\/|,\s*de\s*)(\d{4})/i, type: 'PLP'},
-    {regex: /(?:Medida\s+Provis[oó]ria|MPV?|MP)\s*(?:n[ºo.]*)?\s*([\d.]+)\s*(?:\/|,\s*de\s*)(\d{4})/i, type: 'MPV'},
-  ];
-
-  for (const pattern of patterns) {
-    const match = text.match(pattern.regex);
-    if (!match) continue;
-    const number = Number(match[1].replace(/\D/g, ''));
-    const year = Number(match[2]);
-    if (Number.isFinite(number) && Number.isFinite(year)) {
-      return {type: pattern.type, number, year};
-    }
-  }
-
-  return null;
-};
-
-const simplifyProposalTitle = (ementa: unknown, fallback: unknown) => {
-  const text = normalizeText(ementa) || normalizeText(fallback);
-  const lower = text.toLowerCase();
-
-  if (lower.includes('6x1') || (lower.includes('escala') && lower.includes('jornada'))) {
-    return 'Redução da jornada de trabalho e fim da escala 6x1';
-  }
-  if (lower.includes('conselho nacional de justiça') || lower.includes('cnj')) {
-    return 'Criação de cargos no Conselho Nacional de Justiça';
-  }
-  if (lower.includes('violência doméstica') || lower.includes('violencia domestica') || lower.includes('agressores')) {
-    return 'Monitoramento de agressores em casos de violência doméstica';
-  }
-  if (lower.includes('simples nacional')) return 'Mudanças no Simples Nacional';
-  if (lower.includes('alimentação escolar') || lower.includes('alimentacao escolar')) {
-    return 'Alimentação escolar nas escolas públicas';
-  }
-
-  const clean = text
-    .replace(/^disp[oõ]e\s+sobre\s+/i, '')
-    .replace(/^altera\s+(?:a\s+)?lei[^,]*,\s*para\s+/i, '')
-    .replace(/^institui\s+/i, '')
-    .replace(/^requer\s+(?:a\s+)?/i, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-
-  return clean.length > 140 ? `${clean.slice(0, 137).trim()}...` : clean || null;
-};
-
-const buildPlainVoteSummary = (title: string | null, ementa: unknown, decision: unknown) => {
-  const source = normalizeText(ementa);
-  const officialDecision = normalizeText(decision);
-  if (!title && !source) return null;
-
-  if (source && title && source.toLowerCase().includes(title.toLowerCase())) {
-    return source.length > 260 ? `${source.slice(0, 257).trim()}...` : source;
-  }
-
-  if (source) {
-    const sentence = source.length > 260 ? `${source.slice(0, 257).trim()}...` : source;
-    return sentence;
-  }
-
-  return officialDecision || null;
-};
-
-const writeActivityEvent = (event: Omit<ActivityEvent, 'timestamp' | 'source'> & {source?: ActivityEvent['source']}) => {
-  try {
-    const logsDir = join(process.cwd(), 'logs');
-    mkdirSync(logsDir, {recursive: true});
-    const payload: ActivityEvent = {
-      timestamp: new Date().toISOString(),
-      source: event.source ?? 'ai',
-      ...event,
-    };
-    appendFileSync(join(logsDir, 'activity-events.log'), `[event] ${JSON.stringify(payload)}\n`, 'utf8');
-  } catch {
-    // Eventos operacionais nao devem interromper a resposta principal.
-  }
-};
-
-const ensureAppSettingsTable = async () => {
-  if (appSettingsReady) return;
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS app_settings (
-      key TEXT PRIMARY KEY,
-      value TEXT NOT NULL,
-      updated_at TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
-  appSettingsReady = true;
-};
-
 const getSettingMap = async () => {
-  await ensureAppSettingsTable();
   const result = await pool.query<{key: string; value: string}>(
     'SELECT key, value FROM app_settings WHERE key = ANY($1::text[])',
-    [['groq_api_key', 'groq_model', 'groq_enabled']],
+    [['groq_model', 'groq_enabled']],
   );
   return new Map<string, string>(result.rows.map((row) => [row.key, row.value]));
 };
@@ -230,7 +220,7 @@ const getAiSettings = async (): Promise<AiSettings> => {
 
   const settings = await getSettingMap();
   cachedAiSettings = {
-    groqApiKey: settings.get('groq_api_key')?.trim() || process.env.GROQ_API_KEY?.trim() || '',
+    groqApiKey: process.env.GROQ_API_KEY?.trim() || '',
     groqModel: settings.get('groq_model')?.trim() || process.env.GROQ_MODEL?.trim() || 'llama-3.3-70b-versatile',
     enabled: settings.get('groq_enabled') !== 'false',
   };
@@ -239,7 +229,6 @@ const getAiSettings = async (): Promise<AiSettings> => {
 };
 
 const setAppSetting = async (key: string, value: string) => {
-  await ensureAppSettingsTable();
   await pool.query(
     `
     INSERT INTO app_settings (key, value, updated_at)
@@ -249,197 +238,6 @@ const setAppSetting = async (key: string, value: string) => {
     `,
     [key, value],
   );
-};
-
-const maskSecret = (value: string) => {
-  if (!value) return '';
-  if (value.length <= 8) return '********';
-  return `${value.slice(0, 4)}...${value.slice(-4)}`;
-};
-
-const parseGroqSummary = (content: unknown) => {
-  if (typeof content !== 'string') return null;
-  try {
-    const parsed = JSON.parse(content) as {titulo?: unknown; resumo?: unknown};
-    const titulo = normalizeText(parsed.titulo).slice(0, 120);
-    const resumo = normalizeText(parsed.resumo).slice(0, 260);
-    if (!titulo && !resumo) return null;
-    return {titulo: titulo || null, resumo: resumo || null};
-  } catch {
-    return null;
-  }
-};
-
-const buildAiVoteSummary = async (
-  officialTitle: string | null,
-  ementa: unknown,
-  decision: unknown,
-  resourceId?: string | null,
-) => {
-  const settings = await getAiSettings();
-  const source = normalizeText(ementa);
-  const officialDecision = normalizeText(decision);
-  if (!settings.enabled) {
-    writeActivityEvent({
-      stage: 'vote_ai_fallback',
-      label: 'IA desativada, usando resumo local',
-      source: 'ai',
-      dataset: 'votacoes',
-      resourceId,
-      reason: 'disabled',
-    });
-    return null;
-  }
-
-  if (!settings.groqApiKey) {
-    writeActivityEvent({
-      stage: 'vote_ai_fallback',
-      label: 'IA sem token configurado, usando resumo local',
-      source: 'ai',
-      dataset: 'votacoes',
-      resourceId,
-      reason: 'missing_token',
-    });
-    return null;
-  }
-
-  if (!source && !officialTitle && !officialDecision) return null;
-
-  writeActivityEvent({
-    stage: 'vote_ai_start',
-    label: 'IA refinando titulo da votacao',
-    source: 'ai',
-    dataset: 'votacoes',
-    resourceId,
-    model: settings.groqModel,
-  });
-
-  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${settings.groqApiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: settings.groqModel,
-      temperature: 0.1,
-      max_tokens: 180,
-      response_format: {type: 'json_object'},
-      messages: [
-        {
-          role: 'system',
-          content:
-            'Voce resume votacoes da Camara para cidadaos leigos. Responda apenas JSON com titulo e resumo. Titulo: ate 12 palavras, simples, sem juridiquês. Resumo: uma frase curta e clara.',
-        },
-        {
-          role: 'user',
-          content: JSON.stringify({
-            tituloOficial: officialTitle,
-            ementa: source,
-            decisaoTecnica: officialDecision,
-          }),
-        },
-      ],
-    }),
-  });
-
-  if (!response.ok) {
-    writeActivityEvent({
-      stage: 'vote_ai_fallback',
-      label: 'IA indisponivel, usando resumo local',
-      source: 'ai',
-      dataset: 'votacoes',
-      resourceId,
-      status: response.status,
-      reason: 'http_error',
-    });
-    return null;
-  }
-  const data = (await response.json()) as {choices?: Array<{message?: {content?: unknown}}>;};
-  const summary = parseGroqSummary(data.choices?.[0]?.message?.content);
-  if (!summary) {
-    writeActivityEvent({
-      stage: 'vote_ai_fallback',
-      label: 'IA retornou resposta invalida, usando resumo local',
-      source: 'ai',
-      dataset: 'votacoes',
-      resourceId,
-      reason: 'invalid_response',
-    });
-    return null;
-  }
-
-  writeActivityEvent({
-    stage: 'vote_ai_done',
-    label: 'Titulo refinado pela IA',
-    source: 'ai',
-    dataset: 'votacoes',
-    resourceId,
-    model: settings.groqModel,
-  });
-  return summary;
-};
-
-const getPublicVoteText = async (ementa: unknown, fallback: unknown, resourceId?: string | null) => {
-  const tituloLocal = simplifyProposalTitle(ementa, fallback);
-  const resumoLocal = buildPlainVoteSummary(tituloLocal, ementa, fallback);
-
-  try {
-    const ai = await buildAiVoteSummary(tituloLocal, ementa, fallback, resourceId);
-    if (ai?.titulo || ai?.resumo) {
-      return {
-        tituloPublico: ai.titulo || tituloLocal,
-        resumoLeigo: ai.resumo || resumoLocal,
-      };
-    }
-  } catch (error) {
-    writeActivityEvent({
-      stage: 'vote_ai_fallback',
-      label: 'IA indisponivel, usando resumo local',
-      source: 'ai',
-      dataset: 'votacoes',
-      resourceId,
-      error: error instanceof Error ? error.message : String(error),
-      reason: 'exception',
-    });
-    // A IA melhora a leitura, mas a tela nao deve depender dela para funcionar.
-  }
-
-  return {tituloPublico: tituloLocal, resumoLeigo: resumoLocal};
-};
-
-const ensureIngestionCheckpointTable = async () => {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS ingestion_checkpoints (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      source VARCHAR(50) NOT NULL,
-      dataset VARCHAR(50) NOT NULL,
-      entity_id TEXT NOT NULL DEFAULT '',
-      period_start DATE NOT NULL,
-      period_end DATE NOT NULL,
-      status VARCHAR(20) NOT NULL DEFAULT 'pending',
-      attempts INTEGER NOT NULL DEFAULT 0,
-      items_count INTEGER NOT NULL DEFAULT 0,
-      last_error TEXT,
-      locked_at TIMESTAMPTZ(6),
-      started_at TIMESTAMPTZ(6),
-      finished_at TIMESTAMPTZ(6),
-      created_at TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
-  await pool.query(`
-    CREATE UNIQUE INDEX IF NOT EXISTS ingestion_checkpoints_unique_window
-    ON ingestion_checkpoints(source, dataset, entity_id, period_start, period_end)
-  `);
-  await pool.query(`
-    CREATE INDEX IF NOT EXISTS idx_ingestion_checkpoints_running_lock
-    ON ingestion_checkpoints(source, status, locked_at)
-  `);
-  await pool.query(`
-    CREATE INDEX IF NOT EXISTS idx_ingestion_checkpoints_claim_queue
-    ON ingestion_checkpoints(source, dataset, status, attempts, period_start, entity_id)
-  `);
 };
 
 const parseIsoDateInput = (value: unknown, fallback: string) => {
@@ -757,7 +555,6 @@ const buildRecentTimeline = (events: ActivityEvent[]) =>
     .slice(0, 16);
 
 const loadActiveIngestionKeys = async (): Promise<Set<string>> => {
-  await ensureIngestionCheckpointTable();
   await releaseStaleIngestionCheckpoints();
 
   const result = await pool.query<{
@@ -1986,7 +1783,7 @@ app.get('/api/politicos/:politicoId', async (req, res) => {
   }
 });
 
-app.post('/api/politicos/:politicoId/avaliacoes', async (req, res) => {
+app.post('/api/politicos/:politicoId/avaliacoes', limitEvaluations, async (req, res) => {
   try {
     const {politicoId} = req.params;
     const cpf = normalizeCpf(req.body?.cpf);
@@ -2106,20 +1903,49 @@ app.get('/api/politicos/:politicoId/votacoes/anos', async (req, res) => {
 app.get('/api/politicos/:politicoId/votacoes', async (req, res) => {
   try {
     const {politicoId} = req.params;
-    const limit = parseLimit(req);
-    const offset = parseOffset(req);
+    const limit = parseVoteLimit(req);
     const ano = parseOptionalInt(req.query.ano);
+    const voteFilter = normalizeText(req.query.voto).slice(0, 50);
+    const typeFilter = normalizeText(req.query.tipoVotacao).toLowerCase().slice(0, 30);
+    const query = normalizeText(req.query.q).slice(0, 120);
+    const cursor = parseVoteCursor(req.query.cursor);
 
     const where: string[] = ['vd.politico_id::text = $1'];
     const params: Array<string | number> = [politicoId];
 
     if (ano != null) {
       params.push(ano);
-      where.push(`v.ano = $${params.length}`);
+      where.push(`COALESCE(v.ano, EXTRACT(YEAR FROM v.data_hora_votacao)::int) = $${params.length}`);
     }
 
-    params.push(limit);
-    params.push(offset);
+    if (voteFilter) {
+      params.push(voteFilter);
+      where.push(`vd.voto = $${params.length}`);
+    }
+
+    if (typeFilter) {
+      params.push(typeFilter);
+      where.push(`v.tipo_votacao = $${params.length}`);
+    }
+
+    if (query) {
+      params.push(`%${query}%`);
+      where.push(`(
+        v.titulo_publico ILIKE $${params.length}
+        OR v.ementa ILIKE $${params.length}
+        OR v.proposicao_objeto ILIKE $${params.length}
+      )`);
+    }
+
+    if (cursor) {
+      params.push(cursor.dataVotacao, cursor.votacaoId);
+      where.push(`(
+        COALESCE(v.data_hora_votacao, TIMESTAMPTZ '1970-01-01'),
+        v.id
+      ) < ($${params.length - 1}::timestamptz, $${params.length})`);
+    }
+
+    params.push(limit + 1);
 
     const result = await pool.query<{
       votoId: string;
@@ -2132,11 +1958,19 @@ app.get('/api/politicos/:politicoId/votacoes', async (req, res) => {
       resultado: string | null;
       proposicaoObjeto: string | null;
       uriProposicaoObjeto: string | null;
-      proposicaoId: string | null;
-      proposicaoSiglaTipo: string | null;
-      proposicaoNumero: number | null;
-      proposicaoAno: number | null;
-      proposicaoEmenta: string | null;
+      tipoVotacao: string;
+      ehSubvotacao: boolean;
+      tituloPublico: string;
+      resumoLeigo: string | null;
+      classificacaoFonte: string;
+      classificacaoConfianca: string;
+      classificacaoVersao: string;
+      classificacaoJustificativa: string | null;
+      proposicaoPrincipalId: string | null;
+      proposicaoPrincipalSiglaTipo: string | null;
+      proposicaoPrincipalNumero: number | null;
+      proposicaoPrincipalAno: number | null;
+      proposicaoPrincipalEmenta: string | null;
       dataVotacao: string | Date | null;
       voto: string;
     }>(
@@ -2152,90 +1986,147 @@ app.get('/api/politicos/:politicoId/votacoes', async (req, res) => {
         v.resultado,
         v.proposicao_objeto AS "proposicaoObjeto",
         v.uri_proposicao_objeto AS "uriProposicaoObjeto",
-        cp.id::text AS "proposicaoId",
-        cp.sigla_tipo AS "proposicaoSiglaTipo",
-        cp.numero AS "proposicaoNumero",
-        cp.ano AS "proposicaoAno",
-        cp.ementa AS "proposicaoEmenta",
+        v.tipo_votacao AS "tipoVotacao",
+        v.eh_subvotacao AS "ehSubvotacao",
+        v.titulo_publico AS "tituloPublico",
+        v.resumo_leigo AS "resumoLeigo",
+        v.classificacao_fonte AS "classificacaoFonte",
+        v.classificacao_confianca AS "classificacaoConfianca",
+        v.classificacao_versao AS "classificacaoVersao",
+        v.classificacao_justificativa AS "classificacaoJustificativa",
+        main_proposal.proposicao_id::text AS "proposicaoPrincipalId",
+        main_proposal.sigla_tipo AS "proposicaoPrincipalSiglaTipo",
+        main_proposal.numero AS "proposicaoPrincipalNumero",
+        main_proposal.ano AS "proposicaoPrincipalAno",
+        main_proposal.ementa AS "proposicaoPrincipalEmenta",
         v.data_hora_votacao AS "dataVotacao",
         vd.voto
       FROM votos_deputados vd
       JOIN votacoes v ON v.id = vd.votacao_id
-      LEFT JOIN camara_proposicoes cp ON cp.uri = v.uri_proposicao_objeto
-        OR cp.id::text = regexp_replace(COALESCE(v.uri_proposicao_objeto, ''), '^.*/', '')
-        OR cp.id::text = split_part(v.id, '-', 1)
+      LEFT JOIN LATERAL (
+        SELECT affected.proposicao_id, affected.sigla_tipo, affected.numero, affected.ano, affected.ementa
+        FROM votacao_proposicoes_afetadas affected
+        WHERE affected.votacao_id = v.id
+        ORDER BY
+          CASE WHEN affected.sigla_tipo IN ('PEC', 'PLP', 'PL', 'MPV', 'MP', 'PDL', 'PRC', 'PLV') THEN 0 ELSE 1 END,
+          affected.ordem
+        LIMIT 1
+      ) main_proposal ON true
       WHERE ${where.join(' AND ')}
-      ORDER BY v.data_hora_votacao DESC NULLS LAST
-      LIMIT $${params.length - 1}
-      OFFSET $${params.length}
+      ORDER BY COALESCE(v.data_hora_votacao, TIMESTAMPTZ '1970-01-01') DESC, v.id DESC
+      LIMIT $${params.length}
       `,
       params,
     );
 
-    const items = await Promise.all(
-      result.rows.map(async (row) => {
-        let proposal = {
-          id: row.proposicaoId,
-          siglaTipo: row.proposicaoSiglaTipo,
-          numero: row.proposicaoNumero,
-          ano: row.proposicaoAno,
-          ementa: row.proposicaoEmenta,
-        };
+    const hasMore = result.rows.length > limit;
+    const items = hasMore ? result.rows.slice(0, limit) : result.rows;
+    const lastItem = items.at(-1);
+    const nextCursor = hasMore && lastItem
+      ? buildVoteCursor({
+          dataVotacao: lastItem.dataVotacao
+            ? new Date(lastItem.dataVotacao).toISOString()
+            : new Date(0).toISOString(),
+          votacaoId: lastItem.votacaoId,
+        })
+      : null;
 
-        if (!proposal.ementa) {
-          const reference = extractVoteSubjectReference(row.ementa);
-          if (reference) {
-            const proposalResult = await pool.query<{
-              id: string;
-              siglaTipo: string | null;
-              numero: number | null;
-              ano: number | null;
-              ementa: string | null;
-            }>(
-              `
-              SELECT
-                id::text AS id,
-                sigla_tipo AS "siglaTipo",
-                numero,
-                ano,
-                ementa
-              FROM camara_proposicoes
-              WHERE sigla_tipo = $1
-                AND numero = $2
-                AND ano = $3
-              ORDER BY atualizado_em DESC NULLS LAST
-              LIMIT 1
-              `,
-              [reference.type, reference.number, reference.year],
-            );
-            if (proposalResult.rows[0]) {
-              proposal = proposalResult.rows[0];
-            }
-          }
-        }
-
-        const {tituloPublico, resumoLeigo} = await getPublicVoteText(
-          proposal.ementa,
-          row.ementa,
-          row.votacaoId,
-        );
-
-        return {
-          ...row,
-          proposicaoId: proposal.id,
-          proposicaoSiglaTipo: proposal.siglaTipo,
-          proposicaoNumero: proposal.numero,
-          proposicaoAno: proposal.ano,
-          proposicaoEmenta: proposal.ementa,
-          tituloPublico,
-          resumoLeigo,
-        };
-      }),
+    const metadata = await pool.query<{
+      anos: number[] | null;
+      tiposVotacao: string[] | null;
+      votos: string[] | null;
+    }>(
+      `
+      WITH available AS MATERIALIZED (
+        SELECT COALESCE(v.ano, EXTRACT(YEAR FROM v.data_hora_votacao)::int) AS ano, v.tipo_votacao, vd.voto
+        FROM votos_deputados vd
+        JOIN votacoes v ON v.id = vd.votacao_id
+        WHERE vd.politico_id::text = $1
+      )
+      SELECT
+        array_agg(DISTINCT ano ORDER BY ano DESC) FILTER (WHERE ano IS NOT NULL) AS anos,
+        array_agg(DISTINCT tipo_votacao ORDER BY tipo_votacao) FILTER (WHERE tipo_votacao IS NOT NULL) AS "tiposVotacao",
+        array_agg(DISTINCT voto ORDER BY voto) FILTER (WHERE voto IS NOT NULL) AS votos
+      FROM available
+      `,
+      [politicoId],
     );
 
-    sendJson(res, 200, {items});
+    sendJson(res, 200, {
+      items,
+      nextCursor,
+      meta: {
+        anos: metadata.rows[0]?.anos ?? [],
+        tiposVotacao: metadata.rows[0]?.tiposVotacao ?? [],
+        votos: metadata.rows[0]?.votos ?? [],
+      },
+    });
   } catch {
     sendJson(res, 500, {error: 'Erro ao processar requisição'});
+  }
+});
+
+app.get('/api/votacoes/:votacaoId', async (req, res) => {
+  try {
+    const {votacaoId} = req.params;
+    const result = await pool.query(
+      `
+      SELECT
+        v.id::text AS "votacaoId",
+        v.ementa AS "textoOficial",
+        v.resultado,
+        v.aprovacao,
+        v.proposicao_objeto AS "proposicaoObjeto",
+        v.uri_proposicao_objeto AS "uriProposicaoObjeto",
+        v.tipo_votacao AS "tipoVotacao",
+        v.eh_subvotacao AS "ehSubvotacao",
+        v.titulo_publico AS "tituloPublico",
+        v.resumo_leigo AS "resumoLeigo",
+        v.classificacao_fonte AS "classificacaoFonte",
+        v.classificacao_confianca AS "classificacaoConfianca",
+        v.classificacao_versao AS "classificacaoVersao",
+        v.classificacao_justificativa AS "classificacaoJustificativa",
+        v.data_hora_votacao AS "dataVotacao",
+        COALESCE((
+          SELECT jsonb_agg(jsonb_build_object(
+            'id', possible.proposicao_id::text,
+            'uri', possible.uri,
+            'siglaTipo', possible.sigla_tipo,
+            'numero', possible.numero,
+            'ano', possible.ano,
+            'ementa', possible.ementa
+          ) ORDER BY possible.ordem)
+          FROM votacao_objetos_possiveis possible
+          WHERE possible.votacao_id = v.id
+        ), '[]'::jsonb) AS "objetosPossiveis",
+        COALESCE((
+          SELECT jsonb_agg(jsonb_build_object(
+            'id', affected.proposicao_id::text,
+            'uri', affected.uri,
+            'siglaTipo', affected.sigla_tipo,
+            'numero', affected.numero,
+            'ano', affected.ano,
+            'ementa', affected.ementa,
+            'efeito', affected.efeito
+          ) ORDER BY affected.ordem)
+          FROM votacao_proposicoes_afetadas affected
+          WHERE affected.votacao_id = v.id
+        ), '[]'::jsonb) AS "proposicoesAfetadas"
+      FROM votacoes v
+      WHERE v.id = $1
+      LIMIT 1
+      `,
+      [votacaoId],
+    );
+
+    const votacao = result.rows[0];
+    if (!votacao) {
+      sendJson(res, 404, {error: 'Votação não encontrada.'});
+      return;
+    }
+    sendJson(res, 200, {votacao});
+  } catch {
+    sendJson(res, 500, {error: 'Erro ao carregar detalhes da votação.'});
   }
 });
 
@@ -2379,9 +2270,40 @@ app.get('/api/despesas/media', async (req, res) => {
   }
 });
 
+app.use('/api/admin', requireAdminAuthorization);
+
+app.get('/api/admin/metrics', async (_req, res) => {
+  try {
+    const database = await pool.query(
+      `
+      SELECT
+        (SELECT COUNT(*)::int FROM votacoes) AS votacoes,
+        (SELECT COUNT(*)::int FROM votacoes WHERE titulo_publico IS NOT NULL AND classificacao_fonte IS NOT NULL) AS votacoes_classificadas,
+        (SELECT COUNT(*)::int FROM votacoes WHERE ai_gerado_em IS NOT NULL) AS votacoes_enriquecidas_ia,
+        (SELECT COUNT(*)::int FROM ingestion_checkpoints WHERE status = 'running' AND locked_at < NOW() - INTERVAL '30 minutes') AS checkpoints_estagnados,
+        (SELECT COUNT(*)::int FROM votos_deputados_pendentes) AS votos_pendentes,
+        (SELECT COUNT(*)::bigint FROM camara_api_raw_items) AS raw_items,
+        pg_total_relation_size('camara_api_raw_items')::bigint AS raw_items_bytes
+      `,
+    );
+    const api = [...apiDurationMetrics.entries()].map(([route, metric]) => {
+      const sorted = [...metric.durations].sort((left, right) => left - right);
+      const p95Index = Math.max(0, Math.ceil(sorted.length * 0.95) - 1);
+      return {
+        route,
+        requests: metric.requests,
+        errors: metric.errors,
+        p95Ms: Number((sorted[p95Index] ?? 0).toFixed(1)),
+      };
+    });
+    sendJson(res, 200, {api, database: database.rows[0]});
+  } catch {
+    sendJson(res, 500, {error: 'Erro ao carregar metricas operacionais.'});
+  }
+});
+
 app.get('/api/admin/ingestion/summary', async (_req, res) => {
   try {
-    await ensureIngestionCheckpointTable();
     await releaseStaleIngestionCheckpoints();
 
     const checkpointResult = await pool.query(
@@ -2537,7 +2459,7 @@ app.get('/api/admin/settings/ai', async (_req, res) => {
       enabled: settings.enabled,
       groqModel: settings.groqModel,
       hasGroqApiKey: settings.groqApiKey.length > 0,
-      maskedGroqApiKey: maskSecret(settings.groqApiKey),
+      secretSource: 'environment',
     });
   } catch {
     sendJson(res, 500, {error: 'Erro ao carregar configuracoes de IA.'});
@@ -2548,13 +2470,13 @@ app.post('/api/admin/settings/ai', async (req, res) => {
   try {
     const enabled = req.body?.enabled !== false;
     const model = normalizeText(req.body?.groqModel) || 'llama-3.3-70b-versatile';
-    const apiKey = typeof req.body?.groqApiKey === 'string' ? req.body.groqApiKey.trim() : '';
-
+    const modelValidationError = getGroqModelValidationError(model);
+    if (modelValidationError) {
+      sendJson(res, 400, {error: modelValidationError});
+      return;
+    }
     await setAppSetting('groq_enabled', enabled ? 'true' : 'false');
     await setAppSetting('groq_model', model);
-    if (apiKey) {
-      await setAppSetting('groq_api_key', apiKey);
-    }
 
     cachedAiSettings = null;
     const settings = await getAiSettings();
@@ -2563,7 +2485,7 @@ app.post('/api/admin/settings/ai', async (req, res) => {
       enabled: settings.enabled,
       groqModel: settings.groqModel,
       hasGroqApiKey: settings.groqApiKey.length > 0,
-      maskedGroqApiKey: maskSecret(settings.groqApiKey),
+      secretSource: 'environment',
     });
   } catch {
     sendJson(res, 500, {error: 'Erro ao salvar configuracoes de IA.'});
@@ -2572,7 +2494,6 @@ app.post('/api/admin/settings/ai', async (req, res) => {
 
 app.post('/api/admin/ingestion/run', async (req, res) => {
   try {
-    await ensureIngestionCheckpointTable();
     await releaseStaleIngestionCheckpoints();
 
     if (isStartingIngestion) {
@@ -2674,7 +2595,6 @@ app.post('/api/admin/ingestion/run', async (req, res) => {
 
 app.post('/api/admin/ingestion/cancel', async (req, res) => {
   try {
-    await ensureIngestionCheckpointTable();
 
     const dataset = parseDatasetList(req.body?.dataset)[0] ?? null;
     const status = parseCheckpointStatus(req.body?.status);
@@ -2713,7 +2633,6 @@ app.post('/api/admin/ingestion/cancel', async (req, res) => {
 app.post('/api/admin/database/clear', async (req, res) => {
   const client = await pool.connect();
   try {
-    await ensureIngestionCheckpointTable();
 
     const dataset = parseCleanupDataset(req.body?.dataset);
     if (!dataset) {

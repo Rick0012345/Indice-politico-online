@@ -16,6 +16,7 @@ import {
   Trash2,
   XCircle,
 } from 'lucide-react';
+import {getGroqModelValidationError} from '../lib/aiSettings';
 import {cn} from '../lib/utils';
 
 type CheckpointSummary = {
@@ -74,7 +75,6 @@ type AiSettings = {
   enabled: boolean;
   groqModel: string;
   hasGroqApiKey: boolean;
-  maskedGroqApiKey: string;
 };
 
 const datasetOptions = [
@@ -281,6 +281,8 @@ const summarizeCheckpointProgress = (rows: CheckpointSummary[]) => {
 };
 
 export const Admin = () => {
+  const [adminToken, setAdminToken] = useState(() => window.sessionStorage.getItem('admin_api_token') ?? '');
+  const [adminTokenInput, setAdminTokenInput] = useState('');
   const [activeSection, setActiveSection] = useState<AdminSection>('coleta');
   const [from, setFrom] = useState('2016-01-01');
   const [to, setTo] = useState('2020-12-31');
@@ -311,16 +313,21 @@ export const Admin = () => {
     enabled: true,
     groqModel: 'llama-3.3-70b-versatile',
     hasGroqApiKey: false,
-    maskedGroqApiKey: '',
   });
-  const [groqApiKeyInput, setGroqApiKeyInput] = useState('');
   const [isSavingAi, setIsSavingAi] = useState(false);
+  const aiModelError = getGroqModelValidationError(aiSettings.groqModel);
   const refreshInFlightRef = useRef(false);
+
+  const adminFetch = useCallback((input: RequestInfo | URL, init: RequestInit = {}) => {
+    const headers = new Headers(init.headers);
+    headers.set('Authorization', `Bearer ${adminToken}`);
+    return fetch(input, {...init, headers});
+  }, [adminToken]);
 
   const loadSummary = useCallback(async () => {
     setIsLoading(true);
     try {
-      const response = await fetch('/api/admin/ingestion/summary');
+      const response = await adminFetch('/api/admin/ingestion/summary');
       if (!response.ok) throw new Error('Falha ao carregar resumo.');
       const data = await response.json();
       setCheckpoints(data.checkpoints ?? []);
@@ -331,11 +338,11 @@ export const Admin = () => {
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [adminFetch]);
 
   const loadLogs = useCallback(async () => {
     try {
-      const response = await fetch('/api/admin/ingestion/logs');
+      const response = await adminFetch('/api/admin/ingestion/logs');
       if (!response.ok) return;
       const data = await response.json();
       setLogFile(data.file ?? null);
@@ -347,37 +354,37 @@ export const Admin = () => {
     } catch {
       // Logs are auxiliary; keep the ingestion panel usable if this fails.
     }
-  }, []);
+  }, [adminFetch]);
 
   const loadAiSettings = useCallback(async () => {
     try {
-      const response = await fetch('/api/admin/settings/ai');
+      const response = await adminFetch('/api/admin/settings/ai');
       if (!response.ok) return;
       const data = await response.json();
       setAiSettings({
         enabled: data.enabled !== false,
         groqModel: data.groqModel || 'llama-3.3-70b-versatile',
         hasGroqApiKey: Boolean(data.hasGroqApiKey),
-        maskedGroqApiKey: data.maskedGroqApiKey || '',
       });
     } catch {
       // Configuracao auxiliar; a coleta deve continuar acessivel.
     }
-  }, []);
+  }, [adminFetch]);
 
   const refreshAdminData = useCallback(async () => {
     if (refreshInFlightRef.current) return;
     refreshInFlightRef.current = true;
     try {
-      await Promise.all([loadSummary(), loadLogs(), loadAiSettings()]);
+      await Promise.all([loadSummary(), loadLogs()]);
     } finally {
       refreshInFlightRef.current = false;
     }
-  }, [loadAiSettings, loadLogs, loadSummary]);
+  }, [loadLogs, loadSummary]);
 
   useEffect(() => {
-    void refreshAdminData();
-  }, [refreshAdminData]);
+    if (!adminToken) return;
+    void Promise.all([refreshAdminData(), loadAiSettings()]);
+  }, [adminToken, loadAiSettings, refreshAdminData]);
 
   const groupedCheckpoints = useMemo(() => {
     return datasetOptions.map((dataset) => {
@@ -447,7 +454,7 @@ export const Admin = () => {
 
     const timer = window.setInterval(() => {
       void refreshAdminData();
-    }, 1000);
+    }, 5000);
 
     return () => window.clearInterval(timer);
   }, [activeSection, checkpoints, isPolling, refreshAdminData]);
@@ -469,7 +476,7 @@ export const Admin = () => {
     setIsRunning(true);
     setMessage(null);
     try {
-      const response = await fetch('/api/admin/ingestion/run', {
+      const response = await adminFetch('/api/admin/ingestion/run', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({from, to, datasets: selectedDatasets}),
@@ -489,7 +496,7 @@ export const Admin = () => {
   const cancelCheckpointGroup = async (dataset: string, status: string) => {
     setMessage(null);
     try {
-      const response = await fetch('/api/admin/ingestion/cancel', {
+      const response = await adminFetch('/api/admin/ingestion/cancel', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({dataset, status}),
@@ -514,7 +521,7 @@ export const Admin = () => {
     setClearingDataset(dataset);
     setMessage(null);
     try {
-      const response = await fetch('/api/admin/database/clear', {
+      const response = await adminFetch('/api/admin/database/clear', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({dataset}),
@@ -531,16 +538,19 @@ export const Admin = () => {
   };
 
   const saveAiSettings = async () => {
+    if (aiModelError) {
+      setMessage(aiModelError);
+      return;
+    }
     setIsSavingAi(true);
     setMessage(null);
     try {
-      const response = await fetch('/api/admin/settings/ai', {
+      const response = await adminFetch('/api/admin/settings/ai', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({
           enabled: aiSettings.enabled,
           groqModel: aiSettings.groqModel,
-          groqApiKey: groqApiKeyInput,
         }),
       });
       const data = await response.json();
@@ -549,9 +559,7 @@ export const Admin = () => {
         enabled: data.enabled !== false,
         groqModel: data.groqModel || aiSettings.groqModel,
         hasGroqApiKey: Boolean(data.hasGroqApiKey),
-        maskedGroqApiKey: data.maskedGroqApiKey || '',
       });
-      setGroqApiKeyInput('');
       setMessage(data.message ?? 'Configuracoes de IA salvas.');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Erro ao salvar IA.');
@@ -559,6 +567,38 @@ export const Admin = () => {
       setIsSavingAi(false);
     }
   };
+
+  if (!adminToken) {
+    return (
+      <div className="min-h-screen bg-slate-50 px-4 py-16 dark:bg-slate-950">
+        <form
+          className="mx-auto max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-900"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const token = adminTokenInput.trim();
+            if (!token) return;
+            window.sessionStorage.setItem('admin_api_token', token);
+            setAdminToken(token);
+            setAdminTokenInput('');
+          }}
+        >
+          <h1 className="text-2xl font-black text-slate-900 dark:text-slate-50">Acesso administrativo</h1>
+          <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">Informe o token administrativo configurado no servidor.</p>
+          <input
+            type="password"
+            autoComplete="current-password"
+            value={adminTokenInput}
+            onChange={(event) => setAdminTokenInput(event.target.value)}
+            className="mt-5 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-50"
+            placeholder="Token administrativo"
+          />
+          <button type="submit" className="mt-4 w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-black text-white hover:bg-blue-700">
+            Entrar
+          </button>
+        </form>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen overflow-x-hidden bg-slate-50 py-8 dark:bg-slate-950">
@@ -581,6 +621,16 @@ export const Admin = () => {
           >
             <RefreshCw size={18} className={cn(isLoading && 'animate-spin')} />
             Atualizar
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              window.sessionStorage.removeItem('admin_api_token');
+              setAdminToken('');
+            }}
+            className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+          >
+            Sair
           </button>
         </div>
 
@@ -966,7 +1016,7 @@ export const Admin = () => {
                     </div>
                     <div className="inline-flex items-center gap-2 rounded-full bg-white px-3 py-1 text-xs font-black text-slate-500 ring-1 ring-slate-200 dark:bg-slate-900 dark:text-slate-300 dark:ring-slate-700">
                       <RefreshCw size={13} className={cn((isPolling || activeSection === 'logs') && 'animate-spin')} />
-                      Atualiza a cada 1s
+                      Atualiza a cada 5s
                     </div>
                   </div>
 
@@ -1084,30 +1134,47 @@ export const Admin = () => {
                 </label>
 
                 <label className="text-sm font-bold text-slate-700 dark:text-slate-200">
-                  Modelo Groq
+                  Nome do modelo Groq
                   <input
                     value={aiSettings.groqModel}
                     onChange={(event) => setAiSettings((current) => ({...current, groqModel: event.target.value}))}
                     placeholder="llama-3.3-70b-versatile"
-                    className="mt-2 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-50"
+                    spellCheck={false}
+                    aria-invalid={Boolean(aiModelError)}
+                    aria-describedby="groq-model-help"
+                    className={cn(
+                      'mt-2 w-full rounded-lg border bg-white px-3 py-2 text-sm text-slate-900 dark:bg-slate-950 dark:text-slate-50',
+                      aiModelError ? 'border-red-500' : 'border-slate-200 dark:border-slate-700',
+                    )}
                   />
+                  <span id="groq-model-help" className={cn('mt-2 block text-xs font-semibold', aiModelError ? 'text-red-600 dark:text-red-400' : 'text-slate-500 dark:text-slate-400')}>
+                    {aiModelError ?? 'Exemplo: llama-3.3-70b-versatile. Não cole uma chave gsk_ neste campo.'}
+                  </span>
                 </label>
 
-                <label className="text-sm font-bold text-slate-700 dark:text-slate-200">
-                  Token da Groq
-                  <input
-                    type="password"
-                    value={groqApiKeyInput}
-                    onChange={(event) => setGroqApiKeyInput(event.target.value)}
-                    placeholder={aiSettings.hasGroqApiKey ? aiSettings.maskedGroqApiKey : 'Cole o token da Groq'}
-                    className="mt-2 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-50"
-                  />
-                </label>
+                <div className={cn(
+                  'rounded-lg border px-3 py-3 text-sm font-bold',
+                  aiSettings.hasGroqApiKey
+                    ? 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300'
+                    : 'border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200',
+                )}>
+                  <div className="flex items-start gap-2">
+                    <AlertCircle size={18} className="mt-0.5 shrink-0" />
+                    <div>
+                      <p>Chave da Groq: {aiSettings.hasGroqApiKey ? 'configurada no servidor' : 'não configurada'}</p>
+                      {!aiSettings.hasGroqApiKey && (
+                        <p className="mt-2 text-xs font-semibold">
+                          Adicione <code>GROQ_API_KEY=sua_nova_chave</code> ao arquivo <code>.env</code> e recrie o serviço da API.
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </div>
 
                 <button
                   type="button"
                   onClick={saveAiSettings}
-                  disabled={isSavingAi || !aiSettings.groqModel.trim()}
+                  disabled={isSavingAi || Boolean(aiModelError)}
                   className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-3 text-sm font-black text-white transition hover:bg-blue-700 disabled:opacity-60"
                 >
                   <Settings size={18} />
@@ -1123,10 +1190,10 @@ export const Admin = () => {
                   Modelo recomendado: <span className="font-black text-slate-900 dark:text-slate-50">llama-3.3-70b-versatile</span>.
                 </p>
                 <p>
-                  A IA gera um titulo curto e um resumo em linguagem simples para cada votacao exibida. Se a Groq falhar, o sistema usa o resumo local automaticamente.
+                  A IA é opcional e executada fora da requisição pública. Ela só simplifica fatos previamente classificados e nunca escolhe o objeto real da votação.
                 </p>
                 <p>
-                  A chave fica salva no banco e aparece mascarada nesta tela.
+                  A chave é lida exclusivamente da variável de ambiente GROQ_API_KEY e nunca é salva no banco.
                 </p>
               </div>
             </div>

@@ -106,3 +106,8 @@
     animation: none;
   }
 }
+
+.vote-list-item {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 190px;
+}

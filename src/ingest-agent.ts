@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import {setTimeout as sleep} from 'node:timers/promises';
 import {Pool, type PoolClient} from 'pg';
+import {classifyVote, type VoteProposalCandidate} from './lib/voteClassification';
 
 type Dataset =
   | 'deputados'
@@ -34,6 +35,10 @@ type CliOptions = {
 type CamaraListResponse<T> = {
   dados?: T[];
   links?: Array<{rel?: string; href?: string}>;
+};
+
+type CamaraDetailResponse<T> = {
+  dados?: T;
 };
 
 type DeputySummary = {
@@ -118,7 +123,8 @@ type VoteSession = {
   dataHoraUltimaAberturaVotacao?: string;
   ultimaApresentacaoProposicao?: unknown;
   efeitosRegistrados?: unknown;
-  objetosPossiveis?: unknown;
+  objetosPossiveis?: VoteProposalCandidate[];
+  proposicoesAfetadas?: VoteProposalCandidate[];
   aprovacao?: number | string;
   resultado?: string;
 };
@@ -356,6 +362,66 @@ const textOrNull = (value: unknown) => {
 
 const jsonOrNull = (value: unknown) => (value == null ? null : JSON.stringify(value));
 
+type RawItemUpsert = {
+  resource: string;
+  resourceId: string;
+  endpoint: string;
+  rawJson: unknown;
+  parentResource?: string | null;
+  parentId?: string | null;
+  queryParams?: Record<string, unknown>;
+  linksJson?: unknown;
+};
+
+const upsertRawItems = async (items: RawItemUpsert[]) => {
+  if (items.length === 0) return;
+  const payload = items.map((item) => ({
+    resource: item.resource,
+    resource_id: item.resourceId,
+    parent_resource: item.parentResource ?? '',
+    parent_id: item.parentId ?? '',
+    endpoint: item.endpoint,
+    query_params: item.queryParams ?? {},
+    raw_json: item.rawJson,
+    links_json: item.linksJson ?? null,
+  }));
+  await pool.query(
+    `
+    INSERT INTO camara_api_raw_items (
+      resource, resource_id, parent_resource, parent_id, endpoint,
+      query_params, raw_json, links_json
+    )
+    SELECT
+      item.resource,
+      item.resource_id,
+      item.parent_resource,
+      item.parent_id,
+      item.endpoint,
+      item.query_params,
+      item.raw_json,
+      item.links_json
+    FROM jsonb_to_recordset($1::jsonb) AS item(
+      resource varchar(120),
+      resource_id text,
+      parent_resource varchar(120),
+      parent_id text,
+      endpoint text,
+      query_params jsonb,
+      raw_json jsonb,
+      links_json jsonb
+    )
+    ON CONFLICT (resource, resource_id, parent_resource, parent_id) DO UPDATE SET
+      endpoint = EXCLUDED.endpoint,
+      query_params = EXCLUDED.query_params,
+      raw_json = EXCLUDED.raw_json,
+      links_json = EXCLUDED.links_json,
+      fetched_at = CURRENT_TIMESTAMP,
+      updated_at = CURRENT_TIMESTAMP
+    `,
+    [JSON.stringify(payload)],
+  );
+};
+
 const upsertRawItem = async (
   resource: string,
   resourceId: string,
@@ -368,31 +434,7 @@ const upsertRawItem = async (
     linksJson?: unknown;
   } = {},
 ) => {
-  await pool.query(
-    `
-    INSERT INTO camara_api_raw_items (
-      resource, resource_id, parent_resource, parent_id, endpoint, query_params, raw_json, links_json
-    )
-    VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8::jsonb)
-    ON CONFLICT (resource, resource_id, parent_resource, parent_id) DO UPDATE SET
-      endpoint = EXCLUDED.endpoint,
-      query_params = EXCLUDED.query_params,
-      raw_json = EXCLUDED.raw_json,
-      links_json = EXCLUDED.links_json,
-      fetched_at = CURRENT_TIMESTAMP,
-      updated_at = CURRENT_TIMESTAMP
-    `,
-    [
-      resource,
-      resourceId,
-      options.parentResource ?? '',
-      options.parentId ?? '',
-      endpoint,
-      JSON.stringify(options.queryParams ?? {}),
-      JSON.stringify(rawJson),
-      options.linksJson == null ? null : JSON.stringify(options.linksJson),
-    ],
-  );
+  await upsertRawItems([{resource, resourceId, endpoint, rawJson, ...options}]);
 };
 
 const mapConcurrent = async <T>(
@@ -409,7 +451,9 @@ const mapConcurrent = async <T>(
       await handler(items[currentIndex]);
     }
   });
-  await Promise.all(workers);
+  const results = await Promise.allSettled(workers);
+  const rejected = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+  if (rejected) throw rejected.reason;
 };
 
 const jitter = (base: number) => Math.round(base * (0.8 + Math.random() * 0.4));
@@ -571,38 +615,25 @@ const fetchList = async <T>(
   }
 };
 
-const ensureCheckpointTable = async () => {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS ingestion_checkpoints (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      source VARCHAR(50) NOT NULL,
-      dataset VARCHAR(50) NOT NULL,
-      entity_id TEXT NOT NULL DEFAULT '',
-      period_start DATE NOT NULL,
-      period_end DATE NOT NULL,
-      status VARCHAR(20) NOT NULL DEFAULT 'pending',
-      attempts INTEGER NOT NULL DEFAULT 0,
-      items_count INTEGER NOT NULL DEFAULT 0,
-      last_error TEXT,
-      locked_at TIMESTAMPTZ(6),
-      started_at TIMESTAMPTZ(6),
-      finished_at TIMESTAMPTZ(6),
-      created_at TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
-  await pool.query(`
-    CREATE UNIQUE INDEX IF NOT EXISTS ingestion_checkpoints_unique_window
-    ON ingestion_checkpoints(source, dataset, entity_id, period_start, period_end)
-  `);
-  await pool.query(`
-    CREATE INDEX IF NOT EXISTS idx_ingestion_checkpoints_running_lock
-    ON ingestion_checkpoints(source, status, locked_at)
-  `);
-  await pool.query(`
-    CREATE INDEX IF NOT EXISTS idx_ingestion_checkpoints_claim_queue
-    ON ingestion_checkpoints(source, dataset, status, attempts, period_start, entity_id)
-  `);
+const fetchDetail = async <T>(path: string, options: FetchPagedOptions = {}) => {
+  const url = new URL(`${API_BASE}${path}`);
+  try {
+    writeEvent('api_fetch', 'Carregando detalhe da API da Camara', {
+      path,
+      url: url.toString(),
+    });
+    const data = await fetchJson<CamaraDetailResponse<T>>(url.toString());
+    return data.dados ?? null;
+  } catch (error) {
+    if (options.ignoreBadRequest && error instanceof HttpError && [400, 404, 405].includes(error.status)) {
+      options.onBadRequest?.(url.toString());
+      if (options.logBadRequest !== false) {
+        writeLog('warn', `[skip] API retornou ${error.status} para detalhe opcional: ${url.toString()}`);
+      }
+      return null;
+    }
+    throw error;
+  }
 };
 
 const seedCheckpoint = async (
@@ -647,7 +678,7 @@ const seedCheckpoint = async (
   );
 };
 
-const claimCheckpoint = async (dataset: Dataset, maxAttempts: number) => {
+const claimCheckpoint = async (dataset: Dataset, maxAttempts: number, from: string, to: string) => {
   const result = await pool.query<{
     id: string;
     entity_id: string;
@@ -669,13 +700,15 @@ const claimCheckpoint = async (dataset: Dataset, maxAttempts: number) => {
         AND dataset = $1
         AND status IN ('pending', 'failed')
         AND attempts < $2
+        AND period_start >= $3::date
+        AND period_end <= $4::date
       ORDER BY period_start ASC, entity_id ASC
       FOR UPDATE SKIP LOCKED
       LIMIT 1
     )
     RETURNING id, entity_id, period_start::text, period_end::text
     `,
-    [dataset, maxAttempts],
+    [dataset, maxAttempts, from, to],
   );
 
   return result.rows[0] ?? null;
@@ -728,6 +761,7 @@ const touchCheckpointProgress = async (id: string, itemsCount: number) => {
     `
     UPDATE ingestion_checkpoints
     SET items_count = $2,
+        locked_at = CURRENT_TIMESTAMP,
         updated_at = CURRENT_TIMESTAMP
     WHERE id = $1
       AND status = 'running'
@@ -965,56 +999,181 @@ const upsertExpenses = async (politicoId: string, year: number, month: number) =
   return expenses.length;
 };
 
+const validProposalCandidates = (value: VoteProposalCandidate[] | undefined) =>
+  (Array.isArray(value) ? value : []).filter((candidate) => numberOrNull(candidate.id) != null);
+
+const upsertVoteRelations = async (
+  voteSessionId: string,
+  possibleObjects: VoteProposalCandidate[],
+  affectedProposals: VoteProposalCandidate[],
+) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('DELETE FROM votacao_objetos_possiveis WHERE votacao_id = $1', [voteSessionId]);
+    await client.query('DELETE FROM votacao_proposicoes_afetadas WHERE votacao_id = $1', [voteSessionId]);
+
+    if (possibleObjects.length > 0) {
+      await client.query(
+        `
+        INSERT INTO votacao_objetos_possiveis (
+          votacao_id, proposicao_id, uri, sigla_tipo, numero, ano, ementa, ordem, raw_json, atualizado_em
+        )
+        SELECT $1, item.id, item.uri, item.sigla_tipo, item.numero, item.ano, item.ementa, item.ordem, item.raw_json, CURRENT_TIMESTAMP
+        FROM jsonb_to_recordset($2::jsonb) AS item(
+          id bigint, uri text, sigla_tipo varchar(30), numero integer, ano integer,
+          ementa text, ordem integer, raw_json jsonb
+        )
+        ON CONFLICT (votacao_id, proposicao_id) DO UPDATE SET
+          uri = EXCLUDED.uri,
+          sigla_tipo = EXCLUDED.sigla_tipo,
+          numero = EXCLUDED.numero,
+          ano = EXCLUDED.ano,
+          ementa = EXCLUDED.ementa,
+          ordem = EXCLUDED.ordem,
+          raw_json = EXCLUDED.raw_json,
+          atualizado_em = CURRENT_TIMESTAMP
+        `,
+        [
+          voteSessionId,
+          JSON.stringify(possibleObjects.map((candidate, ordem) => ({
+            id: numberOrNull(candidate.id),
+            uri: textOrNull(candidate.uri),
+            sigla_tipo: textOrNull(candidate.siglaTipo),
+            numero: numberOrNull(candidate.numero),
+            ano: numberOrNull(candidate.ano),
+            ementa: textOrNull(candidate.ementa),
+            ordem,
+            raw_json: candidate,
+          }))),
+        ],
+      );
+    }
+
+    if (affectedProposals.length > 0) {
+      await client.query(
+        `
+        INSERT INTO votacao_proposicoes_afetadas (
+          votacao_id, proposicao_id, uri, sigla_tipo, numero, ano, ementa, efeito, ordem, raw_json, atualizado_em
+        )
+        SELECT $1, item.id, item.uri, item.sigla_tipo, item.numero, item.ano, item.ementa, item.efeito, item.ordem, item.raw_json, CURRENT_TIMESTAMP
+        FROM jsonb_to_recordset($2::jsonb) AS item(
+          id bigint, uri text, sigla_tipo varchar(30), numero integer, ano integer,
+          ementa text, efeito text, ordem integer, raw_json jsonb
+        )
+        ON CONFLICT (votacao_id, proposicao_id) DO UPDATE SET
+          uri = EXCLUDED.uri,
+          sigla_tipo = EXCLUDED.sigla_tipo,
+          numero = EXCLUDED.numero,
+          ano = EXCLUDED.ano,
+          ementa = EXCLUDED.ementa,
+          efeito = EXCLUDED.efeito,
+          ordem = EXCLUDED.ordem,
+          raw_json = EXCLUDED.raw_json,
+          atualizado_em = CURRENT_TIMESTAMP
+        `,
+        [
+          voteSessionId,
+          JSON.stringify(affectedProposals.map((candidate, ordem) => ({
+            id: numberOrNull(candidate.id),
+            uri: textOrNull(candidate.uri),
+            sigla_tipo: textOrNull(candidate.siglaTipo),
+            numero: numberOrNull(candidate.numero),
+            ano: numberOrNull(candidate.ano),
+            ementa: textOrNull(candidate.ementa),
+            efeito: textOrNull(candidate.efeito),
+            ordem,
+            raw_json: candidate,
+          }))),
+        ],
+      );
+    }
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
 const upsertVoteSession = async (voteSession: VoteSession) => {
+  const possibleObjects = validProposalCandidates(voteSession.objetosPossiveis);
+  const affectedProposals = validProposalCandidates(voteSession.proposicoesAfetadas);
+  const classification = classifyVote({
+    votacaoId: voteSession.id,
+    descricao: voteSession.descricao,
+    proposicaoObjeto: voteSession.proposicaoObjeto,
+    uriProposicaoObjeto: voteSession.uriProposicaoObjeto,
+    objetosPossiveis: possibleObjects,
+    proposicoesAfetadas: affectedProposals,
+  });
+
   await pool.query(
     `
-    INSERT INTO votacoes (id, sigla_tipo, numero, ano, ementa, data_hora_votacao, resultado, aprovacao)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    INSERT INTO votacoes (
+      id, uri, sigla_tipo, numero, ano, ementa, data, data_hora_registro, data_hora_votacao,
+      sigla_orgao, uri_orgao, id_orgao, uri_evento, id_evento,
+      proposicao_objeto, uri_proposicao_objeto, resultado, aprovacao,
+      desc_ultima_abertura_votacao, data_hora_ultima_abertura_votacao,
+      ultima_apresentacao_proposicao_json, efeitos_registrados_json, objetos_possiveis_json,
+      tipo_votacao, eh_subvotacao, titulo_publico, resumo_leigo,
+      classificacao_fonte, classificacao_confianca, classificacao_versao,
+      classificacao_justificativa, ai_input_hash, raw_json
+    )
+    VALUES (
+      $1, $2, $3, $4, $5, $6, $7::date, $8::timestamptz, COALESCE($8::timestamptz, ($7::date)::timestamptz),
+      $9, $10, $11, $12, $13,
+      $14, $15, $16, $17,
+      $18, $19,
+      $20::jsonb, $21::jsonb, $22::jsonb,
+      $23, $24, $25, $26,
+      $27, $28, $29, $30, $31, $32::jsonb
+    )
     ON CONFLICT (id) DO UPDATE SET
+      uri = EXCLUDED.uri,
       sigla_tipo = EXCLUDED.sigla_tipo,
       numero = EXCLUDED.numero,
       ano = EXCLUDED.ano,
       ementa = EXCLUDED.ementa,
+      data = EXCLUDED.data,
+      data_hora_registro = EXCLUDED.data_hora_registro,
       data_hora_votacao = EXCLUDED.data_hora_votacao,
+      sigla_orgao = EXCLUDED.sigla_orgao,
+      uri_orgao = EXCLUDED.uri_orgao,
+      id_orgao = EXCLUDED.id_orgao,
+      uri_evento = EXCLUDED.uri_evento,
+      id_evento = EXCLUDED.id_evento,
+      proposicao_objeto = EXCLUDED.proposicao_objeto,
+      uri_proposicao_objeto = EXCLUDED.uri_proposicao_objeto,
       resultado = EXCLUDED.resultado,
-      aprovacao = EXCLUDED.aprovacao
-    `,
-    [
-      voteSession.id,
-      textOrNull(voteSession.siglaTipo),
-      numberOrNull(voteSession.numero),
-      numberOrNull(voteSession.ano),
-      textOrNull(voteSession.descricao),
-      textOrNull(voteSession.data),
-      textOrNull(voteSession.resultado),
-      numberOrNull(voteSession.aprovacao) ?? 0,
-    ],
-  );
-
-  await pool.query(
-    `
-    UPDATE votacoes
-    SET uri = $2,
-        data = $3,
-        data_hora_registro = $4,
-        sigla_orgao = $5,
-        uri_orgao = $6,
-        id_orgao = $7,
-        uri_evento = $8,
-        id_evento = $9,
-        proposicao_objeto = $10,
-        uri_proposicao_objeto = $11,
-        desc_ultima_abertura_votacao = $12,
-        data_hora_ultima_abertura_votacao = $13,
-        ultima_apresentacao_proposicao_json = $14::jsonb,
-        efeitos_registrados_json = $15::jsonb,
-        objetos_possiveis_json = $16::jsonb,
-        raw_json = $17::jsonb
-    WHERE id = $1
+      aprovacao = EXCLUDED.aprovacao,
+      desc_ultima_abertura_votacao = EXCLUDED.desc_ultima_abertura_votacao,
+      data_hora_ultima_abertura_votacao = EXCLUDED.data_hora_ultima_abertura_votacao,
+      ultima_apresentacao_proposicao_json = EXCLUDED.ultima_apresentacao_proposicao_json,
+      efeitos_registrados_json = EXCLUDED.efeitos_registrados_json,
+      objetos_possiveis_json = EXCLUDED.objetos_possiveis_json,
+      tipo_votacao = EXCLUDED.tipo_votacao,
+      eh_subvotacao = EXCLUDED.eh_subvotacao,
+      titulo_publico = EXCLUDED.titulo_publico,
+      resumo_leigo = EXCLUDED.resumo_leigo,
+      classificacao_fonte = EXCLUDED.classificacao_fonte,
+      classificacao_confianca = EXCLUDED.classificacao_confianca,
+      classificacao_versao = EXCLUDED.classificacao_versao,
+      classificacao_justificativa = EXCLUDED.classificacao_justificativa,
+      ai_model = CASE WHEN votacoes.ai_input_hash IS DISTINCT FROM EXCLUDED.ai_input_hash THEN NULL ELSE votacoes.ai_model END,
+      ai_prompt_versao = CASE WHEN votacoes.ai_input_hash IS DISTINCT FROM EXCLUDED.ai_input_hash THEN NULL ELSE votacoes.ai_prompt_versao END,
+      ai_gerado_em = CASE WHEN votacoes.ai_input_hash IS DISTINCT FROM EXCLUDED.ai_input_hash THEN NULL ELSE votacoes.ai_gerado_em END,
+      ai_input_hash = EXCLUDED.ai_input_hash,
+      raw_json = EXCLUDED.raw_json
     `,
     [
       voteSession.id,
       textOrNull(voteSession.uri),
+      textOrNull(voteSession.siglaTipo),
+      numberOrNull(voteSession.numero),
+      numberOrNull(voteSession.ano),
+      textOrNull(voteSession.descricao),
       textOrNull(voteSession.data),
       textOrNull(voteSession.dataHoraRegistro),
       textOrNull(voteSession.siglaOrgao),
@@ -1024,15 +1183,57 @@ const upsertVoteSession = async (voteSession: VoteSession) => {
       numberOrNull(voteSession.idEvento),
       textOrNull(voteSession.proposicaoObjeto),
       textOrNull(voteSession.uriProposicaoObjeto),
+      textOrNull(voteSession.resultado),
+      numberOrNull(voteSession.aprovacao) ?? 0,
       textOrNull(voteSession.descUltimaAberturaVotacao),
       textOrNull(voteSession.dataHoraUltimaAberturaVotacao),
       jsonOrNull(voteSession.ultimaApresentacaoProposicao),
       jsonOrNull(voteSession.efeitosRegistrados),
-      jsonOrNull(voteSession.objetosPossiveis),
+      JSON.stringify(possibleObjects),
+      classification.tipoVotacao,
+      classification.ehSubvotacao,
+      classification.tituloPublico,
+      classification.resumoLeigo,
+      classification.classificacaoFonte,
+      classification.classificacaoConfianca,
+      classification.classificacaoVersao,
+      classification.classificacaoJustificativa,
+      classification.inputHash,
       JSON.stringify(voteSession),
     ],
   );
+  await upsertVoteRelations(voteSession.id, possibleObjects, affectedProposals);
   await upsertRawItem('votacoes', voteSession.id, `/votacoes/${voteSession.id}`, voteSession);
+};
+
+const reconcilePendingVotes = async () => {
+  const result = await pool.query(
+    `
+    WITH ready AS (
+      SELECT pending.*
+      FROM votos_deputados_pendentes pending
+      JOIN politicos politician ON politician.id = pending.politico_id
+      JOIN votacoes vote_session ON vote_session.id = pending.votacao_id
+    ), upserted AS (
+      INSERT INTO votos_deputados (
+        votacao_id, politico_id, voto, data_hora_voto, deputado_json, raw_json
+      )
+      SELECT votacao_id, politico_id, voto, data_hora_voto, deputado_json, raw_json
+      FROM ready
+      ON CONFLICT (votacao_id, politico_id) DO UPDATE SET
+        voto = EXCLUDED.voto,
+        data_hora_voto = EXCLUDED.data_hora_voto,
+        deputado_json = EXCLUDED.deputado_json,
+        raw_json = EXCLUDED.raw_json
+      RETURNING votacao_id, politico_id
+    )
+    DELETE FROM votos_deputados_pendentes pending
+    USING upserted
+    WHERE pending.votacao_id = upserted.votacao_id
+      AND pending.politico_id = upserted.politico_id
+    `,
+  );
+  return result.rowCount ?? 0;
 };
 
 const upsertVotes = async (voteSessionId: string, votes: DeputyVote[]) => {
@@ -1057,8 +1258,17 @@ const upsertVotes = async (voteSessionId: string, votes: DeputyVote[]) => {
 
   if (validVotes.length === 0) return 0;
 
+  const politicianIds = validVotes.map((vote) => String(vote.politicoId));
+  const existingResult = await pool.query<{id: string}>(
+    'SELECT id::text AS id FROM politicos WHERE id = ANY($1::bigint[])',
+    [politicianIds],
+  );
+  const existingIds = new Set(existingResult.rows.map((row) => row.id));
+  const readyVotes = validVotes.filter((vote) => existingIds.has(String(vote.politicoId)));
+  const pendingVotes = validVotes.filter((vote) => !existingIds.has(String(vote.politicoId)));
+
   const values: Array<string | number> = [];
-  const placeholders = validVotes.map((vote, index) => {
+  const placeholders = readyVotes.map((vote, index) => {
     const offset = index * 6;
     values.push(
       voteSessionId,
@@ -1071,66 +1281,105 @@ const upsertVotes = async (voteSessionId: string, votes: DeputyVote[]) => {
     return `($${offset + 1}, $${offset + 2}, $${offset + 3}, NULLIF($${offset + 4}, '')::timestamptz, NULLIF($${offset + 5}, '')::jsonb, $${offset + 6}::jsonb)`;
   });
 
-  await pool.query(
-    `
-    INSERT INTO votos_deputados (votacao_id, politico_id, voto, data_hora_voto, deputado_json, raw_json)
-    VALUES ${placeholders.join(', ')}
-    ON CONFLICT (votacao_id, politico_id) DO UPDATE SET
-      voto = EXCLUDED.voto,
-      data_hora_voto = EXCLUDED.data_hora_voto,
-      deputado_json = EXCLUDED.deputado_json,
-      raw_json = EXCLUDED.raw_json
-    `,
-    values,
-  );
+  if (readyVotes.length > 0) {
+    await pool.query(
+      `
+      INSERT INTO votos_deputados (votacao_id, politico_id, voto, data_hora_voto, deputado_json, raw_json)
+      VALUES ${placeholders.join(', ')}
+      ON CONFLICT (votacao_id, politico_id) DO UPDATE SET
+        voto = EXCLUDED.voto,
+        data_hora_voto = EXCLUDED.data_hora_voto,
+        deputado_json = EXCLUDED.deputado_json,
+        raw_json = EXCLUDED.raw_json
+      `,
+      values,
+    );
+  }
 
-  await Promise.all(
-    validVotes.map((vote) =>
-      upsertRawItem(
-        'votacoes_votos',
-        `${voteSessionId}:${vote.politicoId}`,
-        `/votacoes/${voteSessionId}/votos`,
-        JSON.parse(vote.rawJson),
-        {parentResource: 'votacoes', parentId: voteSessionId},
-      ),
-    ),
-  );
-  return validVotes.length;
+  if (pendingVotes.length > 0) {
+    await pool.query(
+      `
+      INSERT INTO votos_deputados_pendentes (
+        votacao_id, politico_id, voto, data_hora_voto, deputado_json, raw_json, ultimo_erro, tentativas, atualizado_em
+      )
+      SELECT $1, item.politico_id, item.voto, item.data_hora_voto, item.deputado_json, item.raw_json,
+        'Deputado ainda não sincronizado.', 0, CURRENT_TIMESTAMP
+      FROM jsonb_to_recordset($2::jsonb) AS item(
+        politico_id bigint, voto varchar(50), data_hora_voto timestamptz, deputado_json jsonb, raw_json jsonb
+      )
+      ON CONFLICT (votacao_id, politico_id) DO UPDATE SET
+        voto = EXCLUDED.voto,
+        data_hora_voto = EXCLUDED.data_hora_voto,
+        deputado_json = EXCLUDED.deputado_json,
+        raw_json = EXCLUDED.raw_json,
+        ultimo_erro = EXCLUDED.ultimo_erro,
+        atualizado_em = CURRENT_TIMESTAMP
+      `,
+      [
+        voteSessionId,
+        JSON.stringify(pendingVotes.map((vote) => ({
+          politico_id: vote.politicoId,
+          voto: vote.voteType,
+          data_hora_voto: vote.dataHoraVoto,
+          deputado_json: vote.deputyJson == null ? null : JSON.parse(vote.deputyJson),
+          raw_json: JSON.parse(vote.rawJson),
+        }))),
+      ],
+    );
+  }
+
+  await upsertRawItems(validVotes.map((vote) => ({
+    resource: 'votacoes_votos',
+    resourceId: `${voteSessionId}:${vote.politicoId}`,
+    endpoint: `/votacoes/${voteSessionId}/votos`,
+    rawJson: JSON.parse(vote.rawJson),
+    parentResource: 'votacoes',
+    parentId: voteSessionId,
+  })));
+  return readyVotes.length + pendingVotes.length;
 };
 
 const upsertVoteOrientations = async (voteSessionId: string, orientations: RawItem[]) => {
-  for (const orientation of orientations) {
-    const siglaBancada =
+  const validOrientations = orientations.map((orientation) => ({
+    siglaBancada:
       textOrNull(orientation.siglaBancada) ??
       textOrNull(orientation.siglaPartido) ??
-      textOrNull(orientation.bancada);
-    if (!siglaBancada) continue;
+      textOrNull(orientation.bancada),
+    orientacao: textOrNull(orientation.orientacao) ?? textOrNull(orientation.voto),
+    rawJson: orientation,
+  })).filter((item): item is {siglaBancada: string; orientacao: string | null; rawJson: RawItem} => Boolean(item.siglaBancada));
 
+  if (validOrientations.length > 0) {
     await pool.query(
       `
       INSERT INTO camara_votacoes_orientacoes (votacao_id, sigla_bancada, orientacao, raw_json)
-      VALUES ($1, $2, $3, $4::jsonb)
+      SELECT $1, item.sigla_bancada, item.orientacao, item.raw_json
+      FROM jsonb_to_recordset($2::jsonb) AS item(sigla_bancada varchar(80), orientacao text, raw_json jsonb)
       ON CONFLICT (votacao_id, sigla_bancada) DO UPDATE SET
         orientacao = EXCLUDED.orientacao,
         raw_json = EXCLUDED.raw_json
       `,
       [
         voteSessionId,
-        siglaBancada,
-        textOrNull(orientation.orientacao) ?? textOrNull(orientation.voto),
-        JSON.stringify(orientation),
+        JSON.stringify(validOrientations.map((item) => ({
+          sigla_bancada: item.siglaBancada,
+          orientacao: item.orientacao,
+          raw_json: item.rawJson,
+        }))),
       ],
-    );
-    await upsertRawItem(
-      'votacoes_orientacoes',
-      `${voteSessionId}:${siglaBancada}`,
-      `/votacoes/${voteSessionId}/orientacoes`,
-      orientation,
-      {parentResource: 'votacoes', parentId: voteSessionId},
     );
   }
 
-  return orientations.length;
+  await upsertRawItems(validOrientations.map((item) => ({
+    resource: 'votacoes_orientacoes',
+    resourceId: `${voteSessionId}:${item.siglaBancada}`,
+    endpoint: `/votacoes/${voteSessionId}/orientacoes`,
+    rawJson: item.rawJson,
+    parentResource: 'votacoes',
+    parentId: voteSessionId,
+  })));
+
+  return validOrientations.length;
 };
 
 const ingestVoteWindow = async (start: string, end: string, checkpointId?: string) => {
@@ -1148,7 +1397,10 @@ const ingestVoteWindow = async (start: string, end: string, checkpointId?: strin
   let processed = 0;
   let voteRows = 0;
   let orientationRows = 0;
-  await mapConcurrent(voteSessions, 4, async (voteSession) => {
+  await mapConcurrent(voteSessions, 2, async (voteSessionSummary) => {
+    const voteSession =
+      await fetchDetail<VoteSession>(`/votacoes/${voteSessionSummary.id}`, {ignoreBadRequest: true})
+      ?? voteSessionSummary;
     writeEvent('db_write', 'Inserindo sessao de votacao no banco', {
       dataset: 'votacoes',
       periodStart: start,
@@ -1166,11 +1418,7 @@ const ingestVoteWindow = async (start: string, end: string, checkpointId?: strin
       progress: processed,
       total: voteSessions.length,
     });
-    const votes = await fetchList<DeputyVote>(
-      `/votacoes/${voteSession.id}/votos`,
-      {},
-      {ignoreBadRequest: true},
-    );
+    const votesPromise = fetchList<DeputyVote>(`/votacoes/${voteSession.id}/votos`, {}, {ignoreBadRequest: true});
     writeEvent('api_fetch', 'Buscando orientacoes de bancada da votacao', {
       dataset: 'votacoes',
       periodStart: start,
@@ -1179,11 +1427,8 @@ const ingestVoteWindow = async (start: string, end: string, checkpointId?: strin
       progress: processed,
       total: voteSessions.length,
     });
-    const orientations = await fetchList<RawItem>(
-      `/votacoes/${voteSession.id}/orientacoes`,
-      {},
-      {ignoreBadRequest: true},
-    );
+    const orientationsPromise = fetchList<RawItem>(`/votacoes/${voteSession.id}/orientacoes`, {}, {ignoreBadRequest: true});
+    const [votes, orientations] = await Promise.all([votesPromise, orientationsPromise]);
     writeEvent('db_write', 'Inserindo votos e orientacoes no banco', {
       dataset: 'votacoes',
       periodStart: start,
@@ -1797,7 +2042,7 @@ const runCheckpointWorkers = async (
 ) => {
   const worker = async () => {
     for (;;) {
-      const checkpoint = await claimCheckpoint(dataset, options.maxAttempts);
+      const checkpoint = await claimCheckpoint(dataset, options.maxAttempts, options.from, options.to);
       if (!checkpoint) return;
 
       try {
@@ -1929,7 +2174,6 @@ const seedWindowCheckpoints = async (dataset: Dataset, options: CliOptions) => {
 
 const run = async () => {
   const options = parseArgs();
-  await ensureCheckpointTable();
   await releaseStaleCheckpoints(options.staleMinutes);
 
   writeLog(
@@ -1946,6 +2190,15 @@ const run = async () => {
     await seedDeputyCheckpoints(options);
     await runCheckpointWorkers('deputados', options, async (checkpoint) =>
       ingestDeputiesForLegislature(Number(checkpoint.entity_id)),
+    );
+    const reconciled = await reconcilePendingVotes();
+    if (reconciled > 0) writeLog('log', `[reconcile] ${reconciled} voto(s) pendente(s) incorporado(s)`);
+  }
+
+  if (options.datasets.includes('proposicoes')) {
+    await seedWindowCheckpoints('proposicoes', options);
+    await runCheckpointWorkers('proposicoes', options, async (checkpoint) =>
+      ingestProposalsWindow(checkpoint.period_start, checkpoint.period_end, checkpoint.id),
     );
   }
 
@@ -1966,6 +2219,8 @@ const run = async () => {
     await runCheckpointWorkers('votacoes', options, async (checkpoint) =>
       ingestVoteWindow(checkpoint.period_start, checkpoint.period_end, checkpoint.id),
     );
+    const reconciled = await reconcilePendingVotes();
+    if (reconciled > 0) writeLog('log', `[reconcile] ${reconciled} voto(s) pendente(s) incorporado(s)`);
   }
 
   if (options.datasets.includes('legislaturas')) {
@@ -2008,13 +2263,6 @@ const run = async () => {
     await seedSingleCheckpoint('frentes', options);
     await runCheckpointWorkers('frentes', options, async () =>
       ingestPagedResource('frentes', '/frentes', {}, upsertFront),
-    );
-  }
-
-  if (options.datasets.includes('proposicoes')) {
-    await seedWindowCheckpoints('proposicoes', options);
-    await runCheckpointWorkers('proposicoes', options, async (checkpoint) =>
-      ingestProposalsWindow(checkpoint.period_start, checkpoint.period_end, checkpoint.id),
     );
   }
 

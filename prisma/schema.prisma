@@ -74,11 +74,60 @@ model Votacao {
   ultimaApresentacaoProposicaoJson Json? @map("ultima_apresentacao_proposicao_json")
   efeitosRegistradosJson Json? @map("efeitos_registrados_json")
   objetosPossiveisJson Json? @map("objetos_possiveis_json")
+  tipoVotacao     String    @map("tipo_votacao") @db.VarChar(30)
+  ehSubvotacao    Boolean   @map("eh_subvotacao")
+  tituloPublico   String    @map("titulo_publico") @db.Text
+  resumoLeigo     String?   @map("resumo_leigo") @db.Text
+  classificacaoFonte String  @map("classificacao_fonte") @db.VarChar(30)
+  classificacaoConfianca String @map("classificacao_confianca") @db.VarChar(20)
+  classificacaoVersao String @map("classificacao_versao") @db.VarChar(40)
+  classificacaoJustificativa String? @map("classificacao_justificativa") @db.Text
+  aiInputHash     String?   @map("ai_input_hash") @db.VarChar(64)
+  aiModel         String?   @map("ai_model") @db.VarChar(120)
+  aiPromptVersao  String?   @map("ai_prompt_versao") @db.VarChar(40)
+  aiGeradoEm      DateTime? @map("ai_gerado_em") @db.Timestamptz(6)
   rawJson         Json?     @map("raw_json")
 
   votos VotoDeputado[]
+  objetosPossiveis VotacaoObjetoPossivel[]
+  proposicoesAfetadas VotacaoProposicaoAfetada[]
 
   @@map("votacoes")
+}
+
+model VotacaoObjetoPossivel {
+  votacaoId    String   @map("votacao_id")
+  proposicaoId BigInt   @map("proposicao_id") @db.BigInt
+  uri           String?  @db.Text
+  siglaTipo     String?  @map("sigla_tipo") @db.VarChar(30)
+  numero        Int?
+  ano           Int?
+  ementa        String?  @db.Text
+  ordem         Int      @default(0)
+  rawJson       Json     @map("raw_json")
+  atualizadoEm  DateTime @default(now()) @map("atualizado_em") @db.Timestamptz(6)
+  votacao       Votacao  @relation(fields: [votacaoId], references: [id], onDelete: Cascade)
+
+  @@id([votacaoId, proposicaoId])
+  @@map("votacao_objetos_possiveis")
+}
+
+model VotacaoProposicaoAfetada {
+  votacaoId    String   @map("votacao_id")
+  proposicaoId BigInt   @map("proposicao_id") @db.BigInt
+  uri           String?  @db.Text
+  siglaTipo     String?  @map("sigla_tipo") @db.VarChar(30)
+  numero        Int?
+  ano           Int?
+  ementa        String?  @db.Text
+  efeito        String?  @db.Text
+  ordem         Int      @default(0)
+  rawJson       Json     @map("raw_json")
+  atualizadoEm  DateTime @default(now()) @map("atualizado_em") @db.Timestamptz(6)
+  votacao       Votacao  @relation(fields: [votacaoId], references: [id], onDelete: Cascade)
+
+  @@id([votacaoId, proposicaoId])
+  @@map("votacao_proposicoes_afetadas")
 }
 
 model VotoDeputado {
