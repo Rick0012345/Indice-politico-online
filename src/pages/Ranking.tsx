@@ -1,7 +1,8 @@
-import React, {useCallback, useEffect, useMemo, useState} from 'react';
+import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {BarChart3, ChevronRight, Landmark, Search, Star, TrendingDown, TrendingUp, Users} from 'lucide-react';
 import {Link} from 'react-router-dom';
 import {cn} from '../lib/utils';
+import {catalogConnectionLabels, useCatalogUpdates} from '../hooks/useCatalogUpdates';
 import {
   getPoliticoStatusClasses,
   getPoliticoStatusLabel,
@@ -141,6 +142,12 @@ export const Ranking = () => {
   const [hasMoreRankingItems, setHasMoreRankingItems] = useState(false);
   const [isLoadingRanking, setIsLoadingRanking] = useState(false);
   const [isLoadingPartidos, setIsLoadingPartidos] = useState(false);
+  const [lastSuccess, setLastSuccess] = useState<Date | null>(null);
+  const reloadPartidos = useRef<(() => Promise<void>) | null>(null);
+  const partidosOperation = useRef<Promise<void> | null>(null);
+  const visibleCount = useRef(0);
+  visibleCount.current = items.length;
+  const currentOperation = useRef<Promise<void> | null>(null);
 
   const money = useMemo(
     () =>
@@ -155,39 +162,86 @@ export const Ranking = () => {
   const selectedCargo = cargo === 'Todos' || cargo === 'Todos os Cargos' ? '' : cargo;
   const isUnsupportedCargo = Boolean(selectedCargo && selectedCargo !== 'Deputado Federal');
   const rankingSearch = search.trim();
+  const [error, setError] = useState('');
+  const [partidosError, setPartidosError] = useState('');
+  const contextKey = JSON.stringify([metric, direction, cargo, status, rankingSearch, activeView]);
+  const context = useRef(contextKey);
+  context.current = contextKey;
+  const pendingPage = useRef<AbortController | null>(null);
+  useEffect(() => () => { pendingPage.current?.abort(); pendingPage.current = null; }, [contextKey]);
 
   const loadRankingPage = useCallback(
-    async (offset: number, signal?: AbortSignal) => {
+    async (offset: number, signal?: AbortSignal, prefixSize = RANKING_PAGE_SIZE) => {
+      if (pendingPage.current) return;
+      const key = contextKey;
+      const controller = new AbortController();
+      pendingPage.current = controller;
+      const externalSignal = signal;
+      const abort = () => controller.abort();
+      externalSignal?.addEventListener('abort', abort, {once: true});
+      if (externalSignal?.aborted) controller.abort();
+      signal = controller.signal;
+      setError('');
+      try {
       const params = new URLSearchParams({
         metric,
         direction,
-        limit: String(RANKING_PAGE_SIZE + 1),
+        limit: String(Math.min(prefixSize + 1, 2000)),
         offset: String(offset),
         status,
       });
 
       if (rankingSearch) params.set('search', rankingSearch);
 
-      const response = await fetch(`/api/politicos/ranking?${params.toString()}`, {signal});
-      if (!response.ok) return;
-
-      const data = (await response.json()) as {items?: PoliticoRankingItem[]};
-      const nextItems = (data.items ?? []).map((p) => ({
+      const collected: PoliticoRankingItem[] = [];
+      while (collected.length < prefixSize + 1) {
+        const limit = Math.min(prefixSize + 1 - collected.length, 2000);
+        params.set('limit', String(limit));
+        params.set('offset', String(offset + collected.length));
+        const response = await fetch(`/api/politicos/ranking?${params.toString()}`, {signal});
+        if (!response.ok) throw new Error('HTTP');
+        const data = (await response.json()) as {items?: PoliticoRankingItem[]};
+        const page = data.items ?? [];
+        collected.push(...page);
+        if (page.length < limit || signal.aborted || context.current !== key) break;
+      }
+      if (signal?.aborted || context.current !== key) return;
+      const nextItems = collected.map((p) => ({
         ...p,
         foto: p.foto || `https://picsum.photos/seed/${p.id}/400/400`,
       }));
-      const visibleItems = nextItems.slice(0, RANKING_PAGE_SIZE);
+      const visibleItems = nextItems.slice(0, prefixSize);
 
-      setHasMoreRankingItems(nextItems.length > RANKING_PAGE_SIZE);
+      setHasMoreRankingItems(nextItems.length > prefixSize);
+      setLastSuccess(new Date());
+      // Keep the committed extent available before React flushes the next render.
+      visibleCount.current = offset === 0 ? visibleItems.length : offset + visibleItems.length;
       setItems((current) => {
         if (offset === 0) return visibleItems;
 
         const seen = new Set(current.map((item) => item.id));
         return [...current, ...visibleItems.filter((item) => !seen.has(item.id))];
       });
+      } catch {
+        if (!signal?.aborted && context.current === key) setError('Não foi possível carregar o ranking. Tente novamente.');
+      } finally {
+        externalSignal?.removeEventListener('abort', abort);
+        if (pendingPage.current === controller) pendingPage.current = null;
+      }
     },
-    [direction, metric, rankingSearch, status],
+    [contextKey, direction, metric, rankingSearch, status],
   );
+
+  const catalogConnection = useCatalogUpdates(async () => {
+    const key = contextKey;
+    await Promise.all([currentOperation.current, partidosOperation.current]);
+    if (context.current !== key || isUnsupportedCargo) return;
+    setIsLoadingRanking(true);
+    const operation = loadRankingPage(0, undefined, Math.max(RANKING_PAGE_SIZE, visibleCount.current));
+    currentOperation.current = operation;
+    try { await Promise.all([operation, reloadPartidos.current?.()]); }
+    finally { if (context.current === key) setIsLoadingRanking(false); }
+  });
 
   useEffect(() => {
     const controller = new AbortController();
@@ -196,6 +250,7 @@ export const Ranking = () => {
       if (isUnsupportedCargo) {
         setItems([]);
         setHasMoreRankingItems(false);
+        setIsLoadingRanking(false);
         return;
       }
 
@@ -204,10 +259,12 @@ export const Ranking = () => {
       setHasMoreRankingItems(false);
 
       try {
-        await loadRankingPage(0, controller.signal);
+        const operation = loadRankingPage(0, controller.signal);
+        currentOperation.current = operation;
+        await operation;
       } catch {
       } finally {
-        setIsLoadingRanking(false);
+        if (!controller.signal.aborted) setIsLoadingRanking(false);
       }
     };
 
@@ -225,6 +282,7 @@ export const Ranking = () => {
       }
 
       setIsLoadingPartidos(true);
+      setPartidosError('');
 
       try {
         const params = new URLSearchParams({
@@ -237,9 +295,10 @@ export const Ranking = () => {
           signal: controller.signal,
         });
 
-        if (!response.ok) return;
+        if (!response.ok) throw new Error('HTTP');
 
         const data = (await response.json()) as {items?: PartidoGastosItem[]};
+        if (controller.signal.aborted) return;
         setPartidos(
           (data.items ?? []).filter(
             (p): p is PartidoGastosItem =>
@@ -249,13 +308,16 @@ export const Ranking = () => {
           ),
         );
       } catch {
+        if (!controller.signal.aborted) setPartidosError('Não foi possível carregar os gastos dos partidos. Tente novamente.');
       } finally {
-        setIsLoadingPartidos(false);
+        if (!controller.signal.aborted) setIsLoadingPartidos(false);
       }
     };
 
-    run();
-    return () => controller.abort();
+    const reload = () => { const operation = run(); partidosOperation.current = operation; return operation; };
+    reloadPartidos.current = reload;
+    void reload();
+    return () => { controller.abort(); reloadPartidos.current = null; };
   }, [direction, isUnsupportedCargo, status]);
 
   const filteredItems = items;
@@ -316,12 +378,17 @@ export const Ranking = () => {
   ];
 
   return (
-    <div className="mx-auto max-w-7xl px-4 py-12 sm:px-6 lg:px-8">
+    <div className="mx-auto max-w-7xl px-4 py-12 sm:px-6 lg:px-8" style={{overflowAnchor: 'none'}}>
+      {(activeView === 'parlamentares' ? error : partidosError) && <p role="alert" className="mb-4 rounded-xl bg-rose-50 p-4 text-rose-800">{activeView === 'parlamentares' ? error : partidosError}</p>}
       <div className="mb-8 max-w-3xl">
         <div className="mb-3 text-xs font-black uppercase text-blue-600 dark:text-blue-400">
           Comparação pública
         </div>
         <h1 className="text-4xl font-extrabold text-slate-900 dark:text-slate-50">Ranking de transparência</h1>
+        <p aria-live="polite" className="mt-3 text-xs text-slate-500 dark:text-slate-400">
+          {catalogConnectionLabels[catalogConnection]}
+          {lastSuccess && ` · Última consulta bem-sucedida às ${lastSuccess.toLocaleTimeString('pt-BR')}`}
+        </p>
         <p className="mt-4 text-lg leading-8 text-slate-600 dark:text-slate-400">
           Compare parlamentares e partidos por nota popular, gastos declarados e participação em votações.
           O ranking atual usa <strong>{activeMetric.description}</strong>, do{' '}
@@ -497,9 +564,9 @@ export const Ranking = () => {
           </div>
 
           <div className="px-4 py-6 sm:px-6">
-            {isLoadingPartidos ? (
+            {isLoadingPartidos && partidos.length === 0 ? (
               <div className="text-sm font-medium text-slate-500 dark:text-slate-400">Carregando...</div>
-            ) : filteredPartidos.length === 0 ? (
+            ) : partidosError && partidos.length === 0 ? null : filteredPartidos.length === 0 ? (
               <div className="rounded-2xl border border-dashed border-slate-300 px-6 py-10 text-center text-sm font-medium text-slate-500 dark:border-slate-700 dark:text-slate-400">
                 Nenhum partido encontrado para os filtros atuais.
               </div>
@@ -555,7 +622,7 @@ export const Ranking = () => {
             <div className="px-6 py-10 text-center text-sm font-medium text-slate-500 dark:text-slate-400">
               Carregando ranking...
             </div>
-          ) : filteredItems.length === 0 ? (
+          ) : error ? null : filteredItems.length === 0 ? (
             <div className="px-6 py-10 text-center">
               <div className="text-base font-black text-slate-900 dark:text-slate-50">
                 Nenhum parlamentar encontrado com esse filtro.
@@ -708,11 +775,15 @@ export const Ranking = () => {
                     type="button"
                     disabled={isLoadingRanking}
                     onClick={async () => {
+                      if (pendingPage.current) return;
+                      const key = contextKey;
                       setIsLoadingRanking(true);
                       try {
-                        await loadRankingPage(items.length);
+                        const operation = loadRankingPage(items.length);
+                        currentOperation.current = operation;
+                        await operation;
                       } finally {
-                        setIsLoadingRanking(false);
+                        if (context.current === key) setIsLoadingRanking(false);
                       }
                     }}
                     className="rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-black text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"

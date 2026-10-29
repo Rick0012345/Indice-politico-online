@@ -20,8 +20,8 @@ export const Methodology = () => {
             <h2 className="text-2xl font-bold text-slate-900 dark:text-slate-50">Fontes de Dados</h2>
           </div>
           <p className="text-slate-600 leading-relaxed dark:text-slate-400">
-            Todos os dados brutos apresentados no Catálogo Político são extraídos diretamente das APIs oficiais do Governo Federal, especificamente do <strong>Portal da Transparência</strong>, da <strong>Câmara dos Deputados</strong> e do <strong>Senado Federal</strong>.
-            Atualizamos nossa base de dados diariamente para garantir que você tenha acesso às informações mais recentes sobre votações e despesas.
+            A fonte implementada para os registros parlamentares é a API de Dados Abertos da <strong>Câmara dos Deputados</strong>.
+            A atualização depende da execução da importação e da disponibilidade da fonte. Os dados exibidos refletem o conteúdo importado, sem garantia de atualização diária.
           </p>
         </section>
 
@@ -36,7 +36,7 @@ export const Methodology = () => {
             <div className="rounded-2xl border border-slate-200 p-6 bg-white dark:border-slate-700 dark:bg-slate-900">
               <h3 className="font-bold text-slate-900 mb-2 dark:text-slate-50">Voto Popular (1-5 Estrelas)</h3>
               <p className="text-sm text-slate-500 dark:text-slate-400">
-                A nota principal exibida no perfil é a média das avaliações feitas pelos usuários autenticados. Utilizamos o sistema Gov.br para garantir que cada CPF possa votar apenas uma vez em cada político, evitando bots e manipulações.
+                A nota principal exibida no perfil é a média das avaliações registradas. O CPF digitado é convertido em hash para limitar duplicatas por político; uma nova avaliação com o mesmo CPF substitui a anterior. Esse mecanismo não autentica a identidade da pessoa e não utiliza login Gov.br.
               </p>
             </div>
             <div className="rounded-2xl border border-slate-200 p-6 bg-white dark:border-slate-700 dark:bg-slate-900">
@@ -56,11 +56,11 @@ export const Methodology = () => {
           <ul className="space-y-4">
             <li className="flex gap-3">
               <CheckCircle2 className="text-blue-400 shrink-0 dark:text-blue-600" size={20} />
-              <p className="text-slate-300 text-sm dark:text-slate-700"><strong>Autenticação Obrigatória:</strong> Nenhuma avaliação é aceita sem login via Gov.br.</p>
+              <p className="text-slate-300 text-sm dark:text-slate-700"><strong>Limite de identidade:</strong> Informar um CPF válido não comprova que ele pertence à pessoa que avalia.</p>
             </li>
             <li className="flex gap-3">
               <CheckCircle2 className="text-blue-400 shrink-0 dark:text-blue-600" size={20} />
-              <p className="text-slate-300 text-sm dark:text-slate-700"><strong>Proteção de Dados:</strong> Seguimos rigorosamente a LGPD. O seu CPF é usado apenas para validação do voto e nunca é exibido ou compartilhado.</p>
+              <p className="text-slate-300 text-sm dark:text-slate-700"><strong>Tratamento do CPF:</strong> O CPF digitado é convertido em hash e não é exibido publicamente. O hash permite reconhecer avaliações repetidas para o mesmo político.</p>
             </li>
             <li className="flex gap-3">
               <CheckCircle2 className="text-blue-400 shrink-0 dark:text-blue-600" size={20} />

@@ -305,6 +305,8 @@ export const Admin = () => {
   const [message, setMessage] = useState<string | null>(null);
   const [logFile, setLogFile] = useState<string | null>(null);
   const [logText, setLogText] = useState('');
+  const [logsTruncated, setLogsTruncated] = useState(false);
+  const [logsError, setLogsError] = useState('');
   const [logStats, setLogStats] = useState<LogStats>(() => defaultLogStats());
   const [logEvents, setLogEvents] = useState<LogEvent[]>([]);
   const [currentStatus, setCurrentStatus] = useState<LogEvent[]>([]);
@@ -342,17 +344,19 @@ export const Admin = () => {
 
   const loadLogs = useCallback(async () => {
     try {
+      setLogsError('');
       const response = await adminFetch('/api/admin/ingestion/logs');
-      if (!response.ok) return;
+      if (!response.ok) throw new Error('HTTP');
       const data = await response.json();
       setLogFile(data.file ?? null);
       setLogText(data.log ?? '');
+      setLogsTruncated(data.truncated === true);
       setLogStats(data.stats ?? defaultLogStats());
       setLogEvents(Array.isArray(data.events) ? data.events : []);
       setCurrentStatus(Array.isArray(data.currentStatus) ? data.currentStatus : []);
       setLogTimeline(Array.isArray(data.timeline) ? data.timeline : []);
     } catch {
-      // Logs are auxiliary; keep the ingestion panel usable if this fails.
+      setLogsError('Não foi possível carregar os eventos recentes da ingestão. Tente atualizar os logs.');
     }
   }, [adminFetch]);
 
@@ -903,7 +907,7 @@ export const Admin = () => {
               <div className="flex items-center justify-between gap-3 border-b border-slate-200 p-5 dark:border-slate-700">
                 <div className="flex items-center gap-2">
                   <ScrollText size={20} className="text-blue-600 dark:text-blue-400" />
-                  <h2 className="text-lg font-black text-slate-900 dark:text-slate-50">Logs da ingestao</h2>
+                  <h2 className="text-lg font-black text-slate-900 dark:text-slate-50">Logs recentes da ingestão</h2>
                 </div>
                 <button
                   type="button"
@@ -916,6 +920,8 @@ export const Admin = () => {
                 </button>
               </div>
               <div className="p-5">
+                {logsError && <p role="alert" className="mb-4 text-sm text-rose-700 dark:text-rose-400">{logsError}</p>}
+                <p className="mb-4 text-sm text-slate-600 dark:text-slate-400">As métricas e a linha do tempo representam os eventos recentes disponíveis nos logs.{logsTruncated ? ' A leitura foi limitada aos últimos 512 KB por arquivo; eventos anteriores não estão incluídos.' : ' Este painel não representa um histórico completo.'}</p>
                 <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
                   <div className="rounded-lg bg-slate-50 p-3 dark:bg-slate-950">
                     <div className="flex items-center gap-2 text-xs font-black uppercase text-slate-500 dark:text-slate-400">

@@ -1,11 +1,13 @@
 import 'dotenv/config';
 import {setTimeout as sleep} from 'node:timers/promises';
 import {Pool} from 'pg';
+import {runIngestion} from './lib/ingestionLifecycle';
+import {resolveGroqSettings} from './lib/groqSettings';
 import {parseAndValidateVoteAiResponse} from './lib/voteAiContract';
 
 const PROMPT_VERSION = 'vote-summary-2026-07-14.1';
-const apiKey = process.env.GROQ_API_KEY?.trim() ?? '';
-const model = process.env.GROQ_MODEL?.trim() || 'llama-3.3-70b-versatile';
+let apiKey = '';
+let model = '';
 const concurrency = Math.max(1, Math.min(2, Number(process.env.VOTE_AI_CONCURRENCY ?? 2) || 2));
 const timeoutMs = Math.max(3000, Math.min(30000, Number(process.env.VOTE_AI_TIMEOUT_MS ?? 15000) || 15000));
 const batchLimit = Math.max(1, Math.min(5000, Number(process.env.VOTE_AI_LIMIT ?? 500) || 500));
@@ -111,7 +113,13 @@ const requestSummaryOncePerHash = (row: VoteAiRow) => {
 };
 
 const run = async () => {
-  if (!apiKey) {
+  const settings = await pool.query<{key: string; value: string}>(
+    'SELECT key, value FROM app_settings WHERE key = ANY($1::text[])', [['groq_enabled', 'groq_model']],
+  );
+  const config = resolveGroqSettings(new Map(settings.rows.map((row) => [row.key, row.value])));
+  apiKey = config.groqApiKey;
+  model = config.groqModel;
+  if (!config.enabled || !apiKey) {
     console.log('[vote-ai] GROQ_API_KEY não configurada; enriquecimento opcional ignorado.');
     return;
   }
@@ -171,11 +179,13 @@ const run = async () => {
     }
   };
 
-  await Promise.all(Array.from({length: concurrency}, worker));
+  const workers = await Promise.allSettled(Array.from({length: concurrency}, worker));
+  const failure = workers.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+  if (failure) throw failure.reason;
   console.log(`[vote-ai] ${enriched}/${result.rows.length} votação(ões) enriquecida(s); cacheHits=${cacheHits}; http429=${rateLimitResponses}; circuitOpen=${circuitOpen}`);
 };
 
-run()
+runIngestion(pool, false, run)
   .catch((error) => {
     console.error(error instanceof Error ? error.stack ?? error.message : String(error));
     process.exitCode = 1;

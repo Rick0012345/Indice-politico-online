@@ -4,6 +4,8 @@ import {defineConfig} from 'vitest/config';
 export default defineConfig({
   plugins: [react()],
   test: {
+    // Integration suites exercise the same database-wide maintenance lock.
+    fileParallelism: false,
     environment: 'jsdom',
     globals: true,
     setupFiles: ['./src/test/setup.ts'],

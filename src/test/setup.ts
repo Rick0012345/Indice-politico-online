@@ -7,11 +7,13 @@ afterEach(() => {
   cleanup();
   vi.clearAllMocks();
   vi.useRealTimers();
-  localStorage.clear();
-  document.documentElement.className = '';
+  if (typeof window !== 'undefined') {
+    localStorage.clear();
+    document.documentElement.className = '';
+  }
 });
 
-Object.defineProperty(window, 'matchMedia', {
+if (typeof window !== 'undefined') Object.defineProperty(window, 'matchMedia', {
   writable: true,
   value: vi.fn().mockImplementation((query: string) => ({
     matches: false,

@@ -1,4 +1,4 @@
-import React, {Suspense, lazy, useEffect, useMemo, useState} from 'react';
+import React, {Suspense, lazy, useEffect, useMemo, useRef, useState} from 'react';
 import { useParams, Link } from 'react-router-dom';
 import {
   Star,
@@ -184,15 +184,13 @@ const ResponsiveExpenseCard: React.FC<{
   despesa: DespesaItem;
   currencyFormatter: Intl.NumberFormat;
 }> = ({despesa, currencyFormatter}) => {
-  const data = new Date(
-    `${despesa.ano}-${String(despesa.mes).padStart(2, '0')}-01`,
-  ).toLocaleDateString('pt-BR');
+  const data = `${String(despesa.mes).padStart(2, '0')}/${despesa.ano}`;
 
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900">
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
-          <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">Data</div>
+          <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">Competência</div>
           <div className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-50">{data}</div>
         </div>
         <div className="text-right">
@@ -263,6 +261,35 @@ export const PoliticoProfile = () => {
   const [votacaoDetails, setVotacaoDetails] = useState<Record<string, VotacaoDetail>>({});
   const [loadingVotacaoDetailId, setLoadingVotacaoDetailId] = useState<string | null>(null);
   const [despesasOffset, setDespesasOffset] = useState(0);
+  const [despesasQuantidade, setDespesasQuantidade] = useState<number | null>(null);
+  const [despesasTotal, setDespesasTotal] = useState<number | null>(null);
+  const [despesasOpcoesTipo, setDespesasOpcoesTipo] = useState<string[]>([]);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [atuacaoLoaded, setAtuacaoLoaded] = useState(false);
+  const contextKey = JSON.stringify([id, activeTab, despesasFiltro, votacoesFiltro]);
+  const context = useRef(contextKey);
+  context.current = contextKey;
+  const pages = useRef<{despesas?: AbortController; votacoes?: AbortController}>({});
+  useEffect(() => {
+    setIsLoadingMoreDespesas(false);
+    setIsLoadingMoreVotacoes(false);
+    pages.current = {};
+    return () => { pages.current.despesas?.abort(); pages.current.votacoes?.abort(); };
+  }, [contextKey]);
+  useEffect(() => {
+    setAtuacao({orgaos: [], eventos: [], frentes: [], profissoes: [], ocupacoes: [], proposicoes: []});
+    setAtuacaoLoaded(false);
+    setIsModalOpen(false);
+    setErrors({});
+    setExpandedVotoId(null);
+    setVotacaoDetails({});
+  }, [id]);
+  const reportError = (area: string, message: string) => setErrors(current => ({...current, [area]: message}));
+  const expenseParams = (offset: number) => {
+    const params = new URLSearchParams({limit: '200', offset: String(offset)});
+    (Object.entries(despesasFiltro) as [string, string][]).forEach(([key, value]) => { if (value.trim()) params.set(key, key === 'tipo' ? value.trim() : value.trim().replace(',', '.')); });
+    return params;
+  };
   const [votacoesHasMore, setVotacoesHasMore] = useState(false);
   const [despesasHasMore, setDespesasHasMore] = useState(false);
   const [votacoesAnosDisponiveis, setVotacoesAnosDisponiveis] = useState<number[]>([]);
@@ -403,6 +430,7 @@ export const PoliticoProfile = () => {
     if (!politicoId) return;
 
     const controller = new AbortController();
+    setPolitico(null);
     setIsLoadingPolitico(true);
 
     const run = async () => {
@@ -412,6 +440,7 @@ export const PoliticoProfile = () => {
         });
         if (politicoRes.ok) {
           const data = (await politicoRes.json()) as {politico?: PoliticoDetail};
+          if (controller.signal.aborted) return;
           if (data.politico) {
             setPolitico({
               ...data.politico,
@@ -426,12 +455,12 @@ export const PoliticoProfile = () => {
             setPolitico(null);
           }
         } else {
-          setPolitico(null);
+          if (!controller.signal.aborted) { setPolitico(null); if (politicoRes.status !== 404) reportError('perfil', 'Não foi possível carregar o perfil. Tente novamente.'); }
         }
       } catch {
-        setPolitico(null);
+        if (!controller.signal.aborted) { setPolitico(null); reportError('perfil', 'Não foi possível carregar o perfil. Tente novamente.'); }
       } finally {
-        setIsLoadingPolitico(false);
+        if (!controller.signal.aborted) setIsLoadingPolitico(false);
       }
     };
 
@@ -442,6 +471,8 @@ export const PoliticoProfile = () => {
   useEffect(() => {
     const politicoId = id?.trim();
     if (!politicoId || activeTab !== 'despesas') return;
+    reportError('anos', '');
+    reportError('grafico', '');
 
     const controller = new AbortController();
 
@@ -465,12 +496,12 @@ export const PoliticoProfile = () => {
 
         if (despesasAnosRes.ok) {
           const data = (await despesasAnosRes.json()) as {items?: unknown[]};
-          setDespesasAnosDisponiveis(normalizarAnos(data.items));
+          if (!controller.signal.aborted) setDespesasAnosDisponiveis(normalizarAnos(data.items));
         } else {
-          setDespesasAnosDisponiveis([]);
+          if (!controller.signal.aborted) reportError('anos', 'Não foi possível carregar os anos disponíveis.');
         }
       } catch {
-        setDespesasAnosDisponiveis([]);
+        if (!controller.signal.aborted) reportError('anos', 'Não foi possível carregar os anos disponíveis.');
       }
     };
 
@@ -487,6 +518,7 @@ export const PoliticoProfile = () => {
     const ano = votacoesFiltro.ano ? Number(votacoesFiltro.ano) : null;
 
     setIsLoadingVotacoes(true);
+    reportError('votacoes', '');
     setVotacoes([]);
     setVotacoesNextCursor(null);
     setVotacoesHasMore(false);
@@ -504,16 +536,14 @@ export const PoliticoProfile = () => {
           `/api/politicos/${encodeURIComponent(politicoId)}/votacoes?${params.toString()}`,
           {signal: controller.signal},
         );
-        if (!res.ok) {
-          setVotacoes([]);
-          return;
-        }
+        if (!res.ok) throw new Error('HTTP');
 
         const data = (await res.json()) as {
           items?: VotacaoItem[];
           nextCursor?: string | null;
           meta?: {anos?: number[]; tiposVotacao?: string[]; votos?: string[]};
         };
+        if (controller.signal.aborted) return;
         const items = data.items ?? [];
         setVotacoes(items);
         setVotacoesNextCursor(data.nextCursor ?? null);
@@ -522,9 +552,9 @@ export const PoliticoProfile = () => {
         setVotacoesTiposDisponiveis(data.meta?.tiposVotacao ?? []);
         setVotacoesVotosDisponiveis(data.meta?.votos ?? []);
       } catch {
-        setVotacoes([]);
+        if (!controller.signal.aborted) { setVotacoes([]); reportError('votacoes', 'Não foi possível carregar votações. Tente novamente.'); }
       } finally {
-        setIsLoadingVotacoes(false);
+        if (!controller.signal.aborted) setIsLoadingVotacoes(false);
       }
     };
 
@@ -540,52 +570,43 @@ export const PoliticoProfile = () => {
     if (!politicoId || activeTab !== 'despesas') return;
 
     const controller = new AbortController();
-    const pageSize = 200;
-    const ano = despesasFiltro.ano ? Number(despesasFiltro.ano) : null;
-    const mes = despesasFiltro.mes ? Number(despesasFiltro.mes) : null;
-
     setIsLoadingDespesas(true);
     setDespesas([]);
     setDespesasOffset(0);
     setDespesasHasMore(false);
-
+    setDespesasTotal(null);
+    setDespesasQuantidade(null);
+    reportError('despesas', '');
     const run = async () => {
       try {
-        const params = new URLSearchParams();
-        params.set('limit', String(pageSize));
-        params.set('offset', '0');
-        if (ano != null && Number.isFinite(ano)) params.set('ano', String(ano));
-        if (mes != null && Number.isFinite(mes)) params.set('mes', String(mes));
-
-        const res = await fetch(
-          `/api/politicos/${encodeURIComponent(politicoId)}/despesas?${params.toString()}`,
-          {signal: controller.signal},
-        );
-        if (!res.ok) {
-          setDespesas([]);
-          return;
-        }
-
-        const data = (await res.json()) as {items?: DespesaItem[]};
-        const items = data.items ?? [];
-        setDespesas(items);
-        setDespesasHasMore(items.length === pageSize);
+        const res = await fetch(`/api/politicos/${encodeURIComponent(politicoId)}/despesas?${expenseParams(0)}`, {signal: controller.signal});
+        if (!res.ok) throw new Error('HTTP');
+        const data = await res.json();
+        if (controller.signal.aborted) return;
+        setDespesas(data.items ?? []);
+        setDespesasOffset((data.items ?? []).length);
+        setDespesasHasMore(data.hasMore === true);
+        setDespesasTotal(data.totalValor);
+        setDespesasQuantidade(data.total);
+        setDespesasOpcoesTipo(data.tiposDisponiveis ?? []);
       } catch {
-        setDespesas([]);
+        if (!controller.signal.aborted) reportError('despesas', 'Não foi possível carregar despesas. Tente novamente.');
       } finally {
-        setIsLoadingDespesas(false);
+        if (!controller.signal.aborted) setIsLoadingDespesas(false);
       }
     };
-
-    run();
-    return () => controller.abort();
-  }, [activeTab, id, despesasFiltro.ano, despesasFiltro.mes]);
+    const timer = window.setTimeout(run, 250);
+    return () => { window.clearTimeout(timer); controller.abort(); };
+  }, [activeTab, id, despesasFiltro.ano, despesasFiltro.mes, despesasFiltro.tipo, despesasFiltro.valorMin, despesasFiltro.valorMax]);
 
   useEffect(() => {
     const politicoId = id?.trim();
     if (!politicoId || activeTab !== 'despesas') return;
 
     const controller = new AbortController();
+    setDespesasResumo([]);
+    setDespesasMedia([]);
+    reportError('grafico', '');
     const ano = despesasFiltro.ano ? Number(despesasFiltro.ano) : null;
 
     const run = async () => {
@@ -605,20 +626,19 @@ export const PoliticoProfile = () => {
 
         if (resumoRes.ok) {
           const data = (await resumoRes.json()) as {items?: {ano: number; mes: number; total: number}[]};
-          setDespesasResumo(data.items ?? []);
+          if (!controller.signal.aborted) setDespesasResumo(data.items ?? []);
         } else {
-          setDespesasResumo([]);
+          if (!controller.signal.aborted) reportError('grafico', 'Não foi possível carregar o gráfico comparativo.');
         }
 
         if (mediaRes.ok) {
           const data = (await mediaRes.json()) as {items?: {ano: number; mes: number; media: number}[]};
-          setDespesasMedia(data.items ?? []);
+          if (!controller.signal.aborted) setDespesasMedia(data.items ?? []);
         } else {
-          setDespesasMedia([]);
+          if (!controller.signal.aborted) reportError('grafico', 'Não foi possível carregar o gráfico comparativo.');
         }
       } catch {
-        setDespesasResumo([]);
-        setDespesasMedia([]);
+        if (!controller.signal.aborted) reportError('grafico', 'Não foi possível carregar o gráfico comparativo.');
       }
     };
 
@@ -632,14 +652,17 @@ export const PoliticoProfile = () => {
 
     const controller = new AbortController();
     setIsLoadingAtuacao(true);
+    reportError('atuacao', '');
 
     const run = async () => {
       try {
         const response = await fetch(`/api/politicos/${encodeURIComponent(politicoId)}/atuacao`, {
           signal: controller.signal,
         });
-        if (!response.ok) return;
+        if (!response.ok) throw new Error('HTTP');
         const data = (await response.json()) as Partial<AtuacaoData>;
+        if (controller.signal.aborted) return;
+        setAtuacaoLoaded(true);
         setAtuacao({
           orgaos: Array.isArray(data.orgaos) ? data.orgaos : [],
           eventos: Array.isArray(data.eventos) ? data.eventos : [],
@@ -649,9 +672,9 @@ export const PoliticoProfile = () => {
           proposicoes: Array.isArray(data.proposicoes) ? data.proposicoes : [],
         });
       } catch {
-        setAtuacao({orgaos: [], eventos: [], frentes: [], profissoes: [], ocupacoes: [], proposicoes: []});
+        if (!controller.signal.aborted) { setAtuacaoLoaded(false); reportError('atuacao', 'Não foi possível carregar a atuação. Tente novamente.'); }
       } finally {
-        setIsLoadingAtuacao(false);
+        if (!controller.signal.aborted) setIsLoadingAtuacao(false);
       }
     };
 
@@ -668,13 +691,17 @@ export const PoliticoProfile = () => {
     setExpandedVotoId(votacao.votoId);
     if (votacaoDetails[votacao.votacaoId]) return;
 
+    const key = contextKey;
     setLoadingVotacaoDetailId(votacao.votacaoId);
     try {
       const response = await fetch(`/api/votacoes/${encodeURIComponent(votacao.votacaoId)}`);
-      if (!response.ok) return;
+      if (!response.ok) throw new Error('HTTP');
       const payload = (await response.json()) as {votacao: VotacaoDetail};
+      if (context.current !== key) return;
       const detail = payload.votacao;
       setVotacaoDetails((current) => ({...current, [votacao.votacaoId]: detail}));
+    } catch {
+      if (context.current === key) reportError('votacoes', 'Não foi possível carregar detalhes da votação. Tente novamente.');
     } finally {
       setLoadingVotacaoDetailId((current) => current === votacao.votacaoId ? null : current);
     }
@@ -697,7 +724,11 @@ export const PoliticoProfile = () => {
   const loadMoreVotacoes = async () => {
     const politicoId = id?.trim();
     if (!politicoId) return;
-    if (isLoadingMoreVotacoes || isLoadingVotacoes || !votacoesHasMore) return;
+    if (isLoadingMoreVotacoes || isLoadingVotacoes || !votacoesHasMore || pages.current.votacoes) return;
+    const key = contextKey;
+    const controller = new AbortController();
+    pages.current.votacoes = controller;
+    reportError('votacoes', '');
 
     const pageSize = 30;
     const ano = votacoesFiltro.ano ? Number(votacoesFiltro.ano) : null;
@@ -714,10 +745,12 @@ export const PoliticoProfile = () => {
 
       const res = await fetch(
         `/api/politicos/${encodeURIComponent(politicoId)}/votacoes?${params.toString()}`,
+        {signal: controller.signal},
       );
-      if (!res.ok) return;
+      if (!res.ok) throw new Error('HTTP');
 
       const data = (await res.json()) as {items?: VotacaoItem[]; nextCursor?: string | null};
+      if (controller.signal.aborted || context.current !== key) return;
       const items = data.items ?? [];
 
       setVotacoes((curr) => {
@@ -727,46 +760,39 @@ export const PoliticoProfile = () => {
       });
       setVotacoesNextCursor(data.nextCursor ?? null);
       setVotacoesHasMore(Boolean(data.nextCursor));
+    } catch {
+      if (!controller.signal.aborted && context.current === key) reportError('votacoes', 'Não foi possível carregar mais votações. Tente novamente.');
     } finally {
-      setIsLoadingMoreVotacoes(false);
+      if (pages.current.votacoes === controller) { pages.current.votacoes = undefined; if (context.current === key) setIsLoadingMoreVotacoes(false); }
     }
   };
 
   const loadMoreDespesas = async () => {
-    const politicoId = id?.trim();
-    if (!politicoId) return;
-    if (isLoadingMoreDespesas || isLoadingDespesas || !despesasHasMore) return;
-
-    const pageSize = 200;
-    const ano = despesasFiltro.ano ? Number(despesasFiltro.ano) : null;
-    const mes = despesasFiltro.mes ? Number(despesasFiltro.mes) : null;
-    const nextOffset = despesasOffset + pageSize;
-
+    if (!id || isLoadingDespesas || !despesasHasMore || pages.current.despesas) return;
+    const controller = new AbortController();
+    pages.current.despesas = controller;
+    const key = contextKey;
+    const nextOffset = despesasOffset;
     setIsLoadingMoreDespesas(true);
+    reportError('despesas', '');
     try {
-      const params = new URLSearchParams();
-      params.set('limit', String(pageSize));
-      params.set('offset', String(nextOffset));
-      if (ano != null && Number.isFinite(ano)) params.set('ano', String(ano));
-      if (mes != null && Number.isFinite(mes)) params.set('mes', String(mes));
-
-      const res = await fetch(
-        `/api/politicos/${encodeURIComponent(politicoId)}/despesas?${params.toString()}`,
-      );
-      if (!res.ok) return;
-
-      const data = (await res.json()) as {items?: DespesaItem[]};
-      const items = data.items ?? [];
-
-      setDespesas((curr) => {
-        const seen = new Set(curr.map((d) => d.id));
-        const appended = items.filter((d) => !seen.has(d.id));
-        return appended.length === 0 ? curr : [...curr, ...appended];
+      const res = await fetch(`/api/politicos/${encodeURIComponent(id)}/despesas?${expenseParams(nextOffset)}`, {signal: controller.signal});
+      if (!res.ok) throw new Error('HTTP');
+      const data = await res.json();
+      if (controller.signal.aborted || context.current !== key) return;
+      setDespesas(current => {
+        const seen = new Set(current.map(item => item.id));
+        return [...current, ...(data.items ?? []).filter((item: DespesaItem) => !seen.has(item.id))];
       });
-      setDespesasOffset(nextOffset);
-      setDespesasHasMore(items.length === pageSize);
+      setDespesasOffset(nextOffset + (data.items ?? []).length);
+      setDespesasHasMore(data.hasMore === true);
+      setDespesasTotal(data.totalValor);
+      setDespesasQuantidade(data.total);
+      setDespesasOpcoesTipo(data.tiposDisponiveis ?? []);
+    } catch {
+      if (!controller.signal.aborted && context.current === key) reportError('despesas', 'Não foi possível carregar mais despesas. Tente novamente.');
     } finally {
-      setIsLoadingMoreDespesas(false);
+      if (pages.current.despesas === controller) { pages.current.despesas = undefined; if (context.current === key) setIsLoadingMoreDespesas(false); }
     }
   };
 
@@ -786,11 +812,6 @@ export const PoliticoProfile = () => {
   const votacoesOpcoesAno = votacoesAnosDisponiveis;
   const votacoesFiltradas = votacoes;
 
-  const despesasOpcoesTipo = useMemo(() => {
-    const values: string[] = despesas.map((d) => d.tipo).filter((v) => typeof v === 'string' && v.trim().length > 0);
-    return Array.from(new Set<string>(values)).sort((a, b) => a.localeCompare(b, 'pt-BR'));
-  }, [despesas]);
-
   const despesasOpcoesAno = useMemo(() => {
     const values: number[] = despesas
       .map((d) => d.ano)
@@ -798,35 +819,8 @@ export const PoliticoProfile = () => {
     return Array.from(new Set<number>([...despesasAnosDisponiveis, ...values])).sort((a, b) => b - a);
   }, [despesas, despesasAnosDisponiveis]);
 
-  const despesasOpcoesMes = useMemo(() => {
-    const values: number[] = despesas
-      .map((d) => d.mes)
-      .filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
-    return Array.from(new Set<number>(values)).sort((a, b) => a - b);
-  }, [despesas]);
-
-  const despesasFiltradas = useMemo(() => {
-    const tipo = despesasFiltro.tipo.trim().toLowerCase();
-    const ano = despesasFiltro.ano ? Number(despesasFiltro.ano) : null;
-    const mes = despesasFiltro.mes ? Number(despesasFiltro.mes) : null;
-    const valorMin = despesasFiltro.valorMin.trim() ? Number(despesasFiltro.valorMin) : null;
-    const valorMax = despesasFiltro.valorMax.trim() ? Number(despesasFiltro.valorMax) : null;
-
-    return despesas.filter((d) => {
-      if (tipo) {
-        if (!d.tipo?.toLowerCase().includes(tipo)) return false;
-      }
-      if (ano != null && Number.isFinite(ano) && d.ano !== ano) return false;
-      if (mes != null && Number.isFinite(mes) && d.mes !== mes) return false;
-      if (valorMin != null && Number.isFinite(valorMin) && d.valor < valorMin) return false;
-      if (valorMax != null && Number.isFinite(valorMax) && d.valor > valorMax) return false;
-      return true;
-    });
-  }, [despesas, despesasFiltro]);
-
-  const despesasTotal = useMemo(() => {
-    return despesasFiltradas.reduce((acc, curr) => acc + (Number.isFinite(curr.valor) ? curr.valor : 0), 0);
-  }, [despesasFiltradas]);
+  const despesasOpcoesMes = Array.from({length: 12}, (_, index) => index + 1);
+  const despesasFiltradas = despesas;
 
   const currencyFormatter = useMemo(
     () =>
@@ -870,7 +864,7 @@ export const PoliticoProfile = () => {
   if (!politico) {
     return (
       <div className="flex h-[60vh] flex-col items-center justify-center gap-4">
-        <h2 className="text-2xl font-bold text-slate-900 dark:text-slate-50">Político não encontrado</h2>
+        <h2 role={errors.perfil ? 'alert' : undefined} className="text-2xl font-bold text-slate-900 dark:text-slate-50">{errors.perfil || 'Político não encontrado'}</h2>
         <Link to="/" className="text-blue-600 hover:underline dark:text-blue-400">Voltar para o início</Link>
       </div>
     );
@@ -946,7 +940,7 @@ export const PoliticoProfile = () => {
     },
     {
       label: 'Atuação mapeada',
-      value: String(atuacao.proposicoes.length + atuacao.orgaos.length + atuacao.frentes.length),
+      value: atuacaoLoaded ? String(atuacao.proposicoes.length + atuacao.orgaos.length + atuacao.frentes.length) : '—',
       hint: 'Proposições, órgãos e frentes vinculadas',
       icon: BriefcaseBusiness,
     },
@@ -1023,14 +1017,13 @@ export const PoliticoProfile = () => {
               >
                 Avalie este político
               </button>
-              <button className="w-full rounded-2xl bg-slate-100 px-8 py-3 text-sm font-bold text-slate-600 transition-colors hover:bg-slate-200 sm:w-auto dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
-                Seguir atualizações
-              </button>
+
             </div>
           </div>
         </div>
       </div>
 
+      {Object.entries(errors).filter(([area, message]) => area !== 'despesas' && Boolean(message) && (area === activeTab || (activeTab === 'despesas' && ['anos', 'grafico'].includes(area)))).map(([area, message]) => <p role="alert" key={area} className="mb-4 rounded-xl bg-rose-50 p-4 text-rose-800">{message}</p>)}
       <section className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {resumoCards.map((card, index) => (
           <div
@@ -1190,7 +1183,7 @@ export const PoliticoProfile = () => {
           </div>
         )}
 
-        {activeTab === 'atuacao' && (
+        {activeTab === 'atuacao' && !errors.atuacao && (
           <div className="space-y-6">
             {isLoadingAtuacao ? (
               <div className="rounded-3xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
@@ -1220,7 +1213,7 @@ export const PoliticoProfile = () => {
                   <h3 className="text-lg font-extrabold text-slate-900 dark:text-slate-50">Orgaos e comissoes</h3>
                   {atuacao.orgaos.length === 0 ? (
                     <div className="mt-4 rounded-2xl bg-slate-50 p-4 text-sm font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400">
-                      Esses dados ainda estao sendo sincronizados pela API da Camara.
+                      Nenhum registro disponível na base importada.
                     </div>
                   ) : (
                     <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
@@ -1243,7 +1236,7 @@ export const PoliticoProfile = () => {
                     <h3 className="text-lg font-extrabold text-slate-900 dark:text-slate-50">Frentes parlamentares</h3>
                     {atuacao.frentes.length === 0 ? (
                       <div className="mt-4 rounded-2xl bg-slate-50 p-4 text-sm font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400">
-                        Esses dados ainda estao sendo sincronizados pela API da Camara.
+                        Nenhum registro disponível na base importada.
                       </div>
                     ) : (
                       <div className="mt-4 space-y-3">
@@ -1261,7 +1254,7 @@ export const PoliticoProfile = () => {
                     <h3 className="text-lg font-extrabold text-slate-900 dark:text-slate-50">Historico profissional</h3>
                     {atuacao.profissoes.length + atuacao.ocupacoes.length === 0 ? (
                       <div className="mt-4 rounded-2xl bg-slate-50 p-4 text-sm font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400">
-                        Esses dados ainda estao sendo sincronizados pela API da Camara.
+                        Nenhum registro disponível na base importada.
                       </div>
                     ) : (
                       <div className="mt-4 space-y-3">
@@ -1281,7 +1274,7 @@ export const PoliticoProfile = () => {
                   <h3 className="text-lg font-extrabold text-slate-900 dark:text-slate-50">Eventos vinculados</h3>
                   {atuacao.eventos.length === 0 ? (
                     <div className="mt-4 rounded-2xl bg-slate-50 p-4 text-sm font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400">
-                      Esses dados ainda estao sendo sincronizados pela API da Camara.
+                      Nenhum registro disponível na base importada.
                     </div>
                   ) : (
                     <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
@@ -1301,7 +1294,7 @@ export const PoliticoProfile = () => {
                   <h3 className="text-lg font-extrabold text-slate-900 dark:text-slate-50">Proposicoes relacionadas</h3>
                   {atuacao.proposicoes.length === 0 ? (
                     <div className="mt-4 rounded-2xl bg-slate-50 p-4 text-sm font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400">
-                      Esses dados ainda estao sendo sincronizados pela API da Camara.
+                      Nenhum registro disponível na base importada.
                     </div>
                   ) : (
                     <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
@@ -1393,7 +1386,7 @@ export const PoliticoProfile = () => {
               </div>
             )}
 
-            {!isLoadingVotacoes && votacoesFiltradas.length === 0 && (
+            {!isLoadingVotacoes && !errors.votacoes && votacoesFiltradas.length === 0 && (
               <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
                 Nenhuma votação encontrada com esses filtros.
               </div>
@@ -1546,6 +1539,7 @@ export const PoliticoProfile = () => {
 
         {activeTab === 'despesas' && (
           <div className="space-y-4">
+            {errors.despesas && <p role="alert" className="rounded-xl bg-rose-50 p-4 text-rose-800">{errors.despesas}</p>}
             <Suspense fallback={<div className="rounded-2xl bg-white p-6 text-slate-500 dark:bg-slate-900">Carregando gráfico...</div>}>
               <SpendingChart
                 resumo={despesasResumo}
@@ -1562,6 +1556,7 @@ export const PoliticoProfile = () => {
                     type="text"
                     className="mt-1 block w-full rounded-2xl border-0 py-2 px-3 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:ring-2 focus:ring-inset focus:ring-blue-600 sm:text-sm sm:leading-6 dark:bg-slate-800 dark:text-slate-50 dark:ring-slate-700 dark:placeholder:text-slate-500"
                     placeholder="Ex: Divulgação, Passagens..."
+                    aria-label="Tipo"
                     value={despesasFiltro.tipo}
                     onChange={(e) => setDespesasFiltro((curr) => ({...curr, tipo: e.target.value}))}
                     list="despesas-tipos"
@@ -1576,6 +1571,7 @@ export const PoliticoProfile = () => {
                   <label className="text-xs font-bold text-slate-600 dark:text-slate-400">Ano</label>
                   <select
                     className="mt-1 block w-full rounded-2xl border-0 py-2 px-3 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-200 focus:ring-2 focus:ring-inset focus:ring-blue-600 sm:text-sm sm:leading-6 dark:bg-slate-800 dark:text-slate-50 dark:ring-slate-700"
+                    aria-label="Ano"
                     value={despesasFiltro.ano}
                     onChange={(e) => setDespesasFiltro((curr) => ({...curr, ano: e.target.value}))}
                   >
@@ -1589,6 +1585,7 @@ export const PoliticoProfile = () => {
                   <label className="text-xs font-bold text-slate-600 dark:text-slate-400">Mês</label>
                   <select
                     className="mt-1 block w-full rounded-2xl border-0 py-2 px-3 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-200 focus:ring-2 focus:ring-inset focus:ring-blue-600 sm:text-sm sm:leading-6 dark:bg-slate-800 dark:text-slate-50 dark:ring-slate-700"
+                    aria-label="Mês"
                     value={despesasFiltro.mes}
                     onChange={(e) => setDespesasFiltro((curr) => ({...curr, mes: e.target.value}))}
                   >
@@ -1604,6 +1601,7 @@ export const PoliticoProfile = () => {
                     inputMode="decimal"
                     className="mt-1 block w-full rounded-2xl border-0 py-2 px-3 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:ring-2 focus:ring-inset focus:ring-blue-600 sm:text-sm sm:leading-6 dark:bg-slate-800 dark:text-slate-50 dark:ring-slate-700 dark:placeholder:text-slate-500"
                     placeholder="0"
+                    aria-label="Valor mín."
                     value={despesasFiltro.valorMin}
                     onChange={(e) => setDespesasFiltro((curr) => ({...curr, valorMin: e.target.value}))}
                   />
@@ -1614,6 +1612,7 @@ export const PoliticoProfile = () => {
                     inputMode="decimal"
                     className="mt-1 block w-full rounded-2xl border-0 py-2 px-3 text-slate-900 shadow-sm ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:ring-2 focus:ring-inset focus:ring-blue-600 sm:text-sm sm:leading-6 dark:bg-slate-800 dark:text-slate-50 dark:ring-slate-700 dark:placeholder:text-slate-500"
                     placeholder="0"
+                    aria-label="Valor máx."
                     value={despesasFiltro.valorMax}
                     onChange={(e) => setDespesasFiltro((curr) => ({...curr, valorMax: e.target.value}))}
                   />
@@ -1628,7 +1627,7 @@ export const PoliticoProfile = () => {
                 </button>
               </div>
               <div className="mt-3 text-xs font-medium text-slate-500 dark:text-slate-400">
-                Mostrando {despesasFiltradas.length} de {despesas.length}
+                {despesasQuantidade == null ? 'Carregando total...' : `Mostrando ${despesas.length} de ${despesasQuantidade}`}
               </div>
             </div>
 
@@ -1637,7 +1636,7 @@ export const PoliticoProfile = () => {
                 <div className="rounded-3xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
                   Carregando despesas...
                 </div>
-              ) : despesasFiltradas.length === 0 ? (
+              ) : errors.despesas ? null : despesasFiltradas.length === 0 ? (
                 <div className="rounded-3xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
                   Nenhuma despesa encontrada com esses filtros.
                 </div>
@@ -1652,10 +1651,10 @@ export const PoliticoProfile = () => {
                   ))}
                   <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800">
                     <div className="text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">
-                      Total no periodo
+                      Total com os filtros
                     </div>
                     <div className="mt-1 text-lg font-black text-slate-900 dark:text-slate-50">
-                      {currencyFormatter.format(despesasTotal)}
+                      {despesasTotal == null ? '—' : currencyFormatter.format(despesasTotal)}
                     </div>
                   </div>
                 </>
@@ -1666,7 +1665,7 @@ export const PoliticoProfile = () => {
               <table className="w-full text-left border-collapse">
                 <thead>
                   <tr className="bg-slate-50 border-b border-slate-200 dark:bg-slate-800 dark:border-slate-700">
-                    <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider dark:text-slate-400">Data</th>
+                    <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider dark:text-slate-400">Competência</th>
                     <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider dark:text-slate-400">Tipo de Despesa</th>
                     <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider text-right dark:text-slate-400">Valor</th>
                   </tr>
@@ -1678,7 +1677,7 @@ export const PoliticoProfile = () => {
                         Carregando despesas...
                       </td>
                     </tr>
-                  ) : despesasFiltradas.length === 0 ? (
+                  ) : errors.despesas ? null : despesasFiltradas.length === 0 ? (
                     <tr>
                       <td colSpan={3} className="px-6 py-8 text-center text-sm text-slate-600 dark:text-slate-400">
                         Nenhuma despesa encontrada com esses filtros.
@@ -1688,7 +1687,7 @@ export const PoliticoProfile = () => {
                     despesasFiltradas.map((d) => (
                       <tr key={d.id} className="hover:bg-slate-50/50 transition-colors dark:hover:bg-slate-800/50">
                         <td className="px-6 py-4 text-sm text-slate-600 dark:text-slate-400">
-                          {new Date(`${d.ano}-${String(d.mes).padStart(2, '0')}-01`).toLocaleDateString('pt-BR')}
+                          {`${String(d.mes).padStart(2, '0')}/${d.ano}`}
                         </td>
                         <td className="px-6 py-4 text-sm font-medium text-slate-900 dark:text-slate-50">{d.tipo}</td>
                         <td className="px-6 py-4 text-sm font-bold text-slate-900 text-right dark:text-slate-50">
@@ -1700,11 +1699,9 @@ export const PoliticoProfile = () => {
                 </tbody>
                 <tfoot>
                   <tr className="bg-slate-50 font-bold dark:bg-slate-800">
-                    <td colSpan={2} className="px-6 py-4 text-sm text-slate-900 dark:text-slate-50">Total no período</td>
+                    <td colSpan={2} className="px-6 py-4 text-sm text-slate-900 dark:text-slate-50">Total com os filtros</td>
                     <td className="px-6 py-4 text-sm text-slate-900 text-right dark:text-slate-50">
-                      {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(
-                        despesasTotal
-                      )}
+                      {despesasTotal == null ? '—' : currencyFormatter.format(despesasTotal)}
                     </td>
                   </tr>
                 </tfoot>

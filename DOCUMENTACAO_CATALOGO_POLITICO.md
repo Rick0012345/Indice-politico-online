@@ -22,7 +22,7 @@ A base do sistema e formada por dados oficiais e dados gerados pela propria plat
 - Votacoes e votos nominais.
 - Proposicoes, eventos, orgaos, frentes parlamentares e referencias.
 - Avaliacoes feitas por usuarios.
-- Noticias associadas a politicos, quando populadas na base.
+- Estrutura de noticias associadas a politicos, preparada no banco e em workflow versionado, ainda inativa e sem publicacao na interface.
 
 ## 2. Sistema
 
@@ -50,7 +50,8 @@ flowchart LR
 - ORM/migrations: Prisma.
 - Graficos: Recharts.
 - Automacao local: Docker Compose.
-- Servicos auxiliares: n8n no Compose para automacoes futuras/integracoes locais.
+- Ingestao nativa: subprocesso Node iniciado pela API, com fila e checkpoints no PostgreSQL.
+- Integracao legada opcional: n8n fora do Compose padrao, preservado apenas para recuperacao ou trabalho futuro.
 
 ### Estrutura principal do projeto
 
@@ -67,7 +68,9 @@ flowchart LR
 - `src/ingest-agent.ts`: agente de coleta de dados da Camara.
 - `prisma/schema.prisma`: modelo de dados principal.
 - `prisma/migrations`: historico de alteracoes do banco.
-- `docker-compose.yml`: orquestracao local de app, API, banco e n8n.
+- `docker-compose.yml`: orquestracao local de app, API e banco.
+- `docker-compose.n8n-legacy.yml`: composicao opcional para recuperar somente o n8n legado.
+- `UPSERT NOTICIAS.json`: workflow de noticias preparado, preservado e inativo.
 
 ### Funcionalidades do usuario
 
@@ -131,6 +134,8 @@ A rota `/admin` oferece um painel para gerenciar a ingestao de dados oficiais. O
 
 Os datasets administraveis incluem deputados, despesas, votacoes, legislaturas, partidos, blocos, orgaos, eventos, frentes, proposicoes e referencias.
 
+O painel chama `POST /api/admin/ingestion/run`; a API inicia `src/ingest-agent.ts` em um subprocesso Node. Os workers consomem checkpoints por dataset, entidade e periodo, consultam a API da Camara e persistem dados no PostgreSQL. O Admin acompanha o estado persistido e os arquivos de log. Cancelamento cooperativo e bloqueio compartilhado de ingestao, enriquecimento e limpeza fazem parte desse fluxo nativo, independente de n8n. Nao ha uma nova agenda automatica de importacoes.
+
 ### API principal
 
 A API Express possui endpoints para consulta publica e administracao. Entre os principais:
@@ -174,6 +179,8 @@ O banco PostgreSQL armazena entidades politicas, registros oficiais, avaliacoes 
 
 As migrations criam indices para melhorar consultas por politico, fornecedor, periodo, recurso da Camara e fila de checkpoints.
 
+No ambiente Compose, os dados da aplicacao ficam no schema `catalogo` do banco `app`. As tabelas legadas do n8n ficam em `public` nesse mesmo banco e sao preservadas. Sao schemas separados, nao bancos separados. Os testes de contrato precisam de outro banco, como `app_test`, pois os bloqueios globais exercitados pelos testes nao ficam isolados apenas por schema.
+
 ## 3. DevOps
 
 ### Execucao local sem Docker
@@ -196,12 +203,11 @@ O frontend roda por padrao na porta `3000`. A API Express roda por padrao na por
 
 ### Execucao com Docker Compose
 
-O projeto inclui `docker-compose.yml` com quatro servicos:
+O projeto inclui `docker-compose.yml` com tres servicos:
 
 - `app`: frontend Vite em desenvolvimento.
 - `api`: backend Express em modo watch.
 - `db`: PostgreSQL 16 Alpine.
-- `n8n`: automacao local conectada ao mesmo banco.
 
 Comando:
 
@@ -214,7 +220,19 @@ Portas padrao:
 - Frontend: `http://localhost:3000`.
 - API: `http://localhost:4000`.
 - PostgreSQL: porta local `5434`, encaminhada para `5432` no container.
-- n8n: `http://localhost:5679`, salvo se `N8N_HOST_PORT` for alterado.
+
+### n8n legado e reversao
+
+A inspecao local de 28/10/2026 encontrou zero workflows no n8n. O servico ocioso foi retirado da composicao padrao; isso nao migra uma funcionalidade de noticias ativa. O arquivo `UPSERT NOTICIAS.json`, o volume `indice-politico-online_n8n_data` e as tabelas existentes em `public` permanecem preservados. A integracao de noticias esta preparada, inativa e sem publicacao na interface atual.
+
+Para recuperar somente o servico legado, com o `db` original ja em execucao:
+
+```powershell
+docker compose -p indice-politico-online -f docker-compose.yml -f docker-compose.n8n-legacy.yml config --services
+docker compose -p indice-politico-online -f docker-compose.yml -f docker-compose.n8n-legacy.yml up -d --no-deps n8n
+```
+
+A composicao opcional usa o mesmo projeto `indice-politico-online`, banco `app`, schema `public`, porta `5679` (ou o valor anterior de `N8N_HOST_PORT`) e volume externo `indice-politico-online_n8n_data`. Mantenha a mesma `N8N_ENCRYPTION_KEY` do `.env` anterior para recuperar credenciais; essas variaveis legadas podem permanecer no `.env`, sem dependencia da ingestao nativa. O volume externo deve existir; a composicao nao cria uma copia vazia silenciosamente. Nao executar `down -v`, apagar o volume ou excluir tabelas de `public` nessa transicao. Se o workflow de noticias for importado futuramente, sua conexao PostgreSQL deve usar `search_path=catalogo,public`; importar e ativar sao etapas separadas.
 
 ### Migrations
 
@@ -224,15 +242,16 @@ O projeto usa Prisma para versionar o banco. O entrypoint Docker executa:
 npx prisma migrate deploy
 ```
 
-Essa execucao depende da variavel `RUN_PRISMA_MIGRATIONS`. No Compose de desenvolvimento ela esta configurada como `false` para os servicos `app` e `api`, evitando aplicar migrations automaticamente a cada subida local.
+Essa execucao depende da variavel `RUN_PRISMA_MIGRATIONS`. No Compose de desenvolvimento ela esta como `false` no frontend e `true` na API, que aplica as migrations antes de iniciar.
 
 ### Build de producao
 
-O Dockerfile possui tres estagios:
+O Dockerfile possui quatro estagios:
 
 - `development`: instala dependencias e executa o app em modo desenvolvimento.
 - `builder`: executa `npm run build`.
-- `production`: publica os arquivos finais do Vite com Nginx.
+- `production`: publica os arquivos finais do Vite com Nginx, proxy `/api/` e fallback das rotas React.
+- `api-production`: executa a API e as migrations. Os alvos de producao devem ser selecionados explicitamente no build.
 
 Comando de build local:
 
@@ -242,16 +261,16 @@ npm run build
 
 ### CI/CD e automacao
 
-No estado atual do repositorio, nao ha workflow `.github` versionado. A automacao existente esta concentrada em:
+O workflow `.github/workflows/ci.yml` instala dependencias, aplica migrations em PostgreSQL isolado e executa TypeScript, testes e build. Outras automacoes estao em:
 
 - Scripts do `package.json`.
 - Dockerfile.
 - Docker Compose.
 - Migrations Prisma.
 - Agente de ingestao acionado pelo painel Admin.
-- Servico n8n disponivel no ambiente local.
+- Composicao n8n legada opcional, sem participacao na ingestao atual.
 
-Para uma entrega futura, recomenda-se adicionar um pipeline de CI com etapas de instalacao, validacao TypeScript, build Vite e, se possivel, testes automatizados.
+Os testes de contrato usam `TEST_DATABASE_URL` em banco separado da aplicacao e schemas descartaveis nesse banco. Sem essa variavel, os testes PostgreSQL sao ignorados; no CI, ela e obrigatoriamente configurada.
 
 ## 4. Monitoramento
 
@@ -312,9 +331,9 @@ O projeto possui algumas protecoes importantes no backend:
 - CPF armazenado como hash SHA-256, nao em texto puro, na tabela de avaliacoes.
 - Restricao unica por politico e CPF hasheado, evitando multiplas avaliacoes do mesmo usuario para o mesmo politico.
 - Limpeza administrativa por mapas internos de datasets, sem aceitar nomes de tabelas livres vindos do usuario.
-- Bloqueio de limpeza de dados enquanto existem checkpoints em execucao.
+- Bloqueio de sessao PostgreSQL compartilhado por importacao, enriquecimento e limpeza; o processo preserva o bloqueio ate terminar as tarefas pendentes, inclusive apos cancelamento.
 - Uso de variaveis de ambiente para credenciais do banco.
-- Chaves e configuracoes do n8n lidas por variaveis de ambiente.
+- Chaves da integracao n8n legada preservadas no ambiente anterior, utilizadas somente ao recuperar o servico opcional.
 
 ### Privacidade
 
@@ -324,9 +343,9 @@ A principal preocupacao de privacidade esta no fluxo de avaliacao. O CPF e usado
 
 Algumas areas ainda precisam ser reforcadas para producao:
 
-- A rota `/admin` nao possui autenticacao implementada no codigo atual.
-- O botao "Entrar" aparece na interface, mas nao ha fluxo completo de login integrado.
-- Nao ha middleware de rate limit configurado.
+- As APIs administrativas exigem Bearer `ADMIN_API_TOKEN`; nao ha contas administrativas individuais ou permissoes por papel.
+- As avaliacoes nao possuem autenticacao Gov.br ou comprovacao de titularidade do CPF.
+- O limite de avaliacoes por IP/politico e local ao processo; nao ha limitacao compartilhada entre replicas.
 - Nao ha headers de seguranca como Helmet configurados no Express.
 - Nao ha politica CORS explicita no backend.
 - Segredos locais dependem do cuidado com o arquivo `.env`.
@@ -362,7 +381,7 @@ Esses indices ajudam o sistema a consultar rankings, perfis, gastos e progresso 
 
 ### Escalabilidade do frontend
 
-O frontend evita carregar tudo de uma vez. As listas usam limites, filtros e buscas no backend. Isso torna a interface mais leve e reduz trafego desnecessario.
+O frontend evita carregar tudo de uma vez. As listas usam limites, filtros e buscas no backend. Despesas retornam totais e quantidade de todo o filtro mesmo com uma unica pagina carregada; a competencia e apresentada como mes/ano. Isso torna a interface mais leve e reduz trafego desnecessario.
 
 ### Crescimento futuro
 
@@ -453,6 +472,6 @@ A limpeza fica bloqueada enquanto houver ingestao em execucao.
 
 O Catalogo Politico e um sistema web voltado a transparencia publica. Ele combina dados oficiais, visualizacao simples e avaliacao popular para aproximar o cidadao da atividade parlamentar. A arquitetura atual ja possui frontend organizado, API propria, banco relacional, migrations, Docker Compose, agente de ingestao e painel administrativo com logs e checkpoints.
 
-O projeto atende ao objetivo academico de apresentar uma solucao completa, com funcionalidades reais e estrutura de operacao local. Os principais proximos passos para evolucao seriam implementar autenticacao administrativa, adicionar pipeline de CI/CD, ampliar testes automatizados, reforcar seguranca HTTP e integrar monitoramento externo.
+O projeto atende ao objetivo academico de apresentar uma solucao completa, com funcionalidades reais e estrutura de operacao local. Os proximos passos para evolucao incluem contas administrativas individuais, autenticacao de avaliadores, reforco de seguranca HTTP e monitoramento externo. CI e testes de regressao estao versionados.
 
 Mesmo em seu estado atual, o sistema demonstra uma base consistente para consulta politica, coleta automatizada de dados oficiais e acompanhamento da qualidade das informacoes exibidas ao usuario.

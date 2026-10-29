@@ -1,9 +1,10 @@
 import React from 'react';
-import {screen, waitFor} from '@testing-library/react';
+import {act, screen, waitFor} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {EvaluationModal} from './EvaluationModal';
 import {renderWithProviders} from '../test/render';
+afterEach(() => vi.unstubAllGlobals());
 
 const renderModal = (props?: Partial<React.ComponentProps<typeof EvaluationModal>>) => {
   return renderWithProviders(
@@ -123,4 +124,35 @@ describe('EvaluationModal', () => {
 
     expect(await screen.findByText('Falha de conexao. Tente novamente em instantes.')).toBeInTheDocument();
   });
+});
+
+it('rotula o diálogo, contém foco, fecha com Escape e devolve foco ao acionador', async () => {
+ const user = userEvent.setup();
+ const close = vi.fn();
+ const trigger = document.createElement('button');
+ document.body.append(trigger); trigger.focus();
+ const view = renderModal({onClose:close});
+ const dialog = screen.getByRole('dialog', {name:'Avaliar Politico'});
+ const closeButton = screen.getByRole('button', {name:'Fechar avaliação'});
+ expect(dialog).toContainElement(document.activeElement as HTMLElement);
+ closeButton.focus(); await user.tab({shift:true});
+ expect(screen.getByRole('button',{name:'Cancelar'})).toHaveFocus();
+ await user.tab(); expect(closeButton).toHaveFocus();
+ await user.keyboard('{Escape}'); expect(close).toHaveBeenCalledOnce();
+ view.unmount(); expect(trigger).toHaveFocus(); trigger.remove();
+});
+
+it('não notifica outro perfil se a avaliação terminar após fechar o modal', async () => {
+ const user=userEvent.setup();
+ let finish!:(value:Response)=>void;
+ vi.stubGlobal('fetch',vi.fn(()=>new Promise<Response>(resolve=>{finish=resolve;})));
+ const saved=vi.fn();const close=vi.fn();
+ const view=renderModal({onEvaluationSaved:saved,onClose:close});
+ await user.click(screen.getByRole('button',{name:'Dar 5 estrelas'}));
+ await user.type(screen.getByLabelText('CPF para validar o voto'),'52998224725');
+ await user.click(screen.getByRole('button',{name:'Confirmar voto'}));
+ view.unmount();
+ await act(async()=>{finish({ok:true,json:async()=>({action:'created',notaMedia:5,totalAvaliacoes:1})} as Response);});
+ expect(saved).not.toHaveBeenCalled();
+ vi.unstubAllGlobals();
 });

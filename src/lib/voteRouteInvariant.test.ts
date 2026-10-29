@@ -21,6 +21,5 @@ describe('invariantes da arquitetura de votações', () => {
     expect(ingestionSource).toContain('votos_deputados_pendentes');
     expect(ingestionSource).toContain('reconcilePendingVotes');
     expect(ingestionSource).toContain('AND period_start >= $3::date');
-    expect(ingestionSource).toContain('votacoes.ai_input_hash IS DISTINCT FROM EXCLUDED.ai_input_hash');
   });
 });

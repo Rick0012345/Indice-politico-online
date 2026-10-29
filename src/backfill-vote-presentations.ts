@@ -1,5 +1,7 @@
 import 'dotenv/config';
+import {votePresentationAssignments} from './lib/votePresentationPersistence';
 import {Pool} from 'pg';
+import {runIngestion} from './lib/ingestionLifecycle';
 import {classifyVote, type VoteProposalCandidate} from './lib/voteClassification';
 
 const pool = new Pool({
@@ -96,15 +98,11 @@ const run = async () => {
       UPDATE votacoes vote_session
       SET tipo_votacao = item.tipo_votacao,
           eh_subvotacao = item.eh_subvotacao,
-          titulo_publico = item.titulo_publico,
-          resumo_leigo = item.resumo_leigo,
+          ${votePresentationAssignments('vote_session', 'item')},
           classificacao_fonte = item.classificacao_fonte,
           classificacao_confianca = item.classificacao_confianca,
           classificacao_versao = item.classificacao_versao,
           classificacao_justificativa = item.classificacao_justificativa,
-          ai_model = CASE WHEN vote_session.ai_input_hash IS DISTINCT FROM item.ai_input_hash THEN NULL ELSE vote_session.ai_model END,
-          ai_prompt_versao = CASE WHEN vote_session.ai_input_hash IS DISTINCT FROM item.ai_input_hash THEN NULL ELSE vote_session.ai_prompt_versao END,
-          ai_gerado_em = CASE WHEN vote_session.ai_input_hash IS DISTINCT FROM item.ai_input_hash THEN NULL ELSE vote_session.ai_gerado_em END,
           ai_input_hash = item.ai_input_hash
       FROM jsonb_to_recordset($1::jsonb) AS item(
         id text,
@@ -131,7 +129,7 @@ const run = async () => {
   console.log(`[backfill-votacoes] concluído: ${updated} votação(ões)`);
 };
 
-run()
+runIngestion(pool, false, run)
   .catch((error) => {
     console.error(error instanceof Error ? error.stack ?? error.message : String(error));
     process.exitCode = 1;

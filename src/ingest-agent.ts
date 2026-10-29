@@ -1,6 +1,13 @@
 import 'dotenv/config';
+import {upsertExpenseBatch} from './lib/expensePersistence';
+import {seedCheckpointBatch, type CheckpointSeed} from './lib/ingestionSeeds';
+import {upsertRawBatch, type RawItemUpsert} from './lib/rawPersistence';
+import {iteratePages, readPageProgress, commitCheckpointPage} from './lib/ingestionPages';
+import {votePresentationAssignments} from './lib/votePresentationPersistence';
 import {setTimeout as sleep} from 'node:timers/promises';
-import {Pool, type PoolClient} from 'pg';
+import {Pool, type PoolClient, type QueryResult, type QueryResultRow} from 'pg';
+import {AsyncLocalStorage} from 'node:async_hooks';
+import {createCancellationGuard, IngestionCancelledError, runIngestion} from './lib/ingestionLifecycle';
 import {classifyVote, type VoteProposalCandidate} from './lib/voteClassification';
 
 type Dataset =
@@ -160,6 +167,21 @@ const pool = databaseUrl
       password: process.env.APP_DB_PASSWORD ?? 'app',
       database: process.env.APP_DB_NAME ?? 'app',
     });
+
+const checkpointContext = new AsyncLocalStorage<(client?: PoolClient) => Promise<void>>();
+let cancellationObserved = false;
+const checkCancellation = async (client?: PoolClient) => {
+  if (cancellationObserved) throw new IngestionCancelledError();
+  await checkpointContext.getStore()?.(client);
+};
+const guardedQuery = async <T extends QueryResultRow = any>(sql: string, values?: any[]): Promise<QueryResult<T>> => {
+  await checkCancellation();
+  return pool.query<T>(sql, values);
+};
+const guardedClientQuery = async <T extends QueryResultRow = any>(client: PoolClient, sql: string, values?: any[]): Promise<QueryResult<T>> => {
+  if (sql !== 'ROLLBACK') await checkCancellation(client);
+  return client.query<T>(sql, values);
+};
 
 const API_BASE = 'https://dadosabertos.camara.leg.br/api/v2';
 const HTTP_TIMEOUT_MS = 45000;
@@ -362,64 +384,10 @@ const textOrNull = (value: unknown) => {
 
 const jsonOrNull = (value: unknown) => (value == null ? null : JSON.stringify(value));
 
-type RawItemUpsert = {
-  resource: string;
-  resourceId: string;
-  endpoint: string;
-  rawJson: unknown;
-  parentResource?: string | null;
-  parentId?: string | null;
-  queryParams?: Record<string, unknown>;
-  linksJson?: unknown;
-};
-
-const upsertRawItems = async (items: RawItemUpsert[]) => {
-  if (items.length === 0) return;
-  const payload = items.map((item) => ({
-    resource: item.resource,
-    resource_id: item.resourceId,
-    parent_resource: item.parentResource ?? '',
-    parent_id: item.parentId ?? '',
-    endpoint: item.endpoint,
-    query_params: item.queryParams ?? {},
-    raw_json: item.rawJson,
-    links_json: item.linksJson ?? null,
-  }));
-  await pool.query(
-    `
-    INSERT INTO camara_api_raw_items (
-      resource, resource_id, parent_resource, parent_id, endpoint,
-      query_params, raw_json, links_json
-    )
-    SELECT
-      item.resource,
-      item.resource_id,
-      item.parent_resource,
-      item.parent_id,
-      item.endpoint,
-      item.query_params,
-      item.raw_json,
-      item.links_json
-    FROM jsonb_to_recordset($1::jsonb) AS item(
-      resource varchar(120),
-      resource_id text,
-      parent_resource varchar(120),
-      parent_id text,
-      endpoint text,
-      query_params jsonb,
-      raw_json jsonb,
-      links_json jsonb
-    )
-    ON CONFLICT (resource, resource_id, parent_resource, parent_id) DO UPDATE SET
-      endpoint = EXCLUDED.endpoint,
-      query_params = EXCLUDED.query_params,
-      raw_json = EXCLUDED.raw_json,
-      links_json = EXCLUDED.links_json,
-      fetched_at = CURRENT_TIMESTAMP,
-      updated_at = CURRENT_TIMESTAMP
-    `,
-    [JSON.stringify(payload)],
-  );
+const upsertRawItems = async (items: RawItemUpsert[], client?: PoolClient) => {
+  if (!items.length) return;
+  await checkCancellation(client);
+  await upsertRawBatch(client ?? pool, items);
 };
 
 const upsertRawItem = async (
@@ -474,12 +442,13 @@ const retryWaitLabel = (delay: number, reason: string) => {
   return `Aguardando ${seconds} segundos para retomar apos ${reason}`;
 };
 
-const fetchJson = async <T>(url: string, attempt = 1): Promise<T> => {
+export const fetchJson = async <T>(url: string, attempt = 1): Promise<T> => {
+  await waitForHttpSlot();
+  await checkCancellation();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), HTTP_TIMEOUT_MS);
 
   try {
-    await waitForHttpSlot();
     const response = await fetch(url, {
       signal: controller.signal,
       headers: {
@@ -488,6 +457,7 @@ const fetchJson = async <T>(url: string, attempt = 1): Promise<T> => {
       },
     });
 
+    await checkCancellation();
     const retryable = [403, 408, 429, 500, 502, 503, 504].includes(response.status);
     if (retryable && attempt < MAX_HTTP_ATTEMPTS) {
       const delay = retryDelayForStatus(response.status, response.headers.get('retry-after'), attempt);
@@ -514,7 +484,7 @@ const fetchJson = async <T>(url: string, attempt = 1): Promise<T> => {
 
     return (await response.json()) as T;
   } catch (error) {
-    if (error instanceof HttpError) throw error;
+    if (error instanceof IngestionCancelledError || error instanceof HttpError) throw error;
 
     const isAbort = error instanceof Error && error.name === 'AbortError';
     if (attempt < MAX_HTTP_ATTEMPTS) {
@@ -539,50 +509,29 @@ const fetchJson = async <T>(url: string, attempt = 1): Promise<T> => {
   }
 };
 
-const fetchPaged = async <T>(
-  path: string,
-  params: Record<string, string | number>,
-  options: FetchPagedOptions = {},
-) => {
-  const items: T[] = [];
-  let page = 1;
-
-  for (;;) {
-    if (page > MAX_PAGES_PER_REQUEST) {
-      throw new Error(`Limite de paginacao excedido (${MAX_PAGES_PER_REQUEST}) em ${path}`);
+const fetchPagedPages = <T>(
+  path: string, params: Record<string, string | number>, options: FetchPagedOptions = {}, startPage = 1,
+) => iteratePages<T>(async page => {
+  const url = new URL(API_BASE + path);
+  for (const [key, value] of Object.entries({...params, itens: 100, pagina: page})) url.searchParams.set(key, String(value));
+  try {
+    writeEvent('api_fetch', 'Carregando dados da API da Camara', {path, url: url.toString(), page});
+    const data = await fetchJson<CamaraListResponse<T>>(url.toString());
+    await checkCancellation();
+    return data;
+  } catch (error) {
+    if (options.ignoreBadRequest && error instanceof HttpError && error.status === 400) {
+      options.onBadRequest?.(url.toString());
+      if (options.logBadRequest !== false) writeLog('warn', '[skip] API retornou 400 para recurso opcional: ' + url.toString());
+      return {dados: []};
     }
-
-    const url = new URL(`${API_BASE}${path}`);
-    for (const [key, value] of Object.entries({...params, itens: 100, pagina: page})) {
-      url.searchParams.set(key, String(value));
-    }
-
-    let data: CamaraListResponse<T>;
-    try {
-      writeEvent('api_fetch', 'Carregando dados da API da Camara', {
-        path,
-        url: url.toString(),
-        page,
-      });
-      data = await fetchJson<CamaraListResponse<T>>(url.toString());
-    } catch (error) {
-      if (options.ignoreBadRequest && error instanceof HttpError && error.status === 400) {
-        options.onBadRequest?.(url.toString());
-        if (options.logBadRequest !== false) {
-          writeLog('warn', `[skip] API retornou 400 para recurso opcional: ${url.toString()}`);
-        }
-        return items;
-      }
-      throw error;
-    }
-    const pageItems = data.dados ?? [];
-    items.push(...pageItems);
-
-    const hasNext = data.links?.some((link) => link.rel === 'next');
-    if (!hasNext || pageItems.length === 0) break;
-    page += 1;
+    throw error;
   }
+}, {startPage, maxPages: MAX_PAGES_PER_REQUEST});
 
+const fetchPaged = async <T>(path: string, params: Record<string, string | number>, options: FetchPagedOptions = {}) => {
+  const items: T[] = [];
+  for await (const page of fetchPagedPages<T>(path, params, options)) items.push(...page.items);
   return items;
 };
 
@@ -637,53 +586,20 @@ const fetchDetail = async <T>(path: string, options: FetchPagedOptions = {}) => 
 };
 
 const seedCheckpoint = async (
-  dataset: Dataset,
-  entityId: string,
-  start: string,
-  end: string,
-  resetFailed: boolean,
-  resetCancelled: boolean,
-  resetEmpty: boolean,
+  dataset: Dataset, entityId: string, start: string, end: string,
+  resetFailed: boolean, resetCancelled: boolean, resetEmpty: boolean,
 ) => {
-  await pool.query(
-    `
-    INSERT INTO ingestion_checkpoints (source, dataset, entity_id, period_start, period_end)
-    VALUES ('camara', $1, $2, $3, $4)
-    ON CONFLICT (source, dataset, entity_id, period_start, period_end)
-    DO UPDATE SET
-      status = CASE
-        WHEN $5::boolean AND ingestion_checkpoints.status = 'failed' THEN 'pending'
-        WHEN $6::boolean AND ingestion_checkpoints.status = 'cancelled' THEN 'pending'
-        WHEN $7::boolean AND ingestion_checkpoints.status = 'done' AND ingestion_checkpoints.items_count = 0 THEN 'pending'
-        WHEN ingestion_checkpoints.status = 'cancelled' THEN 'cancelled'
-        ELSE ingestion_checkpoints.status
-      END,
-      attempts = CASE
-        WHEN $5::boolean AND ingestion_checkpoints.status = 'failed' THEN 0
-        WHEN $5::boolean AND ingestion_checkpoints.status = 'pending' AND ingestion_checkpoints.attempts >= 5 THEN 0
-        WHEN $6::boolean AND ingestion_checkpoints.status = 'cancelled' THEN 0
-        WHEN $7::boolean AND ingestion_checkpoints.status = 'done' AND ingestion_checkpoints.items_count = 0 THEN 0
-        ELSE ingestion_checkpoints.attempts
-      END,
-      last_error = CASE
-        WHEN $5::boolean AND ingestion_checkpoints.status = 'failed' THEN NULL
-        WHEN $5::boolean AND ingestion_checkpoints.status = 'pending' AND ingestion_checkpoints.attempts >= 5 THEN NULL
-        WHEN $6::boolean AND ingestion_checkpoints.status = 'cancelled' THEN NULL
-        WHEN $7::boolean AND ingestion_checkpoints.status = 'done' AND ingestion_checkpoints.items_count = 0 THEN NULL
-        ELSE ingestion_checkpoints.last_error
-      END,
-      updated_at = CURRENT_TIMESTAMP
-    `,
-    [dataset, entityId, start, end, resetFailed, resetCancelled, resetEmpty],
-  );
+  await checkCancellation();
+  await seedCheckpointBatch(pool, [{dataset, entityId, start, end}], {resetFailed, resetCancelled, resetEmpty});
 };
 
 const claimCheckpoint = async (dataset: Dataset, maxAttempts: number, from: string, to: string) => {
-  const result = await pool.query<{
+  const result = await guardedQuery<{
     id: string;
     entity_id: string;
     period_start: string;
     period_end: string;
+    progress_json: unknown;
   }>(
     `
     UPDATE ingestion_checkpoints
@@ -706,7 +622,7 @@ const claimCheckpoint = async (dataset: Dataset, maxAttempts: number, from: stri
       FOR UPDATE SKIP LOCKED
       LIMIT 1
     )
-    RETURNING id, entity_id, period_start::text, period_end::text
+    RETURNING id, entity_id, period_start::text, period_end::text, progress_json
     `,
     [dataset, maxAttempts, from, to],
   );
@@ -715,7 +631,7 @@ const claimCheckpoint = async (dataset: Dataset, maxAttempts: number, from: stri
 };
 
 const releaseStaleCheckpoints = async (staleMinutes: number) => {
-  const result = await pool.query(
+  const result = await guardedQuery(
     `
     UPDATE ingestion_checkpoints
     SET status = CASE WHEN attempts >= 5 THEN 'failed' ELSE 'pending' END,
@@ -740,11 +656,11 @@ const finishCheckpoint = async (
   itemsCount: number,
   error: string | null,
 ) => {
-  await pool.query(
+  const result = await guardedQuery(
     `
     UPDATE ingestion_checkpoints
     SET status = $2::varchar,
-        items_count = $3,
+        items_count = CASE WHEN $2::text = 'failed' THEN items_count ELSE $3 END,
         last_error = $4,
         locked_at = NULL,
         finished_at = CASE WHEN $2::text = 'done' THEN CURRENT_TIMESTAMP ELSE finished_at END,
@@ -754,10 +670,11 @@ const finishCheckpoint = async (
     `,
     [id, status, itemsCount, error],
   );
+  return (result.rowCount ?? 0) > 0;
 };
 
 const touchCheckpointProgress = async (id: string, itemsCount: number) => {
-  await pool.query(
+  await guardedQuery(
     `
     UPDATE ingestion_checkpoints
     SET items_count = $2,
@@ -773,7 +690,7 @@ const touchCheckpointProgress = async (id: string, itemsCount: number) => {
 const upsertDeputy = async (client: PoolClient, deputy: DeputyDetails) => {
   const status = deputy.ultimoStatus ?? {};
   const gabinete = status.gabinete ?? {};
-  await client.query(
+  await guardedClientQuery(client,
     `
     INSERT INTO politicos (
       id, cpf, nome, nome_civil, sigla_partido, sigla_uf, id_legislatura,
@@ -844,7 +761,7 @@ const upsertDeputy = async (client: PoolClient, deputy: DeputyDetails) => {
     ],
   );
 
-  await client.query(
+  await guardedClientQuery(client,
     `
     UPDATE politicos
     SET uri = $2,
@@ -874,7 +791,7 @@ const ingestDeputiesForLegislature = async (legislature: number) => {
   deputies.forEach((deputy) => ids.add(deputy.id));
 
   let count = 0;
-  await mapConcurrent([...ids], 5, async (id) => {
+  await mapConcurrent([...ids], 2, async (id) => {
     const client = await pool.connect();
     try {
       const url = `${API_BASE}/deputados/${id}`;
@@ -893,7 +810,7 @@ const getPoliticoIdsForRange = async (from: string, to: string) => {
   const legislatures = legislaturesForYears(yearsForRange(from, to));
 
   if (legislatures.length > 0) {
-    const result = await pool.query<{id: string}>(
+    const result = await guardedQuery<{id: string}>(
       `
       SELECT id::text AS id
       FROM politicos
@@ -905,98 +822,32 @@ const getPoliticoIdsForRange = async (from: string, to: string) => {
     return result.rows.map((row) => row.id);
   }
 
-  const result = await pool.query<{id: string}>(
+  const result = await guardedQuery<{id: string}>(
     'SELECT id::text AS id FROM politicos ORDER BY id ASC',
   );
   return result.rows.map((row) => row.id);
 };
 
-const upsertExpenses = async (politicoId: string, year: number, month: number) => {
-  const expenses = await fetchPaged<Expense>(`/deputados/${politicoId}/despesas`, {
-    ano: year,
-    mes: month,
-  });
-
-  for (const expense of expenses) {
-    await pool.query(
-      `
-      INSERT INTO despesas (
-        politico_id, ano, mes, tipo_despesa, cod_documento, cnpj_cpf_fornecedor,
-        nome_fornecedor, tipo_documento, data_documento, num_documento,
-        valor_documento, valor_glosa, valor_liquido, num_lote,
-        num_ressarcimento, parcela, url_documento
-      )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
-      ON CONFLICT (cod_documento) DO UPDATE SET
-        politico_id = EXCLUDED.politico_id,
-        ano = EXCLUDED.ano,
-        mes = EXCLUDED.mes,
-        tipo_despesa = EXCLUDED.tipo_despesa,
-        cnpj_cpf_fornecedor = EXCLUDED.cnpj_cpf_fornecedor,
-        nome_fornecedor = EXCLUDED.nome_fornecedor,
-        tipo_documento = EXCLUDED.tipo_documento,
-        data_documento = EXCLUDED.data_documento,
-        num_documento = EXCLUDED.num_documento,
-        valor_documento = EXCLUDED.valor_documento,
-        valor_glosa = EXCLUDED.valor_glosa,
-        valor_liquido = EXCLUDED.valor_liquido,
-        num_lote = EXCLUDED.num_lote,
-        num_ressarcimento = EXCLUDED.num_ressarcimento,
-        parcela = EXCLUDED.parcela,
-        url_documento = EXCLUDED.url_documento
-      `,
-      [
-        politicoId,
-        expense.ano ?? year,
-        expense.mes ?? month,
-        textOrNull(expense.tipoDespesa) ?? 'Nao informado',
-        textOrNull(expense.codDocumento),
-        textOrNull(expense.cnpjCpfFornecedor),
-        textOrNull(expense.nomeFornecedor),
-        textOrNull(expense.tipoDocumento),
-        textOrNull(expense.dataDocumento),
-        textOrNull(expense.numDocumento),
-        numberOrNull(expense.valorDocumento) ?? 0,
-        numberOrNull(expense.valorGlosa) ?? 0,
-        numberOrNull(expense.valorLiquido) ?? 0,
-        textOrNull(expense.numLote),
-        textOrNull(expense.numRessarcimento),
-        numberOrNull(expense.parcela) ?? 0,
-        textOrNull(expense.urlDocumento),
-      ],
-    );
-
-    if (expense.codDocumento != null) {
-      await pool.query(
-        `
-        UPDATE despesas
-        SET cod_tipo_documento = $2,
-            cod_lote = $3,
-            raw_json = $4::jsonb
-        WHERE cod_documento = $1
-        `,
-        [
-          textOrNull(expense.codDocumento),
-          numberOrNull(expense.codTipoDocumento),
-          textOrNull(expense.codLote) ?? textOrNull(expense.numLote),
-          JSON.stringify(expense),
-        ],
-      );
-      await upsertRawItem(
-        'deputados_despesas',
-        String(expense.codDocumento),
-        `/deputados/${politicoId}/despesas`,
-        expense,
-        {
-          parentResource: 'deputados',
-          parentId: politicoId,
-          queryParams: {ano: year, mes: month},
-        },
-      );
-    }
+const upsertExpenses = async (
+  politicoId: string, year: number, month: number, checkpoint: {id: string; progress_json?: unknown},
+) => {
+  const resource = '/deputados/' + politicoId + '/despesas';
+  const params = {ano: year, mes: month};
+  let progress = readPageProgress(checkpoint.progress_json, resource, params);
+  if (progress.finished) return progress.itemsCount;
+  for await (const page of fetchPagedPages<Expense>(resource, params, {}, progress.nextPage)) {
+    const next = {...progress, nextPage: page.page + 1, itemsCount: progress.itemsCount + page.items.length, finished: !page.hasNext};
+    await commitCheckpointPage(pool, checkpoint.id, next, async client => {
+      await upsertExpenseBatch(client, politicoId, year, month, page.items);
+      await upsertRawItems(page.items.filter(expense => expense.codDocumento != null).map(expense => ({
+        resource: 'deputados_despesas', resourceId: String(expense.codDocumento), endpoint: resource,
+        rawJson: expense, parentResource: 'deputados', parentId: politicoId, queryParams: params,
+      })), client);
+    }, checkCancellation);
+    progress = next;
+    writeEvent('db_write', 'Pagina de despesas confirmada', {dataset: 'despesas', entityId: politicoId, page: page.page, total: progress.itemsCount});
   }
-
-  return expenses.length;
+  return progress.itemsCount;
 };
 
 const validProposalCandidates = (value: VoteProposalCandidate[] | undefined) =>
@@ -1009,12 +860,12 @@ const upsertVoteRelations = async (
 ) => {
   const client = await pool.connect();
   try {
-    await client.query('BEGIN');
-    await client.query('DELETE FROM votacao_objetos_possiveis WHERE votacao_id = $1', [voteSessionId]);
-    await client.query('DELETE FROM votacao_proposicoes_afetadas WHERE votacao_id = $1', [voteSessionId]);
+    await guardedClientQuery(client, 'BEGIN');
+    await guardedClientQuery(client, 'DELETE FROM votacao_objetos_possiveis WHERE votacao_id = $1', [voteSessionId]);
+    await guardedClientQuery(client, 'DELETE FROM votacao_proposicoes_afetadas WHERE votacao_id = $1', [voteSessionId]);
 
     if (possibleObjects.length > 0) {
-      await client.query(
+      await guardedClientQuery(client,
         `
         INSERT INTO votacao_objetos_possiveis (
           votacao_id, proposicao_id, uri, sigla_tipo, numero, ano, ementa, ordem, raw_json, atualizado_em
@@ -1051,7 +902,7 @@ const upsertVoteRelations = async (
     }
 
     if (affectedProposals.length > 0) {
-      await client.query(
+      await guardedClientQuery(client,
         `
         INSERT INTO votacao_proposicoes_afetadas (
           votacao_id, proposicao_id, uri, sigla_tipo, numero, ano, ementa, efeito, ordem, raw_json, atualizado_em
@@ -1088,9 +939,9 @@ const upsertVoteRelations = async (
         ],
       );
     }
-    await client.query('COMMIT');
+    await guardedClientQuery(client, 'COMMIT');
   } catch (error) {
-    await client.query('ROLLBACK');
+    await guardedClientQuery(client, 'ROLLBACK');
     throw error;
   } finally {
     client.release();
@@ -1109,7 +960,7 @@ const upsertVoteSession = async (voteSession: VoteSession) => {
     proposicoesAfetadas: affectedProposals,
   });
 
-  await pool.query(
+  await guardedQuery(
     `
     INSERT INTO votacoes (
       id, uri, sigla_tipo, numero, ano, ementa, data, data_hora_registro, data_hora_votacao,
@@ -1155,15 +1006,11 @@ const upsertVoteSession = async (voteSession: VoteSession) => {
       objetos_possiveis_json = EXCLUDED.objetos_possiveis_json,
       tipo_votacao = EXCLUDED.tipo_votacao,
       eh_subvotacao = EXCLUDED.eh_subvotacao,
-      titulo_publico = EXCLUDED.titulo_publico,
-      resumo_leigo = EXCLUDED.resumo_leigo,
+      ${votePresentationAssignments('votacoes', 'EXCLUDED')},
       classificacao_fonte = EXCLUDED.classificacao_fonte,
       classificacao_confianca = EXCLUDED.classificacao_confianca,
       classificacao_versao = EXCLUDED.classificacao_versao,
       classificacao_justificativa = EXCLUDED.classificacao_justificativa,
-      ai_model = CASE WHEN votacoes.ai_input_hash IS DISTINCT FROM EXCLUDED.ai_input_hash THEN NULL ELSE votacoes.ai_model END,
-      ai_prompt_versao = CASE WHEN votacoes.ai_input_hash IS DISTINCT FROM EXCLUDED.ai_input_hash THEN NULL ELSE votacoes.ai_prompt_versao END,
-      ai_gerado_em = CASE WHEN votacoes.ai_input_hash IS DISTINCT FROM EXCLUDED.ai_input_hash THEN NULL ELSE votacoes.ai_gerado_em END,
       ai_input_hash = EXCLUDED.ai_input_hash,
       raw_json = EXCLUDED.raw_json
     `,
@@ -1207,7 +1054,7 @@ const upsertVoteSession = async (voteSession: VoteSession) => {
 };
 
 const reconcilePendingVotes = async () => {
-  const result = await pool.query(
+  const result = await guardedQuery(
     `
     WITH ready AS (
       SELECT pending.*
@@ -1259,7 +1106,7 @@ const upsertVotes = async (voteSessionId: string, votes: DeputyVote[]) => {
   if (validVotes.length === 0) return 0;
 
   const politicianIds = validVotes.map((vote) => String(vote.politicoId));
-  const existingResult = await pool.query<{id: string}>(
+  const existingResult = await guardedQuery<{id: string}>(
     'SELECT id::text AS id FROM politicos WHERE id = ANY($1::bigint[])',
     [politicianIds],
   );
@@ -1282,7 +1129,7 @@ const upsertVotes = async (voteSessionId: string, votes: DeputyVote[]) => {
   });
 
   if (readyVotes.length > 0) {
-    await pool.query(
+    await guardedQuery(
       `
       INSERT INTO votos_deputados (votacao_id, politico_id, voto, data_hora_voto, deputado_json, raw_json)
       VALUES ${placeholders.join(', ')}
@@ -1297,7 +1144,7 @@ const upsertVotes = async (voteSessionId: string, votes: DeputyVote[]) => {
   }
 
   if (pendingVotes.length > 0) {
-    await pool.query(
+    await guardedQuery(
       `
       INSERT INTO votos_deputados_pendentes (
         votacao_id, politico_id, voto, data_hora_voto, deputado_json, raw_json, ultimo_erro, tentativas, atualizado_em
@@ -1350,7 +1197,7 @@ const upsertVoteOrientations = async (voteSessionId: string, orientations: RawIt
   })).filter((item): item is {siglaBancada: string; orientacao: string | null; rawJson: RawItem} => Boolean(item.siglaBancada));
 
   if (validOrientations.length > 0) {
-    await pool.query(
+    await guardedQuery(
       `
       INSERT INTO camara_votacoes_orientacoes (votacao_id, sigla_bancada, orientacao, raw_json)
       SELECT $1, item.sigla_bancada, item.orientacao, item.raw_json
@@ -1428,7 +1275,10 @@ const ingestVoteWindow = async (start: string, end: string, checkpointId?: strin
       total: voteSessions.length,
     });
     const orientationsPromise = fetchList<RawItem>(`/votacoes/${voteSession.id}/orientacoes`, {}, {ignoreBadRequest: true});
-    const [votes, orientations] = await Promise.all([votesPromise, orientationsPromise]);
+    const fetched = await Promise.allSettled([votesPromise, orientationsPromise]);
+    const failure = fetched.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+    if (failure) throw failure.reason;
+    const [votes, orientations] = fetched.map((result) => (result as PromiseFulfilledResult<any[]>).value);
     writeEvent('db_write', 'Inserindo votos e orientacoes no banco', {
       dataset: 'votacoes',
       periodStart: start,
@@ -1464,7 +1314,7 @@ const ingestVoteWindow = async (start: string, end: string, checkpointId?: strin
 const upsertLegislature = async (item: RawItem) => {
   const id = numberOrNull(item.id);
   if (id == null) return 0;
-  await pool.query(
+  await guardedQuery(
     `
     INSERT INTO camara_legislaturas (id, uri, data_inicio, data_fim, raw_json, atualizado_em)
     VALUES ($1, $2, $3, $4, $5::jsonb, CURRENT_TIMESTAMP)
@@ -1490,7 +1340,7 @@ const upsertLegislature = async (item: RawItem) => {
 const upsertParty = async (item: RawItem) => {
   const id = numberOrNull(item.id);
   if (id == null) return 0;
-  await pool.query(
+  await guardedQuery(
     `
     INSERT INTO camara_partidos (
       id, sigla, nome, uri, numero_eleitoral, url_logo, url_website, url_facebook,
@@ -1529,7 +1379,7 @@ const upsertParty = async (item: RawItem) => {
 const upsertBlock = async (item: RawItem) => {
   const id = textOrNull(item.id);
   if (!id) return 0;
-  await pool.query(
+  await guardedQuery(
     `
     INSERT INTO camara_blocos (id, uri, nome, id_legislatura, federacao, raw_json, atualizado_em)
     VALUES ($1, $2, $3, $4, $5, $6::jsonb, CURRENT_TIMESTAMP)
@@ -1557,7 +1407,7 @@ const upsertBlock = async (item: RawItem) => {
 const upsertOrgan = async (item: RawItem) => {
   const id = numberOrNull(item.id);
   if (id == null) return 0;
-  await pool.query(
+  await guardedQuery(
     `
     INSERT INTO camara_orgaos (
       id, uri, sigla, nome, apelido, cod_tipo_orgao, tipo_orgao, nome_publicacao,
@@ -1596,7 +1446,7 @@ const upsertOrgan = async (item: RawItem) => {
 const upsertEvent = async (item: RawItem) => {
   const id = numberOrNull(item.id);
   if (id == null) return 0;
-  await pool.query(
+  await guardedQuery(
     `
     INSERT INTO camara_eventos (
       id, uri, data_hora_inicio, data_hora_fim, situacao, descricao_tipo, descricao,
@@ -1637,7 +1487,7 @@ const upsertEvent = async (item: RawItem) => {
     for (const orgao of item.orgaos) {
       const orgaoId = numberOrNull((orgao as RawItem).id);
       if (orgaoId == null) continue;
-      await pool.query(
+      await guardedQuery(
         `
         INSERT INTO camara_eventos_orgaos (evento_id, orgao_id, raw_json)
         VALUES ($1, $2, $3::jsonb)
@@ -1655,7 +1505,7 @@ const upsertEvent = async (item: RawItem) => {
 const upsertFront = async (item: RawItem) => {
   const id = numberOrNull(item.id);
   if (id == null) return 0;
-  await pool.query(
+  await guardedQuery(
     `
     INSERT INTO camara_frentes (id, uri, titulo, id_legislatura, raw_json, atualizado_em)
     VALUES ($1, $2, $3, $4, $5::jsonb, CURRENT_TIMESTAMP)
@@ -1675,7 +1525,7 @@ const upsertFront = async (item: RawItem) => {
 const upsertProposal = async (item: RawItem) => {
   const id = numberOrNull(item.id);
   if (id == null) return 0;
-  await pool.query(
+  await guardedQuery(
     `
     INSERT INTO camara_proposicoes (
       id, uri, sigla_tipo, cod_tipo, numero, ano, ementa, data_apresentacao,
@@ -1769,7 +1619,7 @@ const upsertProposalChildren = async (proposalId: number, proposal: RawItem) => 
   for (const author of authors) {
     const uri = textOrNull(author.uri);
     if (!uri) continue;
-    await pool.query(
+    await guardedQuery(
       `
       INSERT INTO camara_proposicoes_autores (
         proposicao_id, uri, nome, cod_tipo, tipo, ordem_assinatura, proponente, raw_json
@@ -1805,7 +1655,7 @@ const upsertProposalChildren = async (proposalId: number, proposal: RawItem) => 
   for (const theme of themes) {
     const codTema = numberOrNull(theme.codTema);
     if (codTema == null) continue;
-    await pool.query(
+    await guardedQuery(
       `
       INSERT INTO camara_proposicoes_temas (proposicao_id, cod_tema, tema, relevancia, raw_json)
       VALUES ($1, $2, $3, $4, $5::jsonb)
@@ -1823,7 +1673,7 @@ const upsertProposalChildren = async (proposalId: number, proposal: RawItem) => 
   for (const proceeding of proceedings) {
     const sequencia = numberOrNull(proceeding.sequencia);
     if (sequencia == null) continue;
-    await pool.query(
+    await guardedQuery(
       `
       INSERT INTO camara_proposicoes_tramitacoes (
         proposicao_id, sequencia, data_hora, sigla_orgao, uri_orgao, uri_ultimo_relator,
@@ -1873,7 +1723,7 @@ const upsertProposalChildren = async (proposalId: number, proposal: RawItem) => 
   for (const relation of related) {
     const relatedId = numberOrNull(relation.id);
     if (relatedId == null) continue;
-    await pool.query(
+    await guardedQuery(
       `
       INSERT INTO camara_proposicoes_relacionadas (proposicao_id, relacionada_id, raw_json)
       VALUES ($1, $2, $3::jsonb)
@@ -1888,26 +1738,14 @@ const upsertProposalChildren = async (proposalId: number, proposal: RawItem) => 
 };
 
 const ingestPagedResource = async (
-  dataset: Dataset,
-  path: string,
-  params: Record<string, string | number>,
-  upsert: (item: RawItem) => Promise<number>,
+  dataset: Dataset, path: string, params: Record<string, string | number>, upsert: (item: RawItem) => Promise<number>,
 ) => {
-  writeEvent('api_fetch', `Carregando ${dataset} da API da Camara`, {
-    dataset,
-    path,
-  });
-  const items = await fetchPaged<RawItem>(path, params, {ignoreBadRequest: true});
   let count = 0;
-  writeEvent('db_write', `Inserindo ${dataset} no banco de dados`, {
-    dataset,
-    path,
-    total: items.length,
-  });
-  for (const item of items) {
-    count += await upsert(item);
+  for await (const page of fetchPagedPages<RawItem>(path, params, {ignoreBadRequest: true})) {
+    writeEvent('db_write', 'Inserindo ' + dataset + ' no banco de dados', {dataset, path, page: page.page, total: page.items.length});
+    for (const item of page.items) count += await upsert(item);
   }
-  writeLog('log', `[resource] ${dataset} ${path}: ${items.length} itens`);
+  writeLog('log', '[resource] ' + dataset + ' ' + path + ': ' + count + ' itens');
   return count;
 };
 
@@ -1921,7 +1759,8 @@ const ingestParties = async () => {
     try {
       const detail = await fetchJson<{dados: RawItem}>(`${API_BASE}/partidos/${id}`);
       item = detail.dados ?? summary;
-    } catch {
+    } catch (error) {
+      if (!(error instanceof HttpError) || ![400, 404, 405].includes(error.status)) throw error;
       item = summary;
     }
     count += await upsertParty(item);
@@ -1946,7 +1785,8 @@ const ingestProposalsWindow = async (start: string, end: string, checkpointId?: 
     try {
       const detail = await fetchJson<{dados: RawItem}>(`${API_BASE}/proposicoes/${id}`);
       item = detail.dados ?? summary;
-    } catch {
+    } catch (error) {
+      if (!(error instanceof HttpError) || ![400, 404, 405].includes(error.status)) throw error;
       item = summary;
     }
     if (processed % 25 === 0) {
@@ -2001,7 +1841,7 @@ const ingestReferences = async () => {
       for (const value of values) {
         const cod = textOrNull(value.cod) ?? textOrNull(value.sigla) ?? textOrNull(value.nome);
         if (!cod) continue;
-        await pool.query(
+        await guardedQuery(
           `
           INSERT INTO camara_referencias (grupo, chave, cod, sigla, nome, descricao, raw_json, atualizado_em)
           VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, CURRENT_TIMESTAMP)
@@ -2038,10 +1878,12 @@ const runCheckpointWorkers = async (
     entity_id: string;
     period_start: string;
     period_end: string;
+    progress_json?: unknown;
   }) => Promise<number>,
 ) => {
   const worker = async () => {
     for (;;) {
+      await checkCancellation();
       const checkpoint = await claimCheckpoint(dataset, options.maxAttempts, options.from, options.to);
       if (!checkpoint) return;
 
@@ -2056,8 +1898,19 @@ const runCheckpointWorkers = async (
           periodStart: checkpoint.period_start,
           periodEnd: checkpoint.period_end,
         });
-        const itemsCount = await handler(checkpoint);
-        await finishCheckpoint(checkpoint.id, 'done', itemsCount, null);
+        const guard = createCancellationGuard(async (client?: PoolClient) => {
+          const result = await (client ?? pool).query<{status: string}>('SELECT status FROM ingestion_checkpoints WHERE id = $1', [checkpoint.id]);
+          const cancelled = result.rows[0]?.status !== 'running';
+          if (cancelled) cancellationObserved = true;
+          return cancelled;
+        });
+        const itemsCount = await checkpointContext.run(guard, async () => {
+          await guard();
+          const count = await handler(checkpoint);
+          await guard();
+          return count;
+        });
+        if (!await finishCheckpoint(checkpoint.id, 'done', itemsCount, null)) throw new IngestionCancelledError();
         writeLog(
           'log',
           `[${itemsCount > 0 ? 'ok-items' : 'ok-zero'}] ${dataset} ${checkpoint.entity_id} ${checkpoint.period_start}..${checkpoint.period_end}: ${itemsCount}`,
@@ -2070,6 +1923,7 @@ const runCheckpointWorkers = async (
           total: itemsCount,
         });
       } catch (error) {
+        if (error instanceof IngestionCancelledError) throw error;
         const message = error instanceof Error ? error.message : String(error);
         await finishCheckpoint(checkpoint.id, 'failed', 0, message);
         writeLog(
@@ -2089,26 +1943,28 @@ const runCheckpointWorkers = async (
     }
   };
 
-  await Promise.all(Array.from({length: options.concurrency}, worker));
+  const results = await Promise.allSettled(Array.from({length: options.concurrency}, worker));
+  const failed = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+  if (failed) throw failed.reason;
 };
 
 const seedExpenseCheckpoints = async (options: CliOptions) => {
   const politicoIds = await getPoliticoIdsForRange(options.from, options.to);
   const windows = buildWindows(options.from, options.to, 'month');
+  let batch: CheckpointSeed[] = [];
+  const flush = async () => {
+    await checkCancellation();
+    await seedCheckpointBatch(pool, batch, options);
+    batch = [];
+  };
   for (const politicoId of politicoIds) {
     for (const window of windows) {
-      await seedCheckpoint(
-        'despesas',
-        politicoId,
-        window.start,
-        window.end,
-        options.resetFailed,
-        options.resetCancelled,
-        options.resetEmpty,
-      );
+      batch.push({dataset: 'despesas', entityId: politicoId, start: window.start, end: window.end});
+      if (batch.length === 1000) await flush();
     }
   }
-  writeLog('log', `[seed] despesas: ${politicoIds.length * windows.length} tarefas`);
+  if (batch.length) await flush();
+  writeLog('log', '[seed] despesas: ' + politicoIds.length * windows.length + ' tarefas');
 };
 
 const seedVoteCheckpoints = async (options: CliOptions) => {
@@ -2174,7 +2030,6 @@ const seedWindowCheckpoints = async (dataset: Dataset, options: CliOptions) => {
 
 const run = async () => {
   const options = parseArgs();
-  await releaseStaleCheckpoints(options.staleMinutes);
 
   writeLog(
     'log',
@@ -2186,94 +2041,100 @@ const run = async () => {
     return;
   }
 
-  if (options.datasets.includes('deputados')) {
-    await seedDeputyCheckpoints(options);
-    await runCheckpointWorkers('deputados', options, async (checkpoint) =>
-      ingestDeputiesForLegislature(Number(checkpoint.entity_id)),
-    );
-    const reconciled = await reconcilePendingVotes();
-    if (reconciled > 0) writeLog('log', `[reconcile] ${reconciled} voto(s) pendente(s) incorporado(s)`);
-  }
+  await runIngestion(pool, options.dryRun, async () => {
+    await releaseStaleCheckpoints(options.staleMinutes);
 
-  if (options.datasets.includes('proposicoes')) {
-    await seedWindowCheckpoints('proposicoes', options);
-    await runCheckpointWorkers('proposicoes', options, async (checkpoint) =>
-      ingestProposalsWindow(checkpoint.period_start, checkpoint.period_end, checkpoint.id),
-    );
-  }
-
-  if (options.datasets.includes('despesas')) {
-    await seedExpenseCheckpoints(options);
-    await runCheckpointWorkers('despesas', options, async (checkpoint) => {
-      const date = new Date(`${checkpoint.period_start}T00:00:00.000Z`);
-      return upsertExpenses(
-        checkpoint.entity_id,
-        date.getUTCFullYear(),
-        date.getUTCMonth() + 1,
+    if (options.datasets.includes('deputados')) {
+      await seedDeputyCheckpoints(options);
+      await runCheckpointWorkers('deputados', options, async (checkpoint) =>
+        ingestDeputiesForLegislature(Number(checkpoint.entity_id)),
       );
-    });
-  }
+      const reconciled = await reconcilePendingVotes();
+      if (reconciled > 0) writeLog('log', `[reconcile] ${reconciled} voto(s) pendente(s) incorporado(s)`);
+    }
 
-  if (options.datasets.includes('votacoes')) {
-    await seedVoteCheckpoints(options);
-    await runCheckpointWorkers('votacoes', options, async (checkpoint) =>
-      ingestVoteWindow(checkpoint.period_start, checkpoint.period_end, checkpoint.id),
-    );
-    const reconciled = await reconcilePendingVotes();
-    if (reconciled > 0) writeLog('log', `[reconcile] ${reconciled} voto(s) pendente(s) incorporado(s)`);
-  }
+    if (options.datasets.includes('proposicoes')) {
+      await seedWindowCheckpoints('proposicoes', options);
+      await runCheckpointWorkers('proposicoes', options, async (checkpoint) =>
+        ingestProposalsWindow(checkpoint.period_start, checkpoint.period_end, checkpoint.id),
+      );
+    }
 
-  if (options.datasets.includes('legislaturas')) {
-    await seedSingleCheckpoint('legislaturas', options);
-    await runCheckpointWorkers('legislaturas', options, async () =>
-      ingestPagedResource('legislaturas', '/legislaturas', {}, upsertLegislature),
-    );
-  }
+    if (options.datasets.includes('despesas')) {
+      await seedExpenseCheckpoints(options);
+      await runCheckpointWorkers('despesas', options, async (checkpoint) => {
+        const date = new Date(`${checkpoint.period_start}T00:00:00.000Z`);
+        return upsertExpenses(
+          checkpoint.entity_id,
+          date.getUTCFullYear(),
+          date.getUTCMonth() + 1,
+          checkpoint,
+        );
+      });
+    }
 
-  if (options.datasets.includes('partidos')) {
-    await seedSingleCheckpoint('partidos', options);
-    await runCheckpointWorkers('partidos', options, async () => ingestParties());
-  }
+    if (options.datasets.includes('votacoes')) {
+      await seedVoteCheckpoints(options);
+      await runCheckpointWorkers('votacoes', options, async (checkpoint) =>
+        ingestVoteWindow(checkpoint.period_start, checkpoint.period_end, checkpoint.id),
+      );
+      const reconciled = await reconcilePendingVotes();
+      if (reconciled > 0) writeLog('log', `[reconcile] ${reconciled} voto(s) pendente(s) incorporado(s)`);
+    }
 
-  if (options.datasets.includes('blocos')) {
-    await seedSingleCheckpoint('blocos', options);
-    await runCheckpointWorkers('blocos', options, async () =>
-      ingestPagedResource('blocos', '/blocos', {}, upsertBlock),
-    );
-  }
+    if (options.datasets.includes('legislaturas')) {
+      await seedSingleCheckpoint('legislaturas', options);
+      await runCheckpointWorkers('legislaturas', options, async () =>
+        ingestPagedResource('legislaturas', '/legislaturas', {}, upsertLegislature),
+      );
+    }
 
-  if (options.datasets.includes('orgaos')) {
-    await seedSingleCheckpoint('orgaos', options);
-    await runCheckpointWorkers('orgaos', options, async () =>
-      ingestPagedResource('orgaos', '/orgaos', {}, upsertOrgan),
-    );
-  }
+    if (options.datasets.includes('partidos')) {
+      await seedSingleCheckpoint('partidos', options);
+      await runCheckpointWorkers('partidos', options, async () => ingestParties());
+    }
 
-  if (options.datasets.includes('eventos')) {
-    await seedWindowCheckpoints('eventos', options);
-    await runCheckpointWorkers('eventos', options, async (checkpoint) =>
-      ingestPagedResource('eventos', '/eventos', {
-        dataInicio: checkpoint.period_start,
-        dataFim: checkpoint.period_end,
-      }, upsertEvent),
-    );
-  }
+    if (options.datasets.includes('blocos')) {
+      await seedSingleCheckpoint('blocos', options);
+      await runCheckpointWorkers('blocos', options, async () =>
+        ingestPagedResource('blocos', '/blocos', {}, upsertBlock),
+      );
+    }
 
-  if (options.datasets.includes('frentes')) {
-    await seedSingleCheckpoint('frentes', options);
-    await runCheckpointWorkers('frentes', options, async () =>
-      ingestPagedResource('frentes', '/frentes', {}, upsertFront),
-    );
-  }
+    if (options.datasets.includes('orgaos')) {
+      await seedSingleCheckpoint('orgaos', options);
+      await runCheckpointWorkers('orgaos', options, async () =>
+        ingestPagedResource('orgaos', '/orgaos', {}, upsertOrgan),
+      );
+    }
 
-  if (options.datasets.includes('referencias')) {
-    await seedSingleCheckpoint('referencias', options);
-    await runCheckpointWorkers('referencias', options, async () => ingestReferences());
-  }
+    if (options.datasets.includes('eventos')) {
+      await seedWindowCheckpoints('eventos', options);
+      await runCheckpointWorkers('eventos', options, async (checkpoint) =>
+        ingestPagedResource('eventos', '/eventos', {
+          dataInicio: checkpoint.period_start,
+          dataFim: checkpoint.period_end,
+        }, upsertEvent),
+      );
+    }
+
+    if (options.datasets.includes('frentes')) {
+      await seedSingleCheckpoint('frentes', options);
+      await runCheckpointWorkers('frentes', options, async () =>
+        ingestPagedResource('frentes', '/frentes', {}, upsertFront),
+      );
+    }
+
+    if (options.datasets.includes('referencias')) {
+      await seedSingleCheckpoint('referencias', options);
+      await runCheckpointWorkers('referencias', options, async () => ingestReferences());
+    }
+  });
 };
 
-run()
+export const ingestionRun = run()
   .catch((error) => {
+    if (error instanceof IngestionCancelledError) { writeLog('log', error.message); return; }
     writeLog('error', error instanceof Error ? error.stack ?? error.message : String(error));
     process.exitCode = 1;
   })

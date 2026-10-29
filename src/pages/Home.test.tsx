@@ -1,0 +1,83 @@
+import React from 'react';
+import {act,screen,waitFor} from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import {afterEach,expect,it,vi} from 'vitest';
+import {renderWithProviders} from '../test/render';
+import {Home} from './Home';
+afterEach(()=>vi.unstubAllGlobals());
+it('atualiza destaques e novos cadastros por uma única conexão',async()=>{
+ let update!:(event:{data:string})=>void; let changed=false; let connections=0;
+ vi.stubGlobal('EventSource',class{constructor(){connections++;}addEventListener(name:string,fn:typeof update){if(name==='catalogo')update=fn;}close(){}});
+ vi.stubGlobal('fetch',vi.fn(async()=>({ok:true,json:async()=>({items:[{id:changed?'2':'1',nome:changed?'Recém cadastrado':'Anterior',partido:'ABC',estado:'SP',notaMedia:4,foto:'x'}]})}) as Response));
+ renderWithProviders(<Home/>); await screen.findAllByText('Anterior');
+ changed=true; act(()=>update({data:JSON.stringify({revision:'b'})}));
+ await screen.findAllByText('Recém cadastrado');
+ expect(screen.queryByText('Anterior')).not.toBeInTheDocument(); expect(connections).toBe(1);
+});
+it('conclui consultas lentas durante avisos contínuos, sem abortar ou esvaziar os cards',async()=>{
+ vi.useFakeTimers();
+ let update!:(event:{data:string})=>void; let slow=false;
+ const pending:Array<()=>void>=[]; const signals:AbortSignal[]=[];
+ vi.stubGlobal('EventSource',class {addEventListener(name:string,fn:typeof update){if(name==='catalogo')update=fn;}close(){}});
+ const response=()=>({ok:true,json:async()=>({items:[{id:'1',nome:slow?'Dados reconciliados':'Anterior',partido:'ABC',estado:'SP',notaMedia:4,foto:'x'}]})}) as Response;
+ vi.stubGlobal('fetch',vi.fn(async(_input,init)=>{
+  if(!slow)return response();
+  signals.push(init.signal);
+  return new Promise<Response>(resolve=>pending.push(()=>resolve(response())));
+ }));
+ renderWithProviders(<Home/>);
+ await act(async()=>{}); expect(screen.getAllByText('Anterior')).toHaveLength(3);
+ slow=true;
+ act(()=>update({data:JSON.stringify({revision:'a'})}));
+ await act(async()=>{await vi.advanceTimersByTimeAsync(400);});
+ expect(pending).toHaveLength(3);
+ act(()=>update({data:JSON.stringify({revision:'b'})}));
+ await act(async()=>{await vi.advanceTimersByTimeAsync(2000);});
+ expect(pending).toHaveLength(3); expect(signals.every(signal=>!signal.aborted)).toBe(true);
+ expect(screen.getAllByText('Anterior')).toHaveLength(3);
+ await act(async()=>{pending.splice(0).forEach(resolve=>resolve());});
+ expect(screen.getAllByText('Dados reconciliados')).toHaveLength(3);
+ await act(async()=>{await vi.advanceTimersByTimeAsync(400);});
+ expect(pending).toHaveLength(3);
+ vi.useRealTimers();
+});
+it('descarta invalidação que aguardava o status anterior, sem duplicar consultas do novo filtro',async()=>{
+ vi.useFakeTimers();
+ let update!:(event:{data:string})=>void; const oldResponses:Array<()=>void>=[];
+ const calls:string[]=[];
+ const json=()=>({ok:true,json:async()=>({items:[]})}) as Response;
+ vi.stubGlobal('EventSource',class {addEventListener(name:string,fn:typeof update){if(name==='catalogo')update=fn;}close(){}});
+ vi.stubGlobal('fetch',vi.fn(async(input)=>{
+  const url=String(input); calls.push(url);
+  if(url.includes('status=ativo'))return new Promise<Response>(resolve=>oldResponses.push(()=>resolve(json())));
+  return json();
+ }));
+ renderWithProviders(<Home/>);
+ act(()=>update({data:JSON.stringify({revision:'a'})}));
+ await act(async()=>{await vi.advanceTimersByTimeAsync(400);});
+ act(()=>screen.getByRole('button',{name:'Todos'}).click());
+ await act(async()=>{oldResponses.forEach(resolve=>resolve());});
+ expect(calls.filter(url=>url.includes('status=todos'))).toHaveLength(3);
+ vi.useRealTimers();
+});
+it('mantém erro do ranking durante a busca e diferencia carregamento, falha e vazio',async()=>{
+ let finish!:(response:Response)=>void;
+ vi.stubGlobal('fetch',vi.fn(async(input)=>{
+  const url=String(input);
+  if(url.includes('/ranking?')) return {ok:false,status:500} as Response;
+  if(url.includes('/politicos?')) return new Promise<Response>(resolve=>{finish=resolve;});
+  return {ok:true,json:async()=>({items:[]})} as Response;
+ }));
+ const user=userEvent.setup();renderWithProviders(<Home/>);
+ expect(await screen.findByText('Não foi possível carregar o ranking. Tente novamente.')).toBeInTheDocument();
+ await user.type(screen.getByPlaceholderText('Busque por nome, partido ou estado'),'Maria');
+ expect(screen.getByText('Não foi possível carregar o ranking. Tente novamente.')).toBeInTheDocument();
+ expect(screen.queryByText(/Nenhum deputado encontrado/)).not.toBeInTheDocument();
+ expect(screen.getByRole('status')).toHaveTextContent('Buscando');
+ await waitFor(()=>expect(finish).toBeTypeOf('function'));
+ await act(async()=>{finish({ok:false,status:500} as Response);});
+ expect(await screen.findByText('Não foi possível carregar os resultados da busca. Tente novamente.')).toBeInTheDocument();
+ expect(screen.queryByText(/Nenhum deputado encontrado/)).not.toBeInTheDocument();
+ await user.clear(screen.getByPlaceholderText('Busque por nome, partido ou estado'));
+ expect(screen.getByText('Não foi possível carregar o ranking. Tente novamente.')).toBeInTheDocument();
+});

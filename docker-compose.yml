@@ -20,7 +20,7 @@ services:
       - APP_DB_USER=app
       - APP_DB_PASSWORD=app
       - APP_DB_NAME=app
-      - DATABASE_URL=postgresql://app:app@db:5432/app?schema=public
+      - DATABASE_URL=postgresql://app:app@db:5432/app?schema=catalogo&options=-c%20search_path%3Dcatalogo%2Cpublic
     depends_on:
       db:
         condition: service_healthy
@@ -52,7 +52,7 @@ services:
       - APP_DB_USER=app
       - APP_DB_PASSWORD=app
       - APP_DB_NAME=app
-      - DATABASE_URL=postgresql://app:app@db:5432/app?schema=public
+      - DATABASE_URL=postgresql://app:app@db:5432/app?schema=catalogo&options=-c%20search_path%3Dcatalogo%2Cpublic
     depends_on:
       db:
         condition: service_healthy
@@ -76,34 +76,7 @@ services:
       timeout: 5s
       retries: 20
 
-  n8n:
-    image: n8nio/n8n:latest
-    ports:
-      - "${N8N_HOST_PORT:-5679}:5678"
-    depends_on:
-      db:
-        condition: service_healthy
-    environment:
-      - DB_TYPE=postgresdb
-      - DB_POSTGRESDB_HOST=db
-      - DB_POSTGRESDB_PORT=5432
-      - DB_POSTGRESDB_DATABASE=app
-      - DB_POSTGRESDB_USER=app
-      - DB_POSTGRESDB_PASSWORD=app
-      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY:-local-development-encryption-key-change-me}
-      - N8N_HOST=localhost
-      - N8N_PORT=5678
-      - N8N_PROTOCOL=http
-      - WEBHOOK_URL=http://localhost:${N8N_HOST_PORT:-5679}/
-      - GENERIC_TIMEZONE=America/Sao_Paulo
-    volumes:
-      - n8n_data:/home/node/.n8n
-    restart: unless-stopped
-    env_file:
-      - .env
-
 volumes:
   app_node_modules:
   api_node_modules:
-  n8n_data:
   app_db_data:

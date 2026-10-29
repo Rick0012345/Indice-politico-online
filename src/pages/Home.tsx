@@ -1,4 +1,4 @@
-import React, {useEffect, useState} from 'react';
+import React, {useEffect, useRef, useState} from 'react';
 import {
   Search,
   Star,
@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import {Link} from 'react-router-dom';
 import {cn} from '../lib/utils';
+import {catalogConnectionLabels, useCatalogUpdates} from '../hooks/useCatalogUpdates';
 import {
   getPoliticoStatusClasses,
   getPoliticoStatusLabel,
@@ -125,15 +126,33 @@ const NovoPoliticoCard: React.FC<{politico: PoliticoCardModel}> = ({politico}) =
 };
 
 export const Home = () => {
+  const reloaders = useRef<Record<string, () => Promise<void>>>({});
+  const requests = useRef<Record<string, Promise<void>>>({});
+  const [requestErrors, setRequestErrors] = useState<Record<string, string>>({});
+  const reportError = (area: string, message: string) => setRequestErrors(current => ({...current, [area]: message}));
+  const [searchResultKey, setSearchResultKey] = useState('');
+  const [isSearching, setIsSearching] = useState(false);
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState<PoliticoStatusFilter>('ativo');
+  const statusContext = useRef({status, generation: 0});
+  if (statusContext.current.status !== status) {
+    statusContext.current = {status, generation: statusContext.current.generation + 1};
+  }
+  const catalogConnection = useCatalogUpdates(async () => {
+    const generation = statusContext.current.generation;
+    await Promise.all(Object.values(requests.current));
+    if (statusContext.current.generation !== generation) return;
+    await Promise.all(Object.values<() => Promise<void>>(reloaders.current).map(reload => reload()));
+  });
   const [novosCadastrados, setNovosCadastrados] = useState<PoliticoCardModel[]>([]);
   const [bestPoliticos, setBestPoliticos] = useState<PoliticoCardModel[]>([]);
   const [worstPoliticos, setWorstPoliticos] = useState<PoliticoCardModel[]>([]);
   const [searchResults, setSearchResults] = useState<PoliticoCardModel[]>([]);
   const trimmedSearch = search.trim();
   const showSearchFeedback = trimmedSearch.length >= 2;
-  const topSearchSuggestion = searchResults[0] ?? null;
+  const searchKey = JSON.stringify([trimmedSearch, status]);
+  const searchIsCurrent = searchResultKey === searchKey;
+  const topSearchSuggestion = searchIsCurrent ? searchResults[0] ?? null : null;
   const secondarySearchSuggestions = searchResults.slice(1, 5);
 
   const inlineSearchCompletion =
@@ -147,8 +166,10 @@ export const Home = () => {
 
   useEffect(() => {
     const controller = new AbortController();
+    reportError('ranking', '');
 
     const run = async () => {
+      reportError('ranking', '');
       try {
         const [bestRes, worstRes] = await Promise.all([
           fetch(`/api/politicos/ranking?filter=best&limit=4&status=${encodeURIComponent(status)}`, {
@@ -159,8 +180,10 @@ export const Home = () => {
           }),
         ]);
 
+        if (!bestRes.ok || !worstRes.ok) throw new Error('HTTP');
         if (bestRes.ok) {
           const data = (await bestRes.json()) as {items?: PoliticoCardModel[]};
+          if (controller.signal.aborted) return;
           setBestPoliticos(
             (data.items ?? []).map((p) => ({
               ...p,
@@ -171,6 +194,7 @@ export const Home = () => {
 
         if (worstRes.ok) {
           const data = (await worstRes.json()) as {items?: PoliticoCardModel[]};
+          if (controller.signal.aborted) return;
           setWorstPoliticos(
             (data.items ?? []).map((p) => ({
               ...p,
@@ -179,23 +203,28 @@ export const Home = () => {
           );
         }
       } catch {
+        if (!controller.signal.aborted) reportError('ranking', 'Não foi possível carregar o ranking. Tente novamente.');
       }
     };
 
-    run();
-    return () => controller.abort();
+    const reload = () => { const request = run(); requests.current.ranking = request; return request; };
+    reloaders.current.ranking = reload;
+    void reload();
+    return () => { controller.abort(); delete reloaders.current.ranking; };
   }, [status]);
 
   useEffect(() => {
     const controller = new AbortController();
+    reportError('novos', '');
 
     const run = async () => {
+      reportError('novos', '');
       try {
         const response = await fetch(
           `/api/politicos/novos?limit=6&status=${encodeURIComponent(status)}`,
           {signal: controller.signal},
         );
-        if (!response.ok) return;
+        if (!response.ok) throw new Error('HTTP');
 
         const data = (await response.json()) as {items?: Array<Partial<PoliticoCardModel>>};
 
@@ -220,21 +249,29 @@ export const Home = () => {
             situacao: typeof p.situacao === 'string' ? p.situacao : null,
           }));
 
+        if (controller.signal.aborted) return;
         setNovosCadastrados(items);
       } catch {
+        if (!controller.signal.aborted) reportError('novos', 'Não foi possível carregar os novos cadastros. Tente novamente.');
       }
     };
 
-    run();
-    return () => controller.abort();
+    const reload = () => { const request = run(); requests.current.novos = request; return request; };
+    reloaders.current.novos = reload;
+    void reload();
+    return () => { controller.abort(); delete reloaders.current.novos; };
   }, [status]);
 
   useEffect(() => {
     const controller = new AbortController();
+    reportError('busca', '');
+    setIsSearching(trimmedSearch.length >= 2);
+    setSearchResults([]);
 
     const run = async () => {
       const q = trimmedSearch;
       if (q.length < 2) {
+        if (controller.signal.aborted) return;
         setSearchResults([]);
         return;
       }
@@ -246,9 +283,11 @@ export const Home = () => {
             signal: controller.signal,
           },
         );
-        if (!response.ok) return;
+        if (!response.ok) throw new Error('HTTP');
 
         const data = (await response.json()) as {items?: PoliticoCardModel[]};
+        if (controller.signal.aborted) return;
+        setSearchResultKey(searchKey);
         setSearchResults(
           (data.items ?? []).map((p) => ({
             ...p,
@@ -256,6 +295,9 @@ export const Home = () => {
           })),
         );
       } catch {
+        if (!controller.signal.aborted) reportError('busca', 'Não foi possível carregar os resultados da busca. Tente novamente.');
+      } finally {
+        if (!controller.signal.aborted) setIsSearching(false);
       }
     };
 
@@ -305,6 +347,7 @@ export const Home = () => {
 
   return (
     <div className="flex flex-col gap-14 pb-20">
+      {Object.entries(requestErrors).filter(([area, message]) => area !== 'busca' && Boolean(message)).map(([area, message]) => <p key={area} role="alert" className="mb-4 rounded-xl bg-rose-50 p-4 text-rose-800">{message}</p>)}
       <section className="relative overflow-hidden border-b border-slate-200 bg-white py-10 dark:border-slate-800 dark:bg-slate-950 sm:py-14">
         <div className="civic-mesh opacity-90 dark:opacity-70" aria-hidden="true">
           <span className="civic-node left-[18%] top-[24%]" />
@@ -386,7 +429,11 @@ export const Home = () => {
 
             {showSearchFeedback ? (
               <div className="w-full max-w-2xl text-left">
-                {topSearchSuggestion ? (
+                {isSearching || (!searchIsCurrent && !requestErrors.busca) ? (
+                  <p role="status" className="rounded-2xl bg-white p-4 text-sm text-slate-600 dark:bg-slate-900 dark:text-slate-300">Buscando parlamentares...</p>
+                ) : requestErrors.busca ? (
+                  <p role="alert" className="rounded-2xl bg-rose-50 p-4 text-sm text-rose-800">{requestErrors.busca}</p>
+                ) : topSearchSuggestion ? (
                   <div className="overflow-hidden rounded-3xl border border-slate-200/80 bg-white/95 shadow-xl ring-1 ring-inset ring-white/70 backdrop-blur dark:border-slate-700/80 dark:bg-slate-900/95 dark:ring-slate-800/70">
                     <button
                       type="button"
@@ -466,6 +513,7 @@ export const Home = () => {
       </section>
 
       <section className="mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8">
+        <p aria-live="polite" className="mb-4 text-xs text-slate-500 dark:text-slate-400">{catalogConnectionLabels[catalogConnection]}</p>
         <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
           {discoveryCards.map((card, index) => (
             <Link

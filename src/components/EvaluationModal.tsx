@@ -1,4 +1,4 @@
-import React, {useEffect, useState} from 'react';
+import React, {useEffect, useRef, useState} from 'react';
 import {Star, X, ShieldCheck, Info} from 'lucide-react';
 import {AnimatePresence, motion} from 'motion/react';
 
@@ -40,6 +40,35 @@ export const EvaluationModal = ({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
+  const dialog = useRef<HTMLDivElement>(null);
+  const submissionContext = useRef(0);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  const closeTimer = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    if (!isOpen) return;
+    submissionContext.current += 1;
+    const previous = document.activeElement as HTMLElement | null;
+    const overflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    dialog.current?.querySelector<HTMLElement>('button')?.focus();
+    const keydown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') { event.preventDefault(); closeRef.current(); }
+      if (event.key !== 'Tab') return;
+      const controls = (Array.from(dialog.current?.querySelectorAll('*') ?? []) as HTMLElement[]).filter(element => element.tabIndex >= 0 && !element.hasAttribute('disabled'));
+      const first = controls[0]; const last = controls[controls.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+    };
+    document.addEventListener('keydown', keydown);
+    return () => {
+      submissionContext.current += 1;
+      document.removeEventListener('keydown', keydown);
+      document.body.style.overflow = overflow;
+      window.clearTimeout(closeTimer.current);
+      previous?.focus();
+    };
+  }, [isOpen, politicoId]);
   const cpfDigits = cpf.replace(/\D/g, '');
 
   useEffect(() => {
@@ -65,6 +94,7 @@ export const EvaluationModal = ({
       return;
     }
 
+    const currentSubmission = submissionContext.current;
     setIsSubmitting(true);
     setErrorMessage(null);
     setSuccessMessage(null);
@@ -91,6 +121,7 @@ export const EvaluationModal = ({
         totalAvaliacoes?: number;
       };
 
+      if (submissionContext.current !== currentSubmission) return;
       if (!response.ok) {
         setErrorMessage(data.error ?? 'Nao foi possivel registrar sua avaliacao agora.');
         return;
@@ -110,13 +141,13 @@ export const EvaluationModal = ({
             : 'Sua avaliacao foi registrada com sucesso.'),
       );
 
-      window.setTimeout(() => {
+      closeTimer.current = window.setTimeout(() => {
         onClose();
       }, 1000);
     } catch {
-      setErrorMessage('Falha de conexao. Tente novamente em instantes.');
+      if (submissionContext.current === currentSubmission) setErrorMessage('Falha de conexao. Tente novamente em instantes.');
     } finally {
-      setIsSubmitting(false);
+      if (submissionContext.current === currentSubmission) setIsSubmitting(false);
     }
   };
 
@@ -135,11 +166,17 @@ export const EvaluationModal = ({
             initial={{opacity: 0, scale: 0.95, y: 20}}
             animate={{opacity: 1, scale: 1, y: 0}}
             exit={{opacity: 0, scale: 0.95, y: 20}}
-            className="relative w-full max-w-md overflow-hidden rounded-3xl bg-white p-8 shadow-2xl dark:bg-slate-900"
+            ref={dialog}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="evaluation-title"
+            className="relative max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto rounded-3xl bg-white p-8 shadow-2xl dark:bg-slate-900"
           >
             <button
+              type="button"
+              aria-label="Fechar avaliação"
               onClick={onClose}
-              className="absolute right-4 top-4 text-slate-400 hover:text-slate-600 dark:text-slate-500 dark:hover:text-slate-300"
+              className="absolute right-4 top-4 flex h-11 w-11 items-center justify-center rounded-lg focus-visible:ring-2 focus-visible:ring-blue-600 text-slate-400 hover:text-slate-600 dark:text-slate-500 dark:hover:text-slate-300"
             >
               <X size={24} />
             </button>
@@ -148,7 +185,7 @@ export const EvaluationModal = ({
               <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-blue-50 text-blue-600 dark:bg-blue-950 dark:text-blue-400">
                 <Star size={24} className="fill-blue-600 dark:fill-blue-400" />
               </div>
-              <h2 className="text-2xl font-bold text-slate-900 dark:text-slate-50">Avaliar Politico</h2>
+              <h2 id="evaluation-title" className="text-2xl font-bold text-slate-900 dark:text-slate-50">Avaliar Politico</h2>
               <p className="mt-2 text-slate-500 dark:text-slate-400">
                 Como voce avalia a atuacao de{' '}
                 <span className="font-semibold text-slate-900 dark:text-slate-50">{politicoName}</span>?
@@ -222,7 +259,7 @@ export const EvaluationModal = ({
                 placeholder="000.000.000-00"
               />
               <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-                O CPF e processado em hash para impedir votos duplicados no mesmo politico.
+                O CPF digitado é convertido em hash para limitar duplicatas por político. Isso não autentica a identidade de quem avalia.
               </p>
             </div>
 
@@ -239,13 +276,13 @@ export const EvaluationModal = ({
             </div>
 
             {errorMessage && (
-              <div className="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-700">
+              <div role="alert" className="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-700">
                 {errorMessage}
               </div>
             )}
 
             {successMessage && (
-              <div className="mb-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-700">
+              <div role="status" className="mb-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-700">
                 {successMessage}
               </div>
             )}
@@ -270,7 +307,7 @@ export const EvaluationModal = ({
 
             <div className="mt-6 flex items-center justify-center gap-1 text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500">
               <Info size={12} />
-              Seus dados estao protegidos pela LGPD
+              O CPF não é exibido publicamente
             </div>
           </motion.div>
         </div>

@@ -34,8 +34,8 @@ export const About = () => {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8 mb-20">
         {[
           { icon: Globe, title: "Independente", desc: "Não possuímos vínculo com partidos ou órgãos governamentais." },
-          { icon: Shield, title: "Seguro", desc: "Utilizamos autenticação oficial para garantir a veracidade das avaliações." },
-          { icon: Zap, title: "Em Tempo Real", desc: "Dados atualizados diariamente via APIs oficiais do governo." },
+          { icon: Shield, title: "Avaliações por CPF", desc: "O CPF digitado é convertido em hash para limitar duplicatas; não há autenticação de identidade." },
+          { icon: Zap, title: "Dados importados", desc: "Fonte implementada: Câmara dos Deputados. A atualização depende da execução da importação." },
           { icon: Users, title: "Colaborativo", desc: "Feito por cidadãos para cidadãos, focado na experiência do usuário." },
           { icon: MessageSquare, title: "Transparente", desc: "Metodologia aberta e clara sobre a origem de cada informação." },
           { icon: Heart, title: "Cívico", desc: "Nosso objetivo é fortalecer a cultura de fiscalização no Brasil." },

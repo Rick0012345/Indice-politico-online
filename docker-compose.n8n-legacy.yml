@@ -1,0 +1,34 @@
+# Uso opcional: docker compose -p indice-politico-online -f docker-compose.yml -f docker-compose.n8n-legacy.yml up -d --no-deps n8n
+# Requer o db existente em execucao e preserva o volume legado, sem cria-lo vazio.
+services:
+  n8n:
+    image: n8nio/n8n:latest
+    ports:
+      - "${N8N_HOST_PORT:-5679}:5678"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=db
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=app
+      - DB_POSTGRESDB_USER=app
+      - DB_POSTGRESDB_PASSWORD=app
+      - DB_POSTGRESDB_SCHEMA=public
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY:-local-development-encryption-key-change-me}
+      - N8N_HOST=localhost
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - WEBHOOK_URL=http://localhost:${N8N_HOST_PORT:-5679}/
+      - GENERIC_TIMEZONE=America/Sao_Paulo
+    volumes:
+      - n8n_data:/home/node/.n8n
+    restart: unless-stopped
+    env_file:
+      - .env
+
+volumes:
+  n8n_data:
+    external: true
+    name: indice-politico-online_n8n_data

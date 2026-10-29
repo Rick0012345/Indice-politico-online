@@ -13,11 +13,12 @@ RUN --mount=type=cache,target=/root/.npm npm ci
 
 COPY . .
 
-RUN chmod +x /app/docker-entrypoint.sh
+COPY docker-entrypoint.sh /usr/local/bin/catalogo-entrypoint.sh
+RUN sed -i 's/\r$//' /usr/local/bin/catalogo-entrypoint.sh && chmod +x /usr/local/bin/catalogo-entrypoint.sh
 
 EXPOSE 3000
 
-ENTRYPOINT ["sh", "/app/docker-entrypoint.sh"]
+ENTRYPOINT ["/usr/local/bin/catalogo-entrypoint.sh"]
 
 CMD ["npm", "run", "dev", "--", "--host"]
 
@@ -40,6 +41,7 @@ RUN npm run build
 FROM nginx:alpine AS production
 
 COPY --from=builder /app/dist /usr/share/nginx/html
+COPY nginx.conf /etc/nginx/conf.d/default.conf
 
 EXPOSE 80
 
@@ -59,12 +61,13 @@ COPY prisma ./prisma
 COPY src ./src
 COPY tsconfig.json docker-entrypoint.sh ./
 
-RUN chmod +x /app/docker-entrypoint.sh
+COPY docker-entrypoint.sh /usr/local/bin/catalogo-entrypoint.sh
+RUN sed -i 's/\r$//' /usr/local/bin/catalogo-entrypoint.sh && chmod +x /usr/local/bin/catalogo-entrypoint.sh
 
 ENV NODE_ENV=production
 ENV RUN_PRISMA_MIGRATIONS=true
 
 EXPOSE 4000
 
-ENTRYPOINT ["sh", "/app/docker-entrypoint.sh"]
+ENTRYPOINT ["/usr/local/bin/catalogo-entrypoint.sh"]
 CMD ["npm", "run", "api:start"]

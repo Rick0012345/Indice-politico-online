@@ -144,9 +144,10 @@ const DeputadosDoPartido: React.FC<{
   partido: PartidoItem;
   deputados: PartidoPoliticoItem[];
   isLoading: boolean;
+  error: string;
   money: Intl.NumberFormat;
   onClose: () => void;
-}> = ({partido, deputados, isLoading, money, onClose}) => (
+}> = ({partido, deputados, isLoading, error, money, onClose}) => (
   <section className="mb-8 overflow-hidden rounded-3xl border border-blue-200 bg-white shadow-sm dark:border-blue-900 dark:bg-slate-900">
     <div className="flex flex-col gap-4 border-b border-slate-200 bg-blue-50 px-4 py-5 sm:flex-row sm:items-center sm:justify-between sm:px-6 dark:border-slate-700 dark:bg-blue-950/40">
       <div className="flex items-center gap-3">
@@ -171,7 +172,7 @@ const DeputadosDoPartido: React.FC<{
     <div className="p-4 sm:p-6">
       {isLoading ? (
         <div className="text-sm font-medium text-slate-500 dark:text-slate-400">Carregando deputados...</div>
-      ) : deputados.length === 0 ? (
+      ) : error ? <p role="alert" className="text-sm text-rose-700 dark:text-rose-400">{error}</p> : deputados.length === 0 ? (
         <div className="text-sm font-medium text-slate-500 dark:text-slate-400">
           Nenhum deputado encontrado para este partido com o filtro atual.
         </div>
@@ -234,6 +235,8 @@ const DeputadosDoPartido: React.FC<{
 );
 
 export const Partidos = () => {
+  const [requestError, setRequestError] = useState('');
+  const [deputadosError, setDeputadosError] = useState('');
   const [items, setItems] = useState<PartidoItem[]>([]);
   const [selectedPartido, setSelectedPartido] = useState<PartidoItem | null>(null);
   const [deputados, setDeputados] = useState<PartidoPoliticoItem[]>([]);
@@ -256,6 +259,7 @@ export const Partidos = () => {
 
   useEffect(() => {
     const controller = new AbortController();
+    setRequestError('');
 
     const run = async () => {
       setIsLoading(true);
@@ -274,9 +278,10 @@ export const Partidos = () => {
           signal: controller.signal,
         });
 
-        if (!response.ok) return;
+        if (!response.ok) throw new Error('HTTP');
 
         const data = (await response.json()) as {items?: PartidoItem[]};
+        if (controller.signal.aborted) return;
         setItems(
           (data.items ?? []).filter(
             (item): item is PartidoItem =>
@@ -287,8 +292,9 @@ export const Partidos = () => {
           ),
         );
       } catch {
+        if (!controller.signal.aborted) setRequestError('Não foi possível carregar os dados. Tente novamente.');
       } finally {
-        setIsLoading(false);
+        if (!controller.signal.aborted) setIsLoading(false);
       }
     };
 
@@ -306,6 +312,7 @@ export const Partidos = () => {
     }
 
     const controller = new AbortController();
+    setDeputadosError('');
 
     const run = async () => {
       setIsLoadingDeputados(true);
@@ -321,9 +328,10 @@ export const Partidos = () => {
           {signal: controller.signal},
         );
 
-        if (!response.ok) return;
+        if (!response.ok) throw new Error('HTTP');
 
         const data = (await response.json()) as {items?: PartidoPoliticoItem[]};
+        if (controller.signal.aborted) return;
         setDeputados(
           (data.items ?? []).filter(
             (item): item is PartidoPoliticoItem =>
@@ -335,8 +343,9 @@ export const Partidos = () => {
           ),
         );
       } catch {
+        if (!controller.signal.aborted) setDeputadosError('Não foi possível carregar os deputados do partido. Tente novamente.');
       } finally {
-        setIsLoadingDeputados(false);
+        if (!controller.signal.aborted) setIsLoadingDeputados(false);
       }
     };
 
@@ -366,6 +375,7 @@ export const Partidos = () => {
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-12 sm:px-6 lg:px-8">
+      {requestError && <p role="alert" className="mb-4 rounded-xl bg-rose-50 p-4 text-rose-800">{requestError}</p>}
       <div className="mb-10">
         <h1 className="text-4xl font-extrabold text-slate-900 dark:text-slate-50">Analise de Partidos</h1>
         <p className="mt-4 max-w-3xl text-lg text-slate-600 dark:text-slate-400">
@@ -453,6 +463,7 @@ export const Partidos = () => {
           partido={selectedPartido}
           deputados={deputados}
           isLoading={isLoadingDeputados}
+          error={deputadosError}
           money={money}
           onClose={() => setSelectedPartido(null)}
         />
@@ -462,7 +473,7 @@ export const Partidos = () => {
         <div className="rounded-3xl border border-slate-200 bg-white px-6 py-8 text-center text-sm font-medium text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
           Carregando partidos...
         </div>
-      ) : items.length === 0 ? (
+      ) : requestError ? null : items.length === 0 ? (
         <div className="rounded-3xl border border-slate-200 bg-white px-6 py-8 text-center text-sm font-medium text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
           Nenhum partido encontrado com esse filtro.
         </div>

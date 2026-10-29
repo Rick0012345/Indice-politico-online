@@ -65,11 +65,12 @@ const formatDate = (value: string | null) => {
 
 const EmptyState = () => (
   <div className="rounded-3xl border border-slate-200 bg-white p-8 text-center text-sm font-medium text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
-    Esses dados ainda estao sendo sincronizados pela API da Camara.
+    Nenhum registro encontrado na base importada para esses filtros.
   </div>
 );
 
 export const Camara = () => {
+  const [requestError, setRequestError] = useState('');
   const [activeTab, setActiveTab] = useState<TabId>('proposicoes');
   const [search, setSearch] = useState('');
   const [year, setYear] = useState('');
@@ -79,6 +80,7 @@ export const Camara = () => {
 
   useEffect(() => {
     const controller = new AbortController();
+    setRequestError('');
 
     const run = async () => {
       setIsLoading(true);
@@ -93,13 +95,17 @@ export const Camara = () => {
         const response = await fetch(`/api/camara/${activeTab}?${params.toString()}`, {
           signal: controller.signal,
         });
-        if (!response.ok) return;
+        if (!response.ok) throw new Error('HTTP');
         const data = (await response.json()) as {items?: Array<ProposicaoItem | EventoItem | OrgaoItem | FrenteItem>};
+        if (controller.signal.aborted) return;
         setItems(data.items ?? []);
       } catch {
+        if (controller.signal.aborted) return;
+        setRequestError('Não foi possível carregar os dados. Tente novamente.');
+        if (controller.signal.aborted) return;
         setItems([]);
       } finally {
-        setIsLoading(false);
+        if (!controller.signal.aborted) setIsLoading(false);
       }
     };
 
@@ -126,6 +132,7 @@ export const Camara = () => {
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-12 sm:px-6 lg:px-8">
+      {requestError && <p role="alert" className="mb-4 rounded-xl bg-rose-50 p-4 text-rose-800">{requestError}</p>}
       <div className="mb-10">
         <h1 className="text-4xl font-extrabold text-slate-900 dark:text-slate-50">Atuação Parlamentar</h1>
         <p className="mt-4 max-w-3xl text-lg text-slate-600 dark:text-slate-400">
@@ -183,7 +190,7 @@ export const Camara = () => {
         <div className="rounded-3xl border border-slate-200 bg-white p-8 text-center text-sm font-medium text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
           Carregando dados...
         </div>
-      ) : items.length === 0 ? (
+      ) : requestError ? null : items.length === 0 ? (
         <EmptyState />
       ) : (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">

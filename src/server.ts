@@ -1,11 +1,18 @@
 import 'dotenv/config';
 import {spawn} from 'node:child_process';
 import {timingSafeEqual} from 'node:crypto';
-import {createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, statSync} from 'node:fs';
+import {createWriteStream, mkdirSync} from 'node:fs';
+import {readdir, stat} from 'node:fs/promises';
+import {readLogTail} from './lib/logTail';
 import {join} from 'node:path';
 import express, {type NextFunction, type Request, type Response} from 'express';
 import {Pool} from 'pg';
+import {CatalogEvents, attachCatalogRoutes} from './lib/catalogEvents';
+import {startCatalogListener} from './lib/catalogListener';
 import {getGroqModelValidationError} from './lib/aiSettings';
+import {acquireIngestionLock} from './lib/ingestionLifecycle';
+import {resolveGroqSettings, type GroqSettings} from './lib/groqSettings';
+import {buildExpenseQuery, ExpenseFilterError} from './lib/expenseQueries';
 import {hashCpf, isValidCpf, normalizeCpf, parseComentario, parseNota} from './lib/evaluationRules';
 
 type ApiDurationMetric = {requests: number; errors: number; durations: number[]};
@@ -17,6 +24,7 @@ app.use(express.json({limit: '1mb'}));
 app.use((req, res, next) => {
   const startedAt = process.hrtime.bigint();
   res.on('finish', () => {
+    if (String(res.getHeader('Content-Type') ?? '').startsWith('text/event-stream')) return;
     const durationMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
     const routePath = req.route?.path ? `${req.baseUrl}${String(req.route.path)}` : req.path;
     const key = `${req.method} ${routePath}`;
@@ -25,7 +33,7 @@ app.use((req, res, next) => {
     if (res.statusCode >= 500) metric.errors += 1;
     metric.durations.push(durationMs);
     if (metric.durations.length > 500) metric.durations.shift();
-    apiDurationMetrics.set(key, metric);
+    if (apiDurationMetrics.has(key) || apiDurationMetrics.size < 500) apiDurationMetrics.set(key, metric);
     if (durationMs >= 500) {
       process.stdout.write(`[api-slow] ${req.method} ${req.path} ${res.statusCode} ${durationMs.toFixed(1)}ms\n`);
     }
@@ -34,10 +42,12 @@ app.use((req, res, next) => {
 });
 
 const databaseUrl = process.env.DATABASE_URL?.trim();
+const poolOptions = {connectionTimeoutMillis: 5000, idleTimeoutMillis: 30000, statement_timeout: 30000};
 
 const pool = databaseUrl
-  ? new Pool({connectionString: databaseUrl})
+  ? new Pool({...poolOptions, connectionString: databaseUrl})
   : new Pool({
+      ...poolOptions,
       host: process.env.APP_DB_HOST ?? 'db',
       port: Number(process.env.APP_DB_PORT ?? 5432),
       user: process.env.APP_DB_USER ?? 'app',
@@ -45,15 +55,22 @@ const pool = databaseUrl
       database: process.env.APP_DB_NAME ?? 'app',
     });
 
+app.param('politicoId', (_req, res, next, value) => {
+  if (!/^[1-9]\d{0,18}$/.test(value) || BigInt(value) > 9223372036854775807n) {
+    sendJson(res, 400, {error: 'Identificador de político inválido.'});
+    return;
+  }
+  next();
+});
+
+const catalogEvents = new CatalogEvents();
+attachCatalogRoutes(app, catalogEvents);
+
 let isStartingIngestion = false;
 let cachedAiSettings: AiSettings | null = null;
 let cachedAiSettingsAt = 0;
 
-type AiSettings = {
-  groqApiKey: string;
-  groqModel: string;
-  enabled: boolean;
-};
+type AiSettings = GroqSettings;
 
 type ActivityEventStage =
   | 'api_fetch'
@@ -116,6 +133,9 @@ const requireAdminAuthorization = (req: Request, res: Response, next: NextFuncti
 const evaluationWindows = new Map<string, {count: number; resetAt: number}>();
 const limitEvaluations = (req: Request, res: Response, next: NextFunction) => {
   const now = Date.now();
+  if (evaluationWindows.size > 1000) {
+    for (const [entry, value] of evaluationWindows) if (value.resetAt <= now) evaluationWindows.delete(entry);
+  }
   const key = `${req.ip}:${req.params.politicoId}`;
   const current = evaluationWindows.get(key);
   const window = !current || current.resetAt <= now
@@ -134,13 +154,13 @@ const limitEvaluations = (req: Request, res: Response, next: NextFunction) => {
 const parseLimit = (req: Request) => {
   const raw = typeof req.query.limit === 'string' ? req.query.limit : undefined;
   const num = raw != null && raw !== '' && Number.isFinite(Number(raw)) ? Number(raw) : 20;
-  return Math.max(1, Math.min(2000, num));
+  return Math.max(1, Math.min(2000, Math.trunc(num)));
 };
 
 const parseOffset = (req: Request) => {
   const raw = typeof req.query.offset === 'string' ? req.query.offset : undefined;
   const num = raw != null && raw !== '' && Number.isFinite(Number(raw)) ? Number(raw) : 0;
-  return Math.max(0, num);
+  return Math.max(0, Math.trunc(num));
 };
 
 const parseOptionalInt = (raw: unknown) => {
@@ -219,11 +239,7 @@ const getAiSettings = async (): Promise<AiSettings> => {
   if (cachedAiSettings && now - cachedAiSettingsAt < 30_000) return cachedAiSettings;
 
   const settings = await getSettingMap();
-  cachedAiSettings = {
-    groqApiKey: process.env.GROQ_API_KEY?.trim() || '',
-    groqModel: settings.get('groq_model')?.trim() || process.env.GROQ_MODEL?.trim() || 'llama-3.3-70b-versatile',
-    enabled: settings.get('groq_enabled') !== 'false',
-  };
+  cachedAiSettings = resolveGroqSettings(settings);
   cachedAiSettingsAt = now;
   return cachedAiSettings;
 };
@@ -555,8 +571,6 @@ const buildRecentTimeline = (events: ActivityEvent[]) =>
     .slice(0, 16);
 
 const loadActiveIngestionKeys = async (): Promise<Set<string>> => {
-  await releaseStaleIngestionCheckpoints();
-
   const result = await pool.query<{
     dataset: string | null;
     periodStart: string | null;
@@ -837,7 +851,7 @@ app.get('/api/politicos/ranking', async (req, res) => {
         p.atualizado_em,
         dsum.total_despesas,
         vcnt.total_votacoes
-      ORDER BY ${orderBy}
+      ORDER BY ${orderBy}, p.id ASC
       LIMIT $${params.length + 1}
       OFFSET $${params.length + 2}
       `,
@@ -863,10 +877,10 @@ app.get('/api/partidos/gastos', async (req, res) => {
       `
       SELECT
         p.sigla_partido AS partido,
-        COALESCE(SUM(d.valor_liquido), 0)::double precision AS "totalDespesas",
-        COUNT(DISTINCT p.id)::int AS "totalPoliticos"
+        COALESCE(SUM(d.total), 0)::double precision AS "totalDespesas",
+        COUNT(p.id)::int AS "totalPoliticos"
       FROM politicos p
-      LEFT JOIN despesas d ON d.politico_id = p.id
+      LEFT JOIN (SELECT politico_id, SUM(valor_liquido) AS total FROM despesas GROUP BY politico_id) d ON d.politico_id = p.id
       WHERE ${statusWhere}
         AND p.sigla_partido IS NOT NULL
         AND p.sigla_partido <> ''
@@ -1138,6 +1152,10 @@ app.get('/api/camara/proposicoes', async (req, res) => {
 app.get('/api/camara/proposicoes/:id', async (req, res) => {
   try {
     const {id} = req.params;
+    if (!/^[1-9]\d{0,18}$/.test(id) || BigInt(id) > 9223372036854775807n) {
+      sendJson(res, 400, {error: 'Identificador de proposição inválido.'});
+      return;
+    }
     const proposicaoResult = await pool.query(
       `
       SELECT
@@ -1156,7 +1174,7 @@ app.get('/api/camara/proposicoes/:id', async (req, res) => {
         p.status_proposicao_json AS "statusProposicao",
         COALESCE(p.status_proposicao_json->>'descricaoSituacao', p.status_proposicao_json->>'situacao') AS situacao
       FROM camara_proposicoes p
-      WHERE p.id::text = $1
+      WHERE p.id = $1::bigint
       LIMIT 1
       `,
       [id],
@@ -1173,7 +1191,7 @@ app.get('/api/camara/proposicoes/:id', async (req, res) => {
         `
         SELECT nome, tipo, ordem_assinatura AS "ordemAssinatura", proponente
         FROM camara_proposicoes_autores
-        WHERE proposicao_id::text = $1
+        WHERE proposicao_id = $1::bigint
         ORDER BY ordem_assinatura ASC NULLS LAST, nome ASC
         `,
         [id],
@@ -1182,7 +1200,7 @@ app.get('/api/camara/proposicoes/:id', async (req, res) => {
         `
         SELECT tema, relevancia
         FROM camara_proposicoes_temas
-        WHERE proposicao_id::text = $1
+        WHERE proposicao_id = $1::bigint
         ORDER BY relevancia DESC NULLS LAST, tema ASC
         `,
         [id],
@@ -1199,7 +1217,7 @@ app.get('/api/camara/proposicoes/:id', async (req, res) => {
           despacho,
           url
         FROM camara_proposicoes_tramitacoes
-        WHERE proposicao_id::text = $1
+        WHERE proposicao_id = $1::bigint
         ORDER BY sequencia DESC
         LIMIT 80
         `,
@@ -1210,7 +1228,7 @@ app.get('/api/camara/proposicoes/:id', async (req, res) => {
         SELECT r.relacionada_id::text AS id, p.sigla_tipo AS "siglaTipo", p.numero, p.ano, p.ementa
         FROM camara_proposicoes_relacionadas r
         LEFT JOIN camara_proposicoes p ON p.id = r.relacionada_id
-        WHERE r.proposicao_id::text = $1
+        WHERE r.proposicao_id = $1::bigint
         ORDER BY p.ano DESC NULLS LAST, p.numero DESC NULLS LAST
         LIMIT 40
         `,
@@ -1383,7 +1401,7 @@ app.get('/api/politicos/:politicoId/orgaos', async (req, res) => {
         o.tipo_orgao AS "tipoOrgao"
       FROM camara_deputados_orgaos d
       LEFT JOIN camara_orgaos o ON o.id = d.orgao_id
-      WHERE d.politico_id::text = $1
+      WHERE d.politico_id = $1::bigint
       ORDER BY d.data_fim DESC NULLS FIRST, d.data_inicio DESC NULLS LAST, d.sigla_orgao ASC
       `,
       [politicoId],
@@ -1413,7 +1431,7 @@ app.get('/api/politicos/:politicoId/eventos', async (req, res) => {
         e.url_registro AS "urlRegistro"
       FROM camara_deputados_eventos de
       JOIN camara_eventos e ON e.id = de.evento_id
-      WHERE de.politico_id::text = $1
+      WHERE de.politico_id = $1::bigint
       ORDER BY e.data_hora_inicio DESC NULLS LAST
       LIMIT $2
       `,
@@ -1437,7 +1455,7 @@ app.get('/api/politicos/:politicoId/frentes', async (req, res) => {
         f.uri
       FROM camara_deputados_frentes df
       JOIN camara_frentes f ON f.id = df.frente_id
-      WHERE df.politico_id::text = $1
+      WHERE df.politico_id = $1::bigint
       ORDER BY f.id_legislatura DESC NULLS LAST, f.titulo ASC
       `,
       [politicoId],
@@ -1456,7 +1474,7 @@ app.get('/api/politicos/:politicoId/historico-profissional', async (req, res) =>
         `
         SELECT titulo, data_hora AS "dataHora"
         FROM camara_deputados_profissoes
-        WHERE politico_id::text = $1
+        WHERE politico_id = $1::bigint
         ORDER BY titulo ASC
         `,
         [politicoId],
@@ -1465,7 +1483,7 @@ app.get('/api/politicos/:politicoId/historico-profissional', async (req, res) =>
         `
         SELECT titulo, entidade, entidade_uf AS "entidadeUf", entidade_pais AS "entidadePais", ano_inicio AS "anoInicio", ano_fim AS "anoFim"
         FROM camara_deputados_ocupacoes
-        WHERE politico_id::text = $1
+        WHERE politico_id = $1::bigint
         ORDER BY ano_fim DESC NULLS FIRST, ano_inicio DESC NULLS LAST, titulo ASC
         `,
         [politicoId],
@@ -1486,7 +1504,7 @@ app.get('/api/politicos/:politicoId/atuacao', async (req, res) => {
         SELECT d.orgao_id::text AS "orgaoId", d.sigla_orgao AS "siglaOrgao", d.nome_orgao AS "nomeOrgao", d.nome_publicacao AS "nomePublicacao", d.titulo, d.data_inicio AS "dataInicio", d.data_fim AS "dataFim", o.tipo_orgao AS "tipoOrgao"
         FROM camara_deputados_orgaos d
         LEFT JOIN camara_orgaos o ON o.id = d.orgao_id
-        WHERE d.politico_id::text = $1
+        WHERE d.politico_id = $1::bigint
         ORDER BY d.data_fim DESC NULLS FIRST, d.data_inicio DESC NULLS LAST
         LIMIT 80
         `,
@@ -1497,7 +1515,7 @@ app.get('/api/politicos/:politicoId/atuacao', async (req, res) => {
         SELECT e.id::text AS id, e.data_hora_inicio AS "dataHoraInicio", e.situacao, e.descricao_tipo AS "descricaoTipo", e.descricao, e.local_externo AS "localExterno", e.local_camara_json AS "localCamara", e.orgaos_json AS orgaos, e.url_registro AS "urlRegistro"
         FROM camara_deputados_eventos de
         JOIN camara_eventos e ON e.id = de.evento_id
-        WHERE de.politico_id::text = $1
+        WHERE de.politico_id = $1::bigint
         ORDER BY e.data_hora_inicio DESC NULLS LAST
         LIMIT 20
         `,
@@ -1508,15 +1526,15 @@ app.get('/api/politicos/:politicoId/atuacao', async (req, res) => {
         SELECT f.id::text AS id, f.titulo, f.id_legislatura AS "idLegislatura", f.uri
         FROM camara_deputados_frentes df
         JOIN camara_frentes f ON f.id = df.frente_id
-        WHERE df.politico_id::text = $1
+        WHERE df.politico_id = $1::bigint
         ORDER BY f.id_legislatura DESC NULLS LAST, f.titulo ASC
         LIMIT 80
         `,
         [politicoId],
       ),
       Promise.all([
-        pool.query('SELECT titulo, data_hora AS "dataHora" FROM camara_deputados_profissoes WHERE politico_id::text = $1 ORDER BY titulo ASC', [politicoId]),
-        pool.query('SELECT titulo, entidade, entidade_uf AS "entidadeUf", entidade_pais AS "entidadePais", ano_inicio AS "anoInicio", ano_fim AS "anoFim" FROM camara_deputados_ocupacoes WHERE politico_id::text = $1 ORDER BY ano_fim DESC NULLS FIRST, ano_inicio DESC NULLS LAST, titulo ASC', [politicoId]),
+        pool.query('SELECT titulo, data_hora AS "dataHora" FROM camara_deputados_profissoes WHERE politico_id = $1::bigint ORDER BY titulo ASC', [politicoId]),
+        pool.query('SELECT titulo, entidade, entidade_uf AS "entidadeUf", entidade_pais AS "entidadePais", ano_inicio AS "anoInicio", ano_fim AS "anoFim" FROM camara_deputados_ocupacoes WHERE politico_id = $1::bigint ORDER BY ano_fim DESC NULLS FIRST, ano_inicio DESC NULLS LAST, titulo ASC', [politicoId]),
       ]),
       pool.query(
         `
@@ -1532,7 +1550,7 @@ app.get('/api/politicos/:politicoId/atuacao', async (req, res) => {
         FROM votos_deputados vd
         JOIN votacoes v ON v.id = vd.votacao_id
         JOIN camara_proposicoes p ON p.uri = v.uri_proposicao_objeto OR p.id::text = regexp_replace(COALESCE(v.uri_proposicao_objeto, ''), '^.*/', '')
-        WHERE vd.politico_id::text = $1
+        WHERE vd.politico_id = $1::bigint
         ORDER BY p.data_apresentacao DESC NULLS LAST
         LIMIT 20
         `,
@@ -1732,7 +1750,7 @@ app.get('/api/politicos/:politicoId', async (req, res) => {
         p.gabinete_andar AS "gabineteAndar"
       FROM politicos p
       LEFT JOIN avaliacoes a ON a.politico_id = p.id
-      WHERE p.id::text = $1
+      WHERE p.id = $1::bigint
       GROUP BY
         p.id,
         p.nome,
@@ -1809,7 +1827,7 @@ app.post('/api/politicos/:politicoId/avaliacoes', limitEvaluations, async (req, 
       `
       SELECT p.id::text AS id
       FROM politicos p
-      WHERE p.id::text = $1
+      WHERE p.id = $1::bigint
       LIMIT 1
       `,
       [politicoId],
@@ -1827,7 +1845,7 @@ app.post('/api/politicos/:politicoId/avaliacoes', limitEvaluations, async (req, 
       `
       SELECT a.id
       FROM avaliacoes a
-      WHERE a.politico_id::text = $1
+      WHERE a.politico_id = $1::bigint
         AND a.cpf_hash = $2
       LIMIT 1
       `,
@@ -1856,7 +1874,7 @@ app.post('/api/politicos/:politicoId/avaliacoes', limitEvaluations, async (req, 
         COALESCE(AVG(a.nota), 0)::double precision AS "notaMedia",
         COUNT(a.id)::int AS "totalAvaliacoes"
       FROM avaliacoes a
-      WHERE a.politico_id::text = $1
+      WHERE a.politico_id = $1::bigint
       `,
       [politico.id],
     );
@@ -1887,7 +1905,7 @@ app.get('/api/politicos/:politicoId/votacoes/anos', async (req, res) => {
       SELECT DISTINCT v.ano
       FROM votos_deputados vd
       JOIN votacoes v ON v.id = vd.votacao_id
-      WHERE vd.politico_id::text = $1
+      WHERE vd.politico_id = $1::bigint
         AND v.ano IS NOT NULL
       ORDER BY v.ano DESC
       `,
@@ -1910,7 +1928,7 @@ app.get('/api/politicos/:politicoId/votacoes', async (req, res) => {
     const query = normalizeText(req.query.q).slice(0, 120);
     const cursor = parseVoteCursor(req.query.cursor);
 
-    const where: string[] = ['vd.politico_id::text = $1'];
+    const where: string[] = ['vd.politico_id = $1::bigint'];
     const params: Array<string | number> = [politicoId];
 
     if (ano != null) {
@@ -2041,7 +2059,7 @@ app.get('/api/politicos/:politicoId/votacoes', async (req, res) => {
         SELECT COALESCE(v.ano, EXTRACT(YEAR FROM v.data_hora_votacao)::int) AS ano, v.tipo_votacao, vd.voto
         FROM votos_deputados vd
         JOIN votacoes v ON v.id = vd.votacao_id
-        WHERE vd.politico_id::text = $1
+        WHERE vd.politico_id = $1::bigint
       )
       SELECT
         array_agg(DISTINCT ano ORDER BY ano DESC) FILTER (WHERE ano IS NOT NULL) AS anos,
@@ -2137,7 +2155,7 @@ app.get('/api/politicos/:politicoId/despesas/anos', async (req, res) => {
       `
       SELECT DISTINCT d.ano
       FROM despesas d
-      WHERE d.politico_id::text = $1
+      WHERE d.politico_id = $1::bigint
         AND d.ano IS NOT NULL
       ORDER BY d.ano DESC
       `,
@@ -2152,50 +2170,17 @@ app.get('/api/politicos/:politicoId/despesas/anos', async (req, res) => {
 
 app.get('/api/politicos/:politicoId/despesas', async (req, res) => {
   try {
-    const {politicoId} = req.params;
-    const limit = parseLimit(req);
-    const offset = parseOffset(req);
-    const ano = parseOptionalInt(req.query.ano);
-    const mes = parseOptionalInt(req.query.mes);
-
-    const where: string[] = ['d.politico_id::text = $1'];
-    const params: Array<string | number> = [politicoId];
-
-    if (ano != null) {
-      params.push(ano);
-      where.push(`d.ano = $${params.length}`);
+    const query = buildExpenseQuery(req.params.politicoId, req.query);
+    const result = await pool.query(query.text, query.values);
+    const data = result.rows[0];
+    sendJson(res, 200, {...data, hasMore: query.offset + data.items.length < data.total});
+  } catch (error) {
+    if (error instanceof ExpenseFilterError) {
+      sendJson(res, 400, {error: error.message});
+      return;
     }
-
-    if (mes != null) {
-      params.push(mes);
-      where.push(`d.mes = $${params.length}`);
-    }
-
-    params.push(limit);
-    params.push(offset);
-
-    const result = await pool.query(
-      `
-      SELECT
-        d.id::text AS id,
-        d.ano,
-        d.mes,
-        d.tipo_despesa AS tipo,
-        d.valor_liquido::double precision AS valor,
-        d.url_documento AS "urlDocumento",
-        d.nome_fornecedor AS fornecedor
-      FROM despesas d
-      WHERE ${where.join(' AND ')}
-      ORDER BY d.ano DESC, d.mes DESC
-      LIMIT $${params.length - 1}
-      OFFSET $${params.length}
-      `,
-      params,
-    );
-
-    sendJson(res, 200, {items: result.rows});
-  } catch {
-    sendJson(res, 500, {error: 'Erro ao processar requisição'});
+    console.error('[despesas]', error);
+    sendJson(res, 500, {error: 'Erro ao carregar despesas.'});
   }
 });
 
@@ -2204,7 +2189,7 @@ app.get('/api/politicos/:politicoId/despesas/resumo', async (req, res) => {
     const {politicoId} = req.params;
     const ano = parseOptionalInt(req.query.ano);
 
-    const where: string[] = ['d.politico_id::text = $1'];
+    const where: string[] = ['d.politico_id = $1::bigint'];
     const params: Array<string | number> = [politicoId];
 
     if (ano != null) {
@@ -2304,7 +2289,6 @@ app.get('/api/admin/metrics', async (_req, res) => {
 
 app.get('/api/admin/ingestion/summary', async (_req, res) => {
   try {
-    await releaseStaleIngestionCheckpoints();
 
     const checkpointResult = await pool.query(
       `
@@ -2400,29 +2384,32 @@ app.get('/api/admin/ingestion/logs', async (_req, res) => {
   try {
     const activeIngestionKeys = await loadActiveIngestionKeys();
     const logsDir = join(process.cwd(), 'logs');
-    if (!existsSync(logsDir)) {
-      sendJson(res, 200, {log: '', file: null, events: [], currentStatus: [], timeline: []});
-      return;
-    }
-
-    const files = readdirSync(logsDir)
+    const names = await readdir(logsDir).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return [] as string[];
+      throw error;
+    });
+    const files = (await Promise.all(names
       .filter((file) => file.startsWith('ingest-') && file.endsWith('.log'))
-      .map((file) => {
+      .map(async (file) => {
         const path = join(logsDir, file);
-        return {file, path, mtimeMs: statSync(path).mtimeMs};
-      })
+        const info = await stat(path).catch(() => null);
+        return info ? {file, path, mtimeMs: info.mtimeMs} : null;
+      }))).filter((file) => file !== null)
       .sort((a, b) => b.mtimeMs - a.mtimeMs);
 
     const latest = files[0];
     if (!latest) {
       const activityPath = join(logsDir, 'activity-events.log');
-      const activityContent = existsSync(activityPath) ? readFileSync(activityPath, 'utf8') : '';
+      const activityTail = await readLogTail(activityPath);
+      const activityContent = activityTail.content;
       const activityEvents = parseStructuredLogEvents(activityContent, 'ai').sort(
         (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
       );
       sendJson(res, 200, {
         log: '',
         file: null,
+        truncated: activityTail.truncated,
+        statsScope: 'recent',
         events: activityEvents.slice(0, 80),
         currentStatus: buildCurrentStatus(activityEvents, activeIngestionKeys),
         timeline: buildRecentTimeline(activityEvents),
@@ -2430,9 +2417,12 @@ app.get('/api/admin/ingestion/logs', async (_req, res) => {
       return;
     }
 
-    const content = readFileSync(latest.path, 'utf8');
-    const activityPath = join(logsDir, 'activity-events.log');
-    const activityContent = existsSync(activityPath) ? readFileSync(activityPath, 'utf8') : '';
+    const [logTail, activityTail] = await Promise.all([
+      readLogTail(latest.path),
+      readLogTail(join(logsDir, 'activity-events.log')),
+    ]);
+    const content = logTail.content;
+    const activityContent = activityTail.content;
     const stats = parseIngestionLogStats(content);
     await enrichLogStatsWithDatabaseProgress(stats);
     const events = [
@@ -2442,6 +2432,8 @@ app.get('/api/admin/ingestion/logs', async (_req, res) => {
     sendJson(res, 200, {
       file: latest.file,
       log: content.slice(-12000),
+      truncated: logTail.truncated || activityTail.truncated,
+      statsScope: 'recent',
       stats,
       events: events.slice(0, 80),
       currentStatus: buildCurrentStatus(events, activeIngestionKeys),
@@ -2493,13 +2485,20 @@ app.post('/api/admin/settings/ai', async (req, res) => {
 });
 
 app.post('/api/admin/ingestion/run', async (req, res) => {
+  if (isStartingIngestion) {
+    sendJson(res, 409, {error: 'Uma ingestão está sendo inicializada ou executada.'});
+    return;
+  }
+  isStartingIngestion = true;
+  let startupLock: Awaited<ReturnType<typeof acquireIngestionLock>> = null;
+  let spawned = false;
   try {
-    await releaseStaleIngestionCheckpoints();
-
-    if (isStartingIngestion) {
-      sendJson(res, 409, {error: 'Uma ingestao ja esta sendo inicializada. Aguarde alguns segundos.'});
+    startupLock = await acquireIngestionLock(pool);
+    if (!startupLock) {
+      sendJson(res, 409, {error: 'Existe importação, enriquecimento ou limpeza em andamento.'});
       return;
     }
+    await releaseStaleIngestionCheckpoints();
 
     const from = parseIsoDateInput(req.body?.from, '2016-01-01');
     const to = parseIsoDateInput(req.body?.to, '2020-12-31');
@@ -2530,16 +2529,14 @@ app.post('/api/admin/ingestion/run', async (req, res) => {
       return;
     }
 
-    isStartingIngestion = true;
-    setTimeout(() => {
-      isStartingIngestion = false;
-    }, 10000).unref();
 
     const logsDir = join(process.cwd(), 'logs');
     mkdirSync(logsDir, {recursive: true});
     const logPath = join(logsDir, `ingest-${Date.now()}.log`);
     const logStream = createWriteStream(logPath, {flags: 'a'});
 
+    await startupLock.release();
+    startupLock = null;
     const child = spawn(
       process.execPath,
       [
@@ -2576,6 +2573,7 @@ app.post('/api/admin/ingestion/run', async (req, res) => {
       logStream.end();
       isStartingIngestion = false;
     });
+    spawned = true;
     child.unref();
 
     sendJson(res, 202, {
@@ -2590,6 +2588,9 @@ app.post('/api/admin/ingestion/run', async (req, res) => {
     });
   } catch {
     sendJson(res, 500, {error: 'Erro ao iniciar ingestao.'});
+  } finally {
+    await startupLock?.release();
+    if (!spawned) isStartingIngestion = false;
   }
 });
 
@@ -2631,8 +2632,19 @@ app.post('/api/admin/ingestion/cancel', async (req, res) => {
 });
 
 app.post('/api/admin/database/clear', async (req, res) => {
-  const client = await pool.connect();
+  let lock: Awaited<ReturnType<typeof acquireIngestionLock>> = null;
+  let client: Awaited<ReturnType<typeof pool.connect>> | undefined;
   try {
+    if (isStartingIngestion) {
+      sendJson(res, 409, {error: 'Aguarde a parada da ingestão antes de limpar dados.'});
+      return;
+    }
+    lock = await acquireIngestionLock(pool);
+    if (!lock) {
+      sendJson(res, 409, {error: 'Existe importação ou enriquecimento ativo. Aguarde sua parada antes de limpar dados.'});
+      return;
+    }
+    client = await pool.connect();
 
     const dataset = parseCleanupDataset(req.body?.dataset);
     if (!dataset) {
@@ -2706,12 +2718,13 @@ app.post('/api/admin/database/clear', async (req, res) => {
       deletedRows: cleaned.reduce((sum, item) => sum + item.deletedRows, 0),
     });
   } catch (error) {
-    await client.query('ROLLBACK').catch(() => undefined);
+    await client?.query('ROLLBACK').catch(() => undefined);
     sendJson(res, 500, {
       error: error instanceof Error ? error.message : 'Erro ao limpar dados.',
     });
   } finally {
-    client.release();
+    client?.release();
+    await lock?.release();
   }
 });
 
@@ -2726,6 +2739,11 @@ app.use((req, res) => {
 const port = Number(process.env.PORT ?? 4000);
 const host = process.env.HOST ?? '0.0.0.0';
 
-app.listen(port, host, () => {
-  process.stdout.write(`API escutando em http://${host}:${port}\n`);
-});
+if (process.env.NODE_ENV !== 'test') {
+  startCatalogListener(pool, catalogEvents);
+  app.listen(port, host, () => {
+    process.stdout.write(`API escutando em http://${host}:${port}\n`);
+  });
+}
+
+export {app, pool, catalogEvents};
