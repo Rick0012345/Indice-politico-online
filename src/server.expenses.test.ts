@@ -42,6 +42,21 @@ describe.skipIf(!databaseUrl)('contrato de despesas no PostgreSQL', () => {
     await database?.end();
   });
   const get = (query='') => fetch(`${base}/api/politicos/900001/despesas?${query}`);
+  it('inclui tarefas concluídas vazias no resumo administrativo e informa sua quantidade', async () => {
+    await database.query(`INSERT INTO ${schema}.ingestion_checkpoints (source,dataset,entity_id,period_start,period_end,status,items_count)
+      VALUES ('camara','despesas','900001','2020-01-01','2020-01-31','done',0),
+      ('camara','despesas','900002','2020-01-01','2020-01-31','done',10)`);
+    try {
+      const response = await fetch(`${base}/api/admin/ingestion/summary`, {headers:{Authorization:'Bearer test-admin-only'}});
+      expect(response.status).toBe(200);
+      const data = await response.json();
+      expect(data.checkpoints).toEqual(expect.arrayContaining([
+        expect.objectContaining({dataset:'despesas',status:'done',total:2,itemsCount:10,emptyTotal:1}),
+      ]));
+    } finally {
+      await database.query(`DELETE FROM ${schema}.ingestion_checkpoints WHERE entity_id IN ('900001','900002') AND period_start='2020-01-01'`);
+    }
+  });
   it('totaliza além da página e mantém total com offset fora da coleção', async () => {
     const first = await (await get('limit=200')).json();
     expect(first.items).toHaveLength(200);

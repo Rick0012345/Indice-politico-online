@@ -31,9 +31,9 @@ const formatDate = (value: string | null) => {
 };
 
 const EmptyBlock = ({children}: {children: React.ReactNode}) => (
-  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm font-medium text-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400">
+  <p className="rounded-xl border border-dashed border-slate-200 px-4 py-5 text-center text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">
     {children}
-  </div>
+  </p>
 );
 
 export const ProposicaoDetail = () => {
@@ -87,83 +87,124 @@ export const ProposicaoDetail = () => {
   }, [id]);
 
   if (isLoading) {
-    return <div className="mx-auto max-w-5xl px-4 py-12 text-sm text-slate-500">Carregando proposicao...</div>;
+    return (
+      <div className="mx-auto max-w-6xl space-y-4 px-4 py-12 sm:px-6 lg:px-8" aria-busy="true">
+        <span className="sr-only">Carregando proposição...</span>
+        <div className="skeleton h-4 w-40" />
+        <div className="skeleton h-10 w-3/4" />
+        <div className="skeleton h-40 w-full" />
+      </div>
+    );
   }
 
   if (!proposicao) {
     return (
       <div className="mx-auto max-w-5xl px-4 py-12">
-        <Link to="/camara" className="inline-flex items-center gap-2 text-sm font-bold text-blue-600 hover:underline dark:text-blue-400"><ChevronLeft size={16} /> Voltar</Link>
-        <div role={requestError ? 'alert' : undefined} className="mt-8 rounded-3xl border border-slate-200 bg-white p-8 text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">{requestError || 'Proposicao nao encontrada.'}</div>
+        <Link to="/camara" className="inline-flex items-center gap-1 text-sm font-medium text-brand-700 hover:underline dark:text-brand-300"><ChevronLeft size={16} /> Voltar</Link>
+        <div role={requestError ? 'alert' : undefined} className="surface mt-8 p-8 text-slate-600 dark:text-slate-400">{requestError || 'Proposição não encontrada.'}</div>
       </div>
     );
   }
 
-  return (
-    <div className="mx-auto max-w-6xl px-4 py-12 sm:px-6 lg:px-8">
-      <Link to="/camara" className="mb-8 inline-flex items-center gap-2 text-sm font-bold text-blue-600 hover:underline dark:text-blue-400"><ChevronLeft size={16} /> Voltar para Atuacao Parlamentar</Link>
+  const ultimaTramitacao = tramitacoes.length > 0 ? tramitacoes[tramitacoes.length - 1] : null;
 
-      <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8 dark:border-slate-700 dark:bg-slate-900">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <div className="flex flex-wrap items-center gap-2 text-xs font-bold uppercase text-slate-400 dark:text-slate-500">
-              <span>{proposicao.siglaTipo} {proposicao.numero}/{proposicao.ano}</span>
-              {proposicao.situacao && <span className="rounded-full bg-blue-50 px-2.5 py-1 text-blue-700 dark:bg-blue-950 dark:text-blue-300">{proposicao.situacao}</span>}
-            </div>
-            <h1 className="mt-4 text-3xl font-extrabold text-slate-900 dark:text-slate-50">{proposicao.ementa || 'Proposicao sem ementa'}</h1>
-            <p className="mt-4 text-sm font-medium text-slate-500 dark:text-slate-400">{proposicao.descricaoTipo || 'Tipo nao informado'} • {formatDate(proposicao.dataApresentacao)}</p>
-          </div>
-          {proposicao.urlInteiroTeor && (
-            <a href={proposicao.urlInteiroTeor} target="_blank" rel="noreferrer" className="inline-flex shrink-0 items-center gap-2 rounded-2xl bg-blue-600 px-4 py-3 text-sm font-bold text-white hover:bg-blue-700">
-              Inteiro teor <ExternalLink size={16} />
-            </a>
+  return (
+    <div className="mx-auto max-w-7xl px-4 pb-24 pt-8 sm:px-6 lg:px-8">
+      <Link to="/camara" className="inline-flex items-center gap-1 text-sm font-medium text-brand-700 hover:underline dark:text-brand-300"><ChevronLeft size={16} /> Voltar para Atuação parlamentar</Link>
+
+      <header className="mt-6">
+        <div className="flex flex-wrap items-center gap-3">
+          <span className="tabular rounded-lg bg-brand-50 px-2.5 py-1 font-mono text-sm font-semibold text-brand-800 dark:bg-brand-950 dark:text-brand-200">{proposicao.siglaTipo} {proposicao.numero}/{proposicao.ano}</span>
+          {proposicao.situacao && <span className="flex items-center gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300"><span aria-hidden="true" className="h-2 w-2 rounded-full bg-brand-500" />{proposicao.situacao}</span>}
+          <span className="text-sm text-slate-500 dark:text-slate-400">{proposicao.descricaoTipo || 'Tipo não informado'} · apresentada em {formatDate(proposicao.dataApresentacao)}</span>
+        </div>
+        <h1 className="mt-4 max-w-4xl text-2xl font-semibold leading-tight tracking-tight text-slate-950 sm:text-3xl dark:text-slate-50" style={{textWrap: 'balance'}}>{proposicao.ementa || 'Proposição sem ementa'}</h1>
+      </header>
+
+      <div className="mt-8 flex flex-col gap-6 lg:flex-row lg:items-start">
+        <div className="min-w-0 flex-1 space-y-6">
+          {proposicao.ementaDetalhada && (
+            <section className="surface p-5 sm:p-6">
+              <h2 className="text-sm font-semibold text-brand-700 dark:text-brand-300">Em detalhe</h2>
+              <p className="mt-2 text-base leading-7 text-slate-800 dark:text-slate-200">{proposicao.ementaDetalhada}</p>
+            </section>
           )}
+
+          <section className="surface p-5 sm:p-6">
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-50">Tramitação</h2>
+              {ultimaTramitacao && <span className="text-xs text-slate-500 dark:text-slate-400">Última movimentação em {formatDate(ultimaTramitacao.dataHora)}</span>}
+            </div>
+            {tramitacoes.length === 0 ? <div className="mt-4"><EmptyBlock>Tramitações ainda não sincronizadas.</EmptyBlock></div> : (
+              <ol className="relative mt-5 space-y-5 border-l border-slate-200 pl-6 dark:border-slate-800">
+                {tramitacoes.map((item, index) => (
+                  <li key={item.sequencia} className="relative">
+                    <span
+                      aria-hidden="true"
+                      className={index === tramitacoes.length - 1
+                        ? 'absolute -left-[31px] top-1 h-3 w-3 rounded-full bg-brand-600 ring-4 ring-brand-100 dark:bg-brand-400 dark:ring-brand-950'
+                        : 'absolute -left-[30px] top-1.5 h-2.5 w-2.5 rounded-full bg-slate-300 dark:bg-slate-600'}
+                    />
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500 dark:text-slate-400">
+                      <span className="tabular font-mono">{formatDate(item.dataHora)}</span>
+                      {item.siglaOrgao && <span className="font-medium text-slate-700 dark:text-slate-300">{item.siglaOrgao}</span>}
+                      {item.descricaoSituacao && <span>{item.descricaoSituacao}</span>}
+                    </div>
+                    <p className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-50">{item.descricaoTramitacao || item.despacho || 'Movimentação registrada'}</p>
+                    {item.despacho && <p className="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-400">{item.despacho}</p>}
+                  </li>
+                ))}
+              </ol>
+            )}
+          </section>
         </div>
 
-        {proposicao.ementaDetalhada && <p className="mt-6 rounded-2xl bg-slate-50 p-4 text-sm leading-relaxed text-slate-700 dark:bg-slate-800 dark:text-slate-300">{proposicao.ementaDetalhada}</p>}
-      </section>
-
-      <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-3">
-        <section className="rounded-3xl border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-900">
-          <h2 className="mb-4 flex items-center gap-2 text-lg font-extrabold text-slate-900 dark:text-slate-50"><FileText size={18} /> Autores</h2>
-          {autores.length === 0 ? <EmptyBlock>Autores ainda nao sincronizados.</EmptyBlock> : (
-            <div className="space-y-3">{autores.map((autor, index) => <div key={`${autor.nome}-${index}`} className="rounded-2xl bg-slate-50 p-3 dark:bg-slate-800"><div className="font-bold text-slate-900 dark:text-slate-50">{autor.nome || 'Autor'}</div><div className="text-xs text-slate-500 dark:text-slate-400">{autor.tipo || 'Tipo nao informado'}</div></div>)}</div>
+        <aside className="w-full space-y-6 lg:w-[360px] lg:shrink-0">
+          {proposicao.urlInteiroTeor && (
+            <a href={proposicao.urlInteiroTeor} target="_blank" rel="noreferrer" className="flex items-center justify-between gap-2 rounded-2xl bg-slate-900 px-5 py-4 text-sm font-semibold text-white transition hover:bg-slate-800 dark:bg-white dark:text-slate-900">
+              <span className="flex items-center gap-2"><FileText size={16} aria-hidden="true" /> Ler inteiro teor</span>
+              <ExternalLink size={15} aria-hidden="true" />
+            </a>
           )}
-        </section>
 
-        <section className="rounded-3xl border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-900">
-          <h2 className="mb-4 text-lg font-extrabold text-slate-900 dark:text-slate-50">Temas</h2>
-          {temas.length === 0 ? <EmptyBlock>Temas ainda nao sincronizados.</EmptyBlock> : (
-            <div className="flex flex-wrap gap-2">{temas.map((tema, index) => <span key={`${tema.tema}-${index}`} className="rounded-full bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700 dark:bg-blue-950 dark:text-blue-300">{tema.tema || 'Tema'}</span>)}</div>
-          )}
-        </section>
+          <section className="surface p-5">
+            <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-50">Autores</h2>
+            {autores.length === 0 ? <div className="mt-3"><EmptyBlock>Autores ainda não sincronizados.</EmptyBlock></div> : (
+              <ul className="mt-2 divide-y divide-slate-100 dark:divide-slate-800">
+                {autores.map((autor, index) => (
+                  <li key={`${autor.nome}-${index}`} className="py-2.5">
+                    <span className="block text-sm font-medium text-slate-900 dark:text-slate-50">{autor.nome || 'Autor'}</span>
+                    <span className="text-xs text-slate-500 dark:text-slate-400">{autor.tipo || 'Tipo não informado'}{autor.proponente ? ' · proponente' : ''}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
 
-        <section className="rounded-3xl border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-900">
-          <h2 className="mb-4 text-lg font-extrabold text-slate-900 dark:text-slate-50">Relacionadas</h2>
-          {relacionadas.length === 0 ? <EmptyBlock>Sem proposicoes relacionadas por enquanto.</EmptyBlock> : (
-            <div className="space-y-3">{relacionadas.map((item) => <Link key={item.id} to={`/camara/proposicoes/${item.id}`} className="block rounded-2xl bg-slate-50 p-3 text-sm font-bold text-slate-800 hover:text-blue-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:text-blue-400">{item.siglaTipo} {item.numero}/{item.ano}</Link>)}</div>
-          )}
-        </section>
+          <section className="surface p-5">
+            <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-50">Temas</h2>
+            {temas.length === 0 ? <div className="mt-3"><EmptyBlock>Temas ainda não sincronizados.</EmptyBlock></div> : (
+              <div className="mt-3 flex flex-wrap gap-2">{temas.map((tema, index) => <span key={`${tema.tema}-${index}`} className="rounded-full border border-slate-200 px-3 py-1 text-xs font-medium text-slate-700 dark:border-slate-700 dark:text-slate-300">{tema.tema || 'Tema'}</span>)}</div>
+            )}
+          </section>
+
+          <section className="surface p-5">
+            <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-50">Relacionadas</h2>
+            {relacionadas.length === 0 ? <div className="mt-3"><EmptyBlock>Sem proposições relacionadas por enquanto.</EmptyBlock></div> : (
+              <ul className="mt-2 divide-y divide-slate-100 dark:divide-slate-800">
+                {relacionadas.map((item) => (
+                  <li key={item.id}>
+                    <Link to={`/camara/proposicoes/${item.id}`} className="block py-2.5 hover:text-brand-700">
+                      <span className="tabular block font-mono text-xs text-slate-500 dark:text-slate-400">{item.siglaTipo} {item.numero}/{item.ano}</span>
+                      {item.ementa && <span className="line-clamp-2 text-sm font-medium text-slate-800 dark:text-slate-200">{item.ementa}</span>}
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+        </aside>
       </div>
-
-      <section className="mt-8 rounded-3xl border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-900">
-        <h2 className="mb-5 text-lg font-extrabold text-slate-900 dark:text-slate-50">Tramitacao</h2>
-        {tramitacoes.length === 0 ? <EmptyBlock>Tramitacoes ainda nao sincronizadas.</EmptyBlock> : (
-          <div className="space-y-4">
-            {tramitacoes.map((item) => (
-              <article key={item.sequencia} className="rounded-2xl border border-slate-200 p-4 dark:border-slate-700">
-                <div className="flex flex-wrap items-center gap-2 text-xs font-bold uppercase text-slate-400 dark:text-slate-500">
-                  <span>{formatDate(item.dataHora)}</span>
-                  {item.siglaOrgao && <span>{item.siglaOrgao}</span>}
-                  {item.descricaoSituacao && <span>{item.descricaoSituacao}</span>}
-                </div>
-                <p className="mt-2 text-sm font-semibold text-slate-900 dark:text-slate-50">{item.descricaoTramitacao || item.despacho || 'Movimentacao registrada'}</p>
-                {item.despacho && <p className="mt-2 text-sm leading-relaxed text-slate-600 dark:text-slate-400">{item.despacho}</p>}
-              </article>
-            ))}
-          </div>
-        )}
-      </section>
     </div>
   );
 };

@@ -8,11 +8,14 @@ import {join} from 'node:path';
 import express, {type NextFunction, type Request, type Response} from 'express';
 import {Pool} from 'pg';
 import {CatalogEvents, attachCatalogRoutes} from './lib/catalogEvents';
+import {attachJudicialRoutes} from './lib/judicialRoutes';
+import {buildProgressiveRankingQuery,expenseYearsQuery} from './lib/rankingQueries';
 import {startCatalogListener} from './lib/catalogListener';
 import {getGroqModelValidationError} from './lib/aiSettings';
 import {acquireIngestionLock} from './lib/ingestionLifecycle';
 import {resolveGroqSettings, type GroqSettings} from './lib/groqSettings';
-import {buildExpenseQuery, ExpenseFilterError} from './lib/expenseQueries';
+import {buildExpenseQuery,ExpenseFilterError,parseExpenseFilters,expenseScopeSql,expenseFinancialRowsCtes} from './lib/expenseQueries';
+import {expenseCoverageSql,buildExpenseAnalysisQuery} from './lib/expenseAnalytics';
 import {hashCpf, isValidCpf, normalizeCpf, parseComentario, parseNota} from './lib/evaluationRules';
 
 type ApiDurationMetric = {requests: number; errors: number; durations: number[]};
@@ -430,7 +433,7 @@ const emptyLogStats = () => ({
   lastHttpError: null as string | null,
 });
 
-const parseIngestionLogStats = (content: string) => {
+export const parseIngestionLogStats = (content: string) => {
   const stats = emptyLogStats();
   const lines = content.split(/\r?\n/).filter((line) => line.trim().length > 0);
   const progressByWindow = new Map<string, number>();
@@ -440,6 +443,8 @@ const parseIngestionLogStats = (content: string) => {
     if (line.includes('[start]')) stats.starts += 1;
     if (line.includes('[ok-items]')) stats.okItems += 1;
     if (line.includes('[ok-zero]')) stats.okZero += 1;
+    const terminal = line.match(/\[(?:ok-items|ok-zero|retry)\]\s+(\S+)\s+(?:\S+\s+)?(\d{4}-\d{2}-\d{2}\.\.\d{4}-\d{2}-\d{2})/);
+    if (terminal) progressByWindow.delete(`${terminal[1]}:${terminal[2]}`);
     if (line.includes('[progress]')) {
       stats.progressUpdates += 1;
       const progressMatch = line.match(/\[progress\]\s+(\S+)\s+([^:]+):.*?(\d+)\s+registros/);
@@ -619,19 +624,244 @@ const enrichLogStatsWithDatabaseProgress = async (stats: ReturnType<typeof empty
       WHERE ic.source = 'camara'
         AND ic.dataset = 'votacoes'
         AND ic.status = 'running'
+      UNION ALL
+      SELECT ic.items_count, 0, 0
+      FROM ingestion_checkpoints ic
+      WHERE ic.source = 'camara'
+        AND ic.dataset <> 'votacoes'
+        AND ic.status = 'running'
     ) progress
     `,
   );
 
   const databaseProgress = Number(result.rows[0]?.total ?? 0);
   const runningWindows = Number(result.rows[0]?.windows ?? 0);
-  if (databaseProgress > stats.progressItems) {
-    stats.progressItems = databaseProgress;
-  }
+  stats.progressItems = databaseProgress;
   if (runningWindows > 0 && stats.progressUpdates === 0 && databaseProgress > 0) {
     stats.progressUpdates = runningWindows;
   }
 };
+
+const parseIdList = (raw: unknown, max: number) => {
+  if (typeof raw !== 'string') return [];
+  const ids = raw
+    .split(',')
+    .map((part) => part.trim())
+    .filter((part) => /^\d{1,18}$/.test(part));
+  return Array.from(new Set(ids)).slice(0, max);
+};
+
+/**
+ * Indicadores derivados por parlamentar, usados por Ranking, Comparador e Perfil.
+ * - participacao: votos registrados / votações nominais ocorridas entre o primeiro e o último voto do parlamentar.
+ * - alinhamentoGoverno: votos iguais à orientação do Governo (Sim/Não) / votos dados em votações com essa orientação.
+ * - proposicoes: proposições em que o parlamentar aparece como autor.
+ * - gastosMensais: últimos 12 meses com despesas; gastosCategorias: total por tipo de despesa (ano opcional).
+ * - media: referência da Câmara (mesmo ano e status) para comparar gasto por deputado e por categoria.
+ */
+app.get('/api/politicos/indicadores', async (req, res) => {
+  try {
+    const ids = parseIdList(req.query.ids, 60);
+    if (ids.length === 0) {
+      sendJson(res, 200, {items: [], media: null});
+      return;
+    }
+    const ano = parseOptionalInt(req.query.ano);
+    const status = parsePoliticoStatusFilter(req);
+    const anoFilter = ano != null ? 'AND d.ano = $2' : '';
+    const params: Array<string[] | number> = [ids];
+    if (ano != null) params.push(ano);
+
+    const [votos, proposicoes, mensais, categorias, totais] = await Promise.all([
+      pool.query<{id: string; votos: number; possiveis: number; alinhados: number; comOrientacao: number}>(
+        `
+        WITH alvo AS (SELECT unnest($1::bigint[]) AS id),
+        janela AS (
+          SELECT vd.politico_id, MIN(v.data_hora_votacao) AS ini, MAX(v.data_hora_votacao) AS fim, COUNT(*)::int AS votos
+          FROM votos_deputados vd
+          JOIN alvo a ON a.id = vd.politico_id
+          JOIN votacoes v ON v.id = vd.votacao_id
+          GROUP BY vd.politico_id
+        ),
+        governo AS (
+          SELECT vd.politico_id,
+            COUNT(*)::int AS com_orientacao,
+            COUNT(*) FILTER (WHERE lower(trim(vd.voto)) = lower(trim(cvo.orientacao)))::int AS alinhados
+          FROM votos_deputados vd
+          JOIN alvo a ON a.id = vd.politico_id
+          JOIN camara_votacoes_orientacoes cvo ON cvo.votacao_id = vd.votacao_id
+          WHERE upper(trim(cvo.sigla_bancada)) IN ('GOVERNO', 'GOV.')
+            AND lower(trim(cvo.orientacao)) IN ('sim', 'não', 'nao')
+            AND lower(trim(vd.voto)) IN ('sim', 'não', 'nao')
+          GROUP BY vd.politico_id
+        )
+        SELECT
+          j.politico_id::text AS id,
+          j.votos,
+          (
+            SELECT COUNT(*)::int FROM votacoes v
+            WHERE v.data_hora_votacao BETWEEN j.ini AND j.fim
+              AND EXISTS (SELECT 1 FROM votos_deputados x WHERE x.votacao_id = v.id)
+          ) AS possiveis,
+          COALESCE(g.alinhados, 0) AS alinhados,
+          COALESCE(g.com_orientacao, 0) AS "comOrientacao"
+        FROM janela j
+        LEFT JOIN governo g ON g.politico_id = j.politico_id
+        `,
+        [ids],
+      ),
+      pool.query<{id: string; total: number}>(
+        `
+        SELECT substring(uri FROM '/deputados/([0-9]+)$') AS id, COUNT(DISTINCT proposicao_id)::int AS total
+        FROM camara_proposicoes_autores
+        WHERE substring(uri FROM '/deputados/([0-9]+)$') = ANY($1::text[])
+        GROUP BY 1
+        `,
+        [ids],
+      ),
+      pool.query<{id: string; ano: number; mes: number; total: number}>(
+        `
+        SELECT politico_id::text AS id, ano, mes, total FROM (
+          SELECT d.politico_id, d.ano, d.mes, SUM(d.valor_liquido)::double precision AS total,
+            ROW_NUMBER() OVER (PARTITION BY d.politico_id ORDER BY d.ano DESC, d.mes DESC) AS rn
+          FROM despesas d
+          WHERE d.politico_id = ANY($1::bigint[]) ${anoFilter}
+          GROUP BY d.politico_id, d.ano, d.mes
+        ) t
+        WHERE rn <= 12
+        ORDER BY id, ano, mes
+        `,
+        params,
+      ),
+      pool.query<{id: string; tipo: string; total: number}>(
+        `
+        SELECT d.politico_id::text AS id, d.tipo_despesa AS tipo, SUM(d.valor_liquido)::double precision AS total
+        FROM despesas d
+        WHERE d.politico_id = ANY($1::bigint[]) ${anoFilter}
+        GROUP BY d.politico_id, d.tipo_despesa
+        ORDER BY total DESC
+        `,
+        params,
+      ),
+      pool.query<{tipo: string | null; total: number; politicos: number}>(
+        `
+        SELECT GROUPING(d.tipo_despesa) = 1 AS geral, d.tipo_despesa AS tipo,
+          SUM(d.valor_liquido)::double precision AS total,
+          COUNT(DISTINCT d.politico_id)::int AS politicos
+        FROM despesas d
+        JOIN politicos p ON p.id = d.politico_id
+        WHERE ${buildPoliticoStatusWhereSql(status)} ${ano != null ? 'AND d.ano = $1' : ''}
+        GROUP BY GROUPING SETS ((d.tipo_despesa), ())
+        `,
+        ano != null ? [ano] : [],
+      ),
+    ]);
+
+    const byId = new Map<string, Record<string, unknown>>();
+    for (const id of ids) {
+      byId.set(id, {
+        id,
+        participacao: null,
+        votosRegistrados: 0,
+        votacoesPossiveis: 0,
+        alinhamentoGoverno: null,
+        votosComOrientacao: 0,
+        proposicoes: 0,
+        totalDespesas: 0,
+        gastosMensais: [] as Array<{ano: number; mes: number; total: number}>,
+        gastosCategorias: [] as Array<{tipo: string; total: number}>,
+      });
+    }
+    for (const row of votos.rows) {
+      const item = byId.get(row.id);
+      if (!item) continue;
+      item.votosRegistrados = row.votos;
+      item.votacoesPossiveis = row.possiveis;
+      item.participacao = row.possiveis > 0 ? Math.round((row.votos / row.possiveis) * 1000) / 10 : null;
+      item.votosComOrientacao = row.comOrientacao;
+      item.alinhamentoGoverno = row.comOrientacao > 0 ? Math.round((row.alinhados / row.comOrientacao) * 1000) / 10 : null;
+    }
+    for (const row of proposicoes.rows) {
+      const item = byId.get(row.id);
+      if (item) item.proposicoes = row.total;
+    }
+    for (const row of mensais.rows) {
+      (byId.get(row.id)?.gastosMensais as Array<unknown> | undefined)?.push({ano: row.ano, mes: row.mes, total: row.total});
+    }
+    for (const row of categorias.rows) {
+      const item = byId.get(row.id);
+      if (!item) continue;
+      (item.gastosCategorias as Array<unknown>).push({tipo: row.tipo, total: row.total});
+      item.totalDespesas = Number(item.totalDespesas) + row.total;
+    }
+
+    const geral = (totais.rows as Array<{geral?: boolean; tipo: string | null; total: number; politicos: number}>).find((row) => row.geral);
+    const media = geral && geral.politicos > 0
+      ? {
+          gastoPorDeputado: geral.total / geral.politicos,
+          categorias: (totais.rows as Array<{geral?: boolean; tipo: string | null; total: number; politicos: number}>)
+            .filter((row) => !row.geral && row.tipo)
+            .map((row) => ({tipo: row.tipo as string, media: row.total / geral.politicos})),
+        }
+      : null;
+
+    sendJson(res, 200, {items: ids.map((id) => byId.get(id)), media});
+  } catch {
+    sendJson(res, 500, {error: 'Erro ao processar requisição'});
+  }
+});
+
+app.get('/api/politicos/concordancia', async (req, res) => {
+  try {
+    const [a, b] = parseIdList(`${req.query.a ?? ''},${req.query.b ?? ''}`, 2);
+    if (!a || !b) {
+      sendJson(res, 400, {error: 'Informe dois parlamentares diferentes.'});
+      return;
+    }
+    const result = await pool.query<{
+      total: number;
+      iguais: number;
+      items: Array<{
+        votacaoId: string;
+        titulo: string;
+        referencia: string | null;
+        data: string | null;
+        votoA: string;
+        votoB: string;
+      }>;
+    }>(
+      `
+      WITH pares AS (
+        SELECT v.id, v.titulo_publico, v.sigla_tipo, v.numero, v.ano, v.data_hora_votacao, va.voto AS voto_a, vb.voto AS voto_b
+        FROM votos_deputados va
+        JOIN votos_deputados vb ON vb.votacao_id = va.votacao_id AND vb.politico_id = $2::bigint
+        JOIN votacoes v ON v.id = va.votacao_id
+        WHERE va.politico_id = $1::bigint AND v.eh_subvotacao = false
+      ), recentes AS (
+        SELECT * FROM pares ORDER BY data_hora_votacao DESC NULLS LAST LIMIT 40
+      )
+      SELECT
+        (SELECT COUNT(*)::int FROM pares) AS total,
+        (SELECT COUNT(*)::int FROM pares WHERE lower(trim(voto_a)) = lower(trim(voto_b))) AS iguais,
+        COALESCE((
+          SELECT json_agg(json_build_object(
+            'votacaoId', id,
+            'titulo', titulo_publico,
+            'referencia', CASE WHEN sigla_tipo IS NOT NULL AND numero IS NOT NULL THEN sigla_tipo || ' ' || numero || '/' || ano END,
+            'data', data_hora_votacao,
+            'votoA', voto_a,
+            'votoB', voto_b
+          ) ORDER BY data_hora_votacao DESC NULLS LAST)
+          FROM recentes
+        ), '[]'::json) AS items
+      `,
+      [a, b],
+    );
+    sendJson(res, 200, result.rows[0] ?? {total: 0, iguais: 0, items: []});
+  } catch {
+    sendJson(res, 500, {error: 'Erro ao processar requisição'});
+  }
+});
 
 app.get('/api/politicos/novos', async (req, res) => {
   try {
@@ -725,6 +955,7 @@ app.get('/api/politicos/novos', async (req, res) => {
 
 app.get('/api/politicos/ranking', async (req, res) => {
   try {
+    const expenseFilters=parseExpenseFilters(req.query);
     const limit = parseLimit(req);
     const offset = parseOffset(req);
     const search = typeof req.query.search === 'string' ? req.query.search.trim() : '';
@@ -763,38 +994,62 @@ app.get('/api/politicos/ranking', async (req, res) => {
           ? `"totalVotacoes" ${dirSql}, "notaMedia" DESC, "totalAvaliacoes" DESC, "atualizadoEm" DESC`
           : `"notaMedia" ${dirSql}, "totalAvaliacoes" DESC, "atualizadoEm" DESC`;
 
+    const view=req.query.view;
+    if(view==='cards'||view==='items'||view==='summary') {
+      const revision=catalogEvents.revision;
+      const query=buildProgressiveRankingQuery({view,where:where.join(' AND '),values:params,filters:expenseFilters,metric,direction,limit,offset});
+      const result=await pool.query(query.text,query.values);
+      sendJson(res,200,{...result.rows[0],revision});
+      return;
+    }
+
+    const financial=expenseFinancialRowsCtes(expenseFilters,params,'d.politico_id IN (SELECT id FROM filtrados)',true);
+    const coverage=expenseCoverageSql('filtrados',expenseFilters,params);
+
     const result = await pool.query<{
-      id: string;
-      nome: string;
-      partido: string;
-      estado: string;
-      foto: string | null;
-      ativo: boolean;
-      situacao: string | null;
-      notaMedia: number;
-      totalAvaliacoes: number;
-      atualizadoEm: string | Date | null;
-      cargo: string;
-      nomeCivil: string | null;
-      dataNascimento: string | Date | null;
-      sexo: string | null;
-      email: string | null;
-      telefone: string | null;
-      idLegislatura: number | null;
-      dataUltimoStatus: string | Date | null;
-      nomeEleitoral: string | null;
-      condicaoEleitoral: string | null;
-      urlWebsite: string | null;
-      redesSociaisRaw: string | null;
-      escolaridade: string | null;
-      municipioNascimento: string | null;
-      ufNascimento: string | null;
-      gabineteNome: string | null;
-      gabinetePredio: string | null;
-      gabineteSala: string | null;
-      gabineteAndar: string | null;
+      totalCadastrados: number;
+      total: number;
+      totalDespesas: number;
+      items: Array<{
+        id: string;
+        nome: string;
+        partido: string;
+        estado: string;
+        foto: string | null;
+        ativo: boolean;
+        situacao: string | null;
+        notaMedia: number;
+        totalAvaliacoes: number;
+        atualizadoEm: string | Date | null;
+        cargo: string;
+        nomeCivil: string | null;
+        dataNascimento: string | Date | null;
+        sexo: string | null;
+        email: string | null;
+        telefone: string | null;
+        idLegislatura: number | null;
+        dataUltimoStatus: string | Date | null;
+        nomeEleitoral: string | null;
+        condicaoEleitoral: string | null;
+        urlWebsite: string | null;
+        redesSociaisRaw: string | null;
+        escolaridade: string | null;
+        municipioNascimento: string | null;
+        ufNascimento: string | null;
+        gabineteNome: string | null;
+        gabinetePredio: string | null;
+        gabineteSala: string | null;
+        gabineteAndar: string | null;
+      }>;
     }>(
       `
+      WITH filtrados AS (
+        SELECT p.id FROM politicos p WHERE ${where.join(' AND ')}
+      ), ${financial}, despesas_filtradas AS (
+        SELECT d.politico_id, SUM(d.valor_liquido) AS total_despesas
+        FROM financial_rows d
+        GROUP BY d.politico_id
+      ), pagina AS (
       SELECT
         p.id::text AS id,
         p.nome,
@@ -828,18 +1083,14 @@ app.get('/api/politicos/ranking', async (req, res) => {
         p.gabinete_sala AS "gabineteSala",
         p.gabinete_andar AS "gabineteAndar"
       FROM politicos p
+      INNER JOIN filtrados f ON f.id = p.id
       LEFT JOIN avaliacoes a ON a.politico_id = p.id
-      LEFT JOIN (
-        SELECT politico_id, SUM(valor_liquido)::double precision AS total_despesas
-        FROM despesas
-        GROUP BY politico_id
-      ) dsum ON dsum.politico_id = p.id
+      LEFT JOIN despesas_filtradas dsum ON dsum.politico_id = p.id
       LEFT JOIN (
         SELECT politico_id, COUNT(*)::int AS total_votacoes
         FROM votos_deputados
         GROUP BY politico_id
       ) vcnt ON vcnt.politico_id = p.id
-      WHERE ${where.join(' AND ')}
       GROUP BY
         p.id,
         p.nome,
@@ -854,12 +1105,24 @@ app.get('/api/politicos/ranking', async (req, res) => {
       ORDER BY ${orderBy}, p.id ASC
       LIMIT $${params.length + 1}
       OFFSET $${params.length + 2}
+      )
+      SELECT
+        (SELECT COUNT(*)::int FROM politicos) AS "totalCadastrados",
+        (SELECT COUNT(*)::int FROM filtrados) AS total,
+        (SELECT COALESCE(SUM(total_despesas), 0)::double precision FROM despesas_filtradas) AS "totalDespesas",
+        (SELECT COUNT(*)::int FROM avaliacoes a INNER JOIN filtrados f ON f.id=a.politico_id) AS "totalAvaliacoes",
+        (SELECT COALESCE(AVG(a.nota),0)::double precision FROM avaliacoes a INNER JOIN filtrados f ON f.id=a.politico_id) AS "notaMedia",
+        (SELECT COUNT(*)::int FROM votos_deputados v INNER JOIN filtrados f ON f.id=v.politico_id) AS "totalVotacoes",
+        EXISTS(SELECT 1 FROM votos_deputados) AS "votacoesDisponiveis",
+        ${coverage} AS cobertura,
+        COALESCE((SELECT json_agg(pagina ORDER BY ${orderBy}, id::bigint ASC) FROM pagina), '[]'::json) AS items
       `,
       [...params, limit, offset],
     );
 
-    sendJson(res, 200, {items: result.rows});
-  } catch {
+    sendJson(res, 200, result.rows[0]);
+  } catch(error) {
+    if(error instanceof ExpenseFilterError){sendJson(res,400,{error:error.message});return;}
     sendJson(res, 500, {error: 'Erro ao processar requisição'});
   }
 });
@@ -872,6 +1135,8 @@ app.get('/api/partidos/gastos', async (req, res) => {
     const dirSql = direction === 'asc' ? 'ASC' : 'DESC';
     const status = parsePoliticoStatusFilter(req);
     const statusWhere = buildPoliticoStatusWhereSql(status);
+    const values:Array<string|number>=[];
+    const expenseWhere=expenseScopeSql(parseExpenseFilters(req.query),values,false,'e');
 
     const result = await pool.query(
       `
@@ -880,15 +1145,43 @@ app.get('/api/partidos/gastos', async (req, res) => {
         COALESCE(SUM(d.total), 0)::double precision AS "totalDespesas",
         COUNT(p.id)::int AS "totalPoliticos"
       FROM politicos p
-      LEFT JOIN (SELECT politico_id, SUM(valor_liquido) AS total FROM despesas GROUP BY politico_id) d ON d.politico_id = p.id
+      LEFT JOIN (SELECT e.politico_id, SUM(e.valor_liquido) AS total FROM despesas e WHERE ${expenseWhere} GROUP BY e.politico_id) d ON d.politico_id = p.id
       WHERE ${statusWhere}
         AND p.sigla_partido IS NOT NULL
         AND p.sigla_partido <> ''
       GROUP BY p.sigla_partido
       ORDER BY "totalDespesas" ${dirSql}, partido ASC
-      LIMIT $1
+      LIMIT $${values.length+1}
       `,
-      [limit],
+      [...values,limit],
+    );
+
+    sendJson(res, 200, {items: result.rows});
+  } catch(error) {
+    if(error instanceof ExpenseFilterError){sendJson(res,400,{error:error.message});return;}
+    sendJson(res, 500, {error: 'Erro ao processar requisição'});
+  }
+});
+
+app.get('/api/estados/resumo', async (req, res) => {
+  try {
+    const status = parsePoliticoStatusFilter(req);
+    const statusWhere = buildPoliticoStatusWhereSql(status);
+
+    const result = await pool.query(
+      `
+      SELECT
+        p.sigla_uf AS uf,
+        COUNT(p.id)::int AS "totalPoliticos",
+        COALESCE(SUM(d.total), 0)::double precision AS "totalDespesas"
+      FROM politicos p
+      LEFT JOIN (SELECT politico_id, SUM(valor_liquido) AS total FROM despesas GROUP BY politico_id) d ON d.politico_id = p.id
+      WHERE ${statusWhere}
+        AND p.sigla_uf IS NOT NULL
+        AND p.sigla_uf <> ''
+      GROUP BY p.sigla_uf
+      ORDER BY p.sigla_uf ASC
+      `,
     );
 
     sendJson(res, 200, {items: result.rows});
@@ -1719,6 +2012,7 @@ app.get('/api/politicos/:politicoId', async (req, res) => {
     }>(
       `
       SELECT
+        EXISTS(SELECT 1 FROM votos_deputados) AS "votacoesDisponiveis",
         p.id::text AS id,
         p.nome,
         p.sigla_partido AS partido,
@@ -2148,6 +2442,27 @@ app.get('/api/votacoes/:votacaoId', async (req, res) => {
   }
 });
 
+const expenseResponseError=(res:Response,error:unknown)=>{
+  if(error instanceof ExpenseFilterError)sendJson(res,400,{error:error.message});
+  else {console.error('[expense-analytics]',error);sendJson(res,500,{error:'Erro ao carregar despesas.'});}
+};
+
+app.get('/api/despesas/anos',async(_req,res)=>{
+  try {const result=await pool.query(expenseYearsQuery);sendJson(res,200,{items:result.rows.map(row=>Number(row.ano))});}
+  catch(error){expenseResponseError(res,error);}
+});
+
+app.get('/api/politicos/:politicoId/despesas/analise',async(req,res)=>{
+  try {
+    // Reuse identity validation and the complete common financial parser.
+    buildExpenseQuery(req.params.politicoId,req.query);
+    const filters=parseExpenseFilters(req.query),query=buildExpenseAnalysisQuery(req.params.politicoId,filters);
+    const result=await pool.query(query.text,query.values);
+    const {ano,mes,mesInicio,mesFim}=filters;
+    sendJson(res,200,{...result.rows[0],periodo:{ano,mes,mesInicio,mesFim}});
+  } catch(error){expenseResponseError(res,error);}
+});
+
 app.get('/api/politicos/:politicoId/despesas/anos', async (req, res) => {
   try {
     const {politicoId} = req.params;
@@ -2187,24 +2502,17 @@ app.get('/api/politicos/:politicoId/despesas', async (req, res) => {
 app.get('/api/politicos/:politicoId/despesas/resumo', async (req, res) => {
   try {
     const {politicoId} = req.params;
-    const ano = parseOptionalInt(req.query.ano);
-
-    const where: string[] = ['d.politico_id = $1::bigint'];
+    buildExpenseQuery(politicoId,req.query);
     const params: Array<string | number> = [politicoId];
-
-    if (ano != null) {
-      params.push(ano);
-      where.push(`d.ano = $${params.length}`);
-    }
+    const financial=expenseFinancialRowsCtes(parseExpenseFilters(req.query),params,'d.politico_id=$1::bigint',true);
 
     const result = await pool.query(
       `
-      SELECT
+      WITH ${financial} SELECT
         d.ano,
         d.mes,
         SUM(d.valor_liquido)::double precision AS total
-      FROM despesas d
-      WHERE ${where.join(' AND ')}
+      FROM financial_rows d
       GROUP BY d.ano, d.mes
       ORDER BY d.ano ASC, d.mes ASC
       `,
@@ -2212,35 +2520,24 @@ app.get('/api/politicos/:politicoId/despesas/resumo', async (req, res) => {
     );
 
     sendJson(res, 200, {items: result.rows});
-  } catch {
-    sendJson(res, 500, {error: 'Erro ao processar requisição'});
-  }
+  } catch(error){expenseResponseError(res,error);}
 });
 
 app.get('/api/despesas/media', async (req, res) => {
   try {
-    const ano = parseOptionalInt(req.query.ano);
-
-    const where: string[] = [];
     const params: Array<string | number> = [];
-
-    if (ano != null) {
-      params.push(ano);
-      where.push(`d.ano = $${params.length}`);
-    }
-
-    const whereClause = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
+    const financial=expenseFinancialRowsCtes(parseExpenseFilters(req.query),params,'TRUE',true);
 
     const result = await pool.query(
       `
-      SELECT
+      WITH ${financial} SELECT
         sub.ano,
         sub.mes,
-        AVG(sub.total_mes)::double precision AS media
+        AVG(sub.total_mes)::double precision AS media,
+        COUNT(*)::int AS participantes
       FROM (
         SELECT politico_id, ano, mes, SUM(valor_liquido) AS total_mes
-        FROM despesas d
-        ${whereClause}
+        FROM financial_rows d
         GROUP BY politico_id, ano, mes
       ) sub
       GROUP BY sub.ano, sub.mes
@@ -2250,9 +2547,7 @@ app.get('/api/despesas/media', async (req, res) => {
     );
 
     sendJson(res, 200, {items: result.rows});
-  } catch {
-    sendJson(res, 500, {error: 'Erro ao processar requisição'});
-  }
+  } catch(error){expenseResponseError(res,error);}
 });
 
 app.use('/api/admin', requireAdminAuthorization);
@@ -2298,12 +2593,12 @@ app.get('/api/admin/ingestion/summary', async (_req, res) => {
         MIN(period_start)::text AS "periodStart",
         MAX(period_end)::text AS "periodEnd",
         COUNT(*)::int AS total,
+        COUNT(*) FILTER (WHERE status = 'done' AND items_count = 0)::int AS "emptyTotal",
         SUM(items_count)::int AS "itemsCount",
         MAX(updated_at)::text AS "updatedAt"
       FROM ingestion_checkpoints
       WHERE source = 'camara'
         AND status <> 'cancelled'
-        AND NOT (status = 'done' AND items_count = 0)
       GROUP BY dataset, status
       ORDER BY dataset ASC, status ASC
       `,
@@ -2551,7 +2846,7 @@ app.post('/api/admin/ingestion/run', async (req, res) => {
         '--stale-minutes=30',
         '--reset-failed',
         '--reset-cancelled',
-        '--reset-empty',
+        ...(req.body?.reprocessEmpty === true ? ['--reset-empty'] : []),
       ],
       {
         cwd: process.cwd(),
@@ -2727,6 +3022,8 @@ app.post('/api/admin/database/clear', async (req, res) => {
     await lock?.release();
   }
 });
+
+attachJudicialRoutes(app,pool,requireAdminAuthorization,catalogEvents);
 
 app.use((req, res) => {
   if (req.path.startsWith('/api/')) {

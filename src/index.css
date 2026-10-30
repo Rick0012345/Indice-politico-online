@@ -1,14 +1,45 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700;800&family=Geist+Mono:wght@400;500;600&display=swap');
 @import "tailwindcss";
 @variant dark (&:where(.dark, .dark *));
 
+/*
+ * Design tokens do Catalogo Politico.
+ * Base neutra slate + um unico acento (azul institucional da marca CP).
+ * Verde/vermelho sao reservados para semantica de dados (melhor/pior), nunca decoracao.
+ */
 @theme {
-  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Geist", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --color-brand-50: #eef4ff;
+  --color-brand-100: #dbe6fe;
+  --color-brand-200: #bed2fd;
+  --color-brand-300: #91b4fb;
+  --color-brand-400: #5d8cf6;
+  --color-brand-500: #3b6af0;
+  --color-brand-600: #2450e0;
+  --color-brand-700: #1d3fc4;
+  --color-brand-800: #1d359e;
+  --color-brand-900: #1d327d;
+  --color-brand-950: #16204b;
+
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 @layer base {
+  html {
+    -webkit-tap-highlight-color: transparent;
+  }
+
   body {
     @apply bg-slate-50 text-slate-900 antialiased dark:bg-slate-950 dark:text-slate-50;
+    font-feature-settings: "ss01", "cv11";
+  }
+
+  :is(button, a, input, select, textarea, [tabindex]):focus-visible {
+    outline: 2px solid var(--color-brand-500);
+    outline-offset: 2px;
+    border-radius: 0.5rem;
   }
 }
 
@@ -21,6 +52,49 @@
     scrollbar-width: none;
   }
 
+  /* Numeros tabulares para dados comparaveis */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum";
+  }
+
+  /* Superficie padrao: borda fina + sombra tingida de slate (nunca preto puro) */
+  .surface {
+    @apply rounded-2xl border border-slate-200/80 bg-white dark:border-slate-800 dark:bg-slate-900;
+    box-shadow: 0 1px 2px rgb(15 23 42 / 0.04), 0 8px 24px -12px rgb(15 23 42 / 0.08);
+  }
+
+  .dark .surface {
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.03), 0 8px 24px -12px rgb(0 0 0 / 0.5);
+  }
+
+  /* Grade pontilhada sutil para o hero */
+  .dot-grid {
+    background-image: radial-gradient(rgb(15 23 42 / 0.09) 1px, transparent 1px);
+    background-size: 22px 22px;
+    mask-image: linear-gradient(to bottom, black, transparent 85%);
+  }
+
+  .dark .dot-grid {
+    background-image: radial-gradient(rgb(148 163 184 / 0.12) 1px, transparent 1px);
+  }
+
+  .kbd {
+    @apply inline-flex h-5 min-w-5 items-center justify-center rounded-md border border-slate-200 bg-slate-50 px-1.5 font-mono text-[10px] font-medium text-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400;
+  }
+
+  .skeleton {
+    @apply rounded-lg bg-slate-200/70 dark:bg-slate-800;
+    background-image: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.5), transparent);
+    background-size: 200% 100%;
+    animation: skeleton-shimmer 1.4s ease-in-out infinite;
+  }
+
+  .dark .skeleton {
+    background-image: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.05), transparent);
+  }
+
+  /* Mantidos por compatibilidade com paginas existentes */
   .civic-mesh {
     position: absolute;
     inset: 0;
@@ -28,59 +102,29 @@
     pointer-events: none;
   }
 
-  .civic-mesh::before {
-    content: "";
-    position: absolute;
-    inset: -24%;
-    background:
-      radial-gradient(circle at 18% 30%, rgba(37, 99, 235, 0.22), transparent 14rem),
-      radial-gradient(circle at 75% 18%, rgba(20, 184, 166, 0.16), transparent 13rem),
-      radial-gradient(circle at 62% 78%, rgba(234, 179, 8, 0.12), transparent 12rem),
-      linear-gradient(115deg, transparent 0 42%, rgba(37, 99, 235, 0.08) 43% 44%, transparent 45% 100%);
-    filter: saturate(1.08);
-  }
-
-  .civic-mesh::after {
-    content: "";
-    position: absolute;
-    inset: 0;
-    background-image:
-      linear-gradient(rgba(15, 23, 42, 0.07) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(15, 23, 42, 0.07) 1px, transparent 1px);
-    background-size: 42px 42px;
-    mask-image: radial-gradient(circle at 50% 35%, black, transparent 68%);
-  }
-
   .civic-node {
     position: absolute;
     width: 0.55rem;
     height: 0.55rem;
     border-radius: 9999px;
-    background: rgba(37, 99, 235, 0.78);
-    box-shadow: 0 0 0 8px rgba(37, 99, 235, 0.08), 0 0 28px rgba(37, 99, 235, 0.34);
-  }
-
-  .civic-node:nth-child(2) {
-    background: rgba(20, 184, 166, 0.78);
-    box-shadow: 0 0 0 8px rgba(20, 184, 166, 0.08), 0 0 28px rgba(20, 184, 166, 0.32);
-  }
-
-  .civic-node:nth-child(3) {
-    background: rgba(234, 179, 8, 0.72);
-    box-shadow: 0 0 0 8px rgba(234, 179, 8, 0.08), 0 0 28px rgba(234, 179, 8, 0.24);
+    background: rgb(36 80 224 / 0.78);
   }
 
   .reveal-card {
-    animation: reveal-card 620ms cubic-bezier(0.22, 1, 0.36, 1) both;
+    animation: reveal-card 620ms var(--ease-out-expo) both;
   }
 
   .lift-card {
-    transition: transform 220ms ease, box-shadow 220ms ease, border-color 220ms ease;
+    transition: transform 220ms var(--ease-out-expo), box-shadow 220ms ease, border-color 220ms ease;
   }
 
   .lift-card:hover {
-    transform: translateY(-3px);
-    box-shadow: 0 18px 42px rgba(15, 23, 42, 0.08);
+    transform: translateY(-2px);
+    box-shadow: 0 18px 42px -18px rgb(15 23 42 / 0.18);
+  }
+
+  .lift-card:active {
+    transform: translateY(0) scale(0.99);
   }
 
   .data-bar {
@@ -88,6 +132,14 @@
     overflow: hidden;
   }
 
+  .grow-bar {
+    transform-origin: left center;
+    animation: grow-bar 900ms var(--ease-out-expo) both;
+  }
+
+  .palette-in {
+    animation: palette-in 180ms var(--ease-out-expo) both;
+  }
 }
 
 @keyframes reveal-card {
@@ -101,13 +153,56 @@
   }
 }
 
+@keyframes grow-bar {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+@keyframes palette-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes skeleton-shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .reveal-card {
+  .reveal-card,
+  .grow-bar,
+  .palette-in,
+  .skeleton {
     animation: none;
+  }
+
+  .lift-card,
+  .lift-card:hover {
+    transition: none;
+    transform: none;
   }
 }
 
 .vote-list-item {
   content-visibility: auto;
   contain-intrinsic-size: auto 190px;
+}
+
+.ranking-page :is(button, a, input, select):focus-visible {
+  outline: 2px solid var(--color-blue-500);
+  outline-offset: 3px;
 }

@@ -46,8 +46,55 @@ model Politico {
   despesas   Despesa[]
   avaliacoes Avaliacao[]
   noticias   NoticiaPolitico[]
+  judicialRecords JudicialRecord[]
+  judicialCoverage JudicialCoverage?
+  judicialAudit JudicialAudit[]
 
   @@map("politicos")
+}
+
+model JudicialRecord {
+  id String @id @db.Uuid
+  politicoId BigInt @map("politico_id")
+  kind String
+  category String
+  caseKey String @map("case_key")
+  dedupeKey String @map("dedupe_key")
+  verification String
+  payload Json
+  version Int @default(1)
+  checkedAt DateTime? @map("checked_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+  politico Politico @relation(fields:[politicoId],references:[id],onDelete:Restrict)
+  audits JudicialAudit[]
+  @@unique([politicoId,dedupeKey])
+  @@map("judicial_records")
+}
+
+model JudicialCoverage {
+  politicoId BigInt @id @map("politico_id")
+  status String
+  scope String @default("")
+  sources Json @default("[]")
+  version Int @default(1)
+  checkedAt DateTime? @map("checked_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+  politico Politico @relation(fields:[politicoId],references:[id],onDelete:Restrict)
+  @@map("judicial_coverage")
+}
+
+model JudicialAudit {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  politicoId BigInt @map("politico_id")
+  recordId String? @map("record_id") @db.Uuid
+  action String
+  beforeData Json? @map("before_data")
+  afterData Json @map("after_data")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  politico Politico @relation(fields:[politicoId],references:[id],onDelete:Restrict)
+  record JudicialRecord? @relation(fields:[recordId],references:[id],onDelete:Restrict)
+  @@index([politicoId,createdAt(sort:Desc)])
+  @@map("judicial_audit")
 }
 
 model Votacao {
@@ -154,7 +201,9 @@ model Despesa {
   ano               Int       @db.SmallInt
   mes               Int       @db.SmallInt
   tipoDespesa       String    @map("tipo_despesa") @db.VarChar(255)
-  codDocumento      String?   @unique @map("cod_documento") @db.VarChar(100)
+  codDocumento      String?   @map("cod_documento") @db.VarChar(100)
+  // Partial unique identity for cod_documento IS NULL is managed by the SQL migration.
+  identidadeOrigem  String?   @map("identidade_origem") @db.VarChar(100)
   cnpjCpfFornecedor String?   @map("cnpj_cpf_fornecedor") @db.VarChar(14)
   nomeFornecedor    String?   @map("nome_fornecedor") @db.VarChar(255)
   tipoDocumento     String?   @map("tipo_documento") @db.VarChar(50)
@@ -176,6 +225,7 @@ model Despesa {
   @@index([politicoId], map: "idx_despesas_politico")
   @@index([cnpjCpfFornecedor], map: "idx_despesas_fornecedor")
   @@index([ano, mes], map: "idx_despesas_data_competencia")
+  @@unique([politicoId, ano, mes, codDocumento, tipoDespesa], map: "despesas_politico_competencia_documento_tipo_key")
   @@map("despesas")
 }
 

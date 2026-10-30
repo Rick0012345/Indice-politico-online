@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import {getGroqModelValidationError} from '../lib/aiSettings';
 import {cn} from '../lib/utils';
+import {JudicialAdmin} from '../components/judicial/JudicialAdmin';
 
 type CheckpointSummary = {
   dataset: string;
@@ -26,6 +27,7 @@ type CheckpointSummary = {
   periodEnd: string | null;
   total: number;
   itemsCount: number | null;
+  emptyTotal?: number;
 };
 
 type PopulatedPeriod = {
@@ -99,6 +101,7 @@ const adminSections = [
   {id: 'logs', label: 'Logs', icon: ScrollText},
   {id: 'cobertura', label: 'Cobertura', icon: Layers3},
   {id: 'ia', label: 'IA', icon: Bot},
+  {id: 'judicial', label: 'Judicial', icon: ScrollText},
 ] as const;
 
 type AdminSection = (typeof adminSections)[number]['id'];
@@ -236,8 +239,8 @@ const LogEventCard = ({event, compact = false}: {event: LogEvent; compact?: bool
         />
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2">
-            <span className={cn('truncate font-black', compact ? 'text-xs' : 'text-sm')}>{event.label}</span>
-            <span className="shrink-0 rounded-full bg-white/60 px-2 py-0.5 text-[10px] font-black uppercase dark:bg-slate-950/40">
+            <span className={cn('truncate font-semibold', compact ? 'text-xs' : 'text-sm')}>{event.label}</span>
+            <span className="shrink-0 rounded-full bg-white/60 px-2 py-0.5 text-[10px] font-semibold uppercase dark:bg-slate-950/40">
               {event.source === 'ai' ? 'IA' : 'Ingestao'}
             </span>
           </div>
@@ -248,7 +251,7 @@ const LogEventCard = ({event, compact = false}: {event: LogEvent; compact?: bool
             </div>
           )}
         </div>
-        <div className="shrink-0 text-xs font-black opacity-70">{formatEventTime(event.timestamp)}</div>
+        <div className="shrink-0 text-xs font-semibold opacity-70">{formatEventTime(event.timestamp)}</div>
       </div>
     </div>
   );
@@ -256,6 +259,7 @@ const LogEventCard = ({event, compact = false}: {event: LogEvent; compact?: bool
 
 const summarizeCheckpointProgress = (rows: CheckpointSummary[]) => {
   const total = rows.reduce((sum, row) => sum + Number(row.total ?? 0), 0);
+  const empty = rows.reduce((sum, row) => sum + Number(row.emptyTotal ?? 0), 0);
   const done = rows
     .filter((row) => row.status === 'done')
     .reduce((sum, row) => sum + Number(row.total ?? 0), 0);
@@ -271,6 +275,7 @@ const summarizeCheckpointProgress = (rows: CheckpointSummary[]) => {
 
   return {
     total,
+    empty,
     done,
     running,
     failed,
@@ -280,10 +285,128 @@ const summarizeCheckpointProgress = (rows: CheckpointSummary[]) => {
   };
 };
 
+const adminAuthorizationError = 'Acesso administrativo recusado. Informe o token administrativo atual configurado no servidor.';
+
+const fetchWithAdminToken = (token: string, input: RequestInfo | URL, init: RequestInit = {}) => {
+  const headers = new Headers(init.headers);
+  headers.set('Authorization', `Bearer ${token}`);
+  return fetch(input, {...init, headers});
+};
+
 export const Admin = () => {
-  const [adminToken, setAdminToken] = useState(() => window.sessionStorage.getItem('admin_api_token') ?? '');
+  const [isAuthorized, setIsAuthorized] = useState(false);
   const [adminTokenInput, setAdminTokenInput] = useState('');
+  const [isAuthenticating, setIsAuthenticating] = useState(() => Boolean(window.sessionStorage.getItem('admin_api_token')?.trim()));
+  const [authError, setAuthError] = useState<string | null>(null);
+  const tokenRef = useRef('');
+  const sessionVersionRef = useRef(0);
+
+  const signOut = useCallback((error: string | null = null) => {
+    sessionVersionRef.current += 1;
+    tokenRef.current = '';
+    window.sessionStorage.removeItem('admin_api_token');
+    setIsAuthorized(false);
+    setIsAuthenticating(false);
+    setAuthError(error);
+  }, []);
+
+  const authenticate = useCallback(async (token: string) => {
+    const version = ++sessionVersionRef.current;
+    setIsAuthenticating(true);
+    setAuthError(null);
+    try {
+      const response = await fetchWithAdminToken(token, '/api/admin/settings/ai');
+      if (version !== sessionVersionRef.current) return;
+      if (response.status === 401) {
+        signOut(adminAuthorizationError);
+        return;
+      }
+      if (!response.ok) {
+        const data = await response.json().catch(() => null);
+        throw new Error(data?.error ?? 'Não foi possível validar o acesso administrativo. Tente novamente.');
+      }
+      window.sessionStorage.setItem('admin_api_token', token);
+      tokenRef.current = token;
+      setIsAuthorized(true);
+      setAdminTokenInput('');
+    } catch (error) {
+      if (version !== sessionVersionRef.current) return;
+      setAuthError(error instanceof Error ? error.message : 'Não foi possível validar o acesso administrativo. Tente novamente.');
+    } finally {
+      if (version === sessionVersionRef.current) setIsAuthenticating(false);
+    }
+  }, [signOut]);
+
+  useEffect(() => {
+    const savedToken = window.sessionStorage.getItem('admin_api_token')?.trim();
+    if (savedToken) void authenticate(savedToken);
+    return () => {
+      sessionVersionRef.current += 1;
+      tokenRef.current = '';
+    };
+  }, [authenticate]);
+
+  const adminFetch = useCallback(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+    const token = tokenRef.current;
+    const version = sessionVersionRef.current;
+    if (!token) throw new Error(adminAuthorizationError);
+    const response = await fetchWithAdminToken(token, input, init);
+    // Uma resposta da sessão anterior não pode encerrar um novo acesso.
+    if (version !== sessionVersionRef.current) throw new DOMException('Sessão administrativa encerrada.', 'AbortError');
+    if (response.status === 401) {
+      signOut(adminAuthorizationError);
+      throw new Error(adminAuthorizationError);
+    }
+    return response;
+  }, [signOut]);
+
+  if (isAuthorized) return <AdminPanel adminFetch={adminFetch} onSignOut={() => signOut()} />;
+
+  return (
+    <div className="min-h-screen bg-slate-50 px-4 py-16 dark:bg-slate-950">
+      <form
+        className="mx-auto max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900"
+        onSubmit={(event) => {
+          event.preventDefault();
+          const token = adminTokenInput.trim();
+          if (token && !isAuthenticating) void authenticate(token);
+        }}
+      >
+        <h1 className="text-2xl font-semibold text-slate-900 dark:text-slate-50">Acesso administrativo</h1>
+        <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">Informe o token administrativo configurado no servidor.</p>
+        <label htmlFor="admin-token" className="mt-5 block text-sm font-bold text-slate-700 dark:text-slate-200">Token administrativo</label>
+        <input
+          id="admin-token"
+          type="password"
+          autoComplete="current-password"
+          value={adminTokenInput}
+          onChange={(event) => setAdminTokenInput(event.target.value)}
+          disabled={isAuthenticating}
+          aria-invalid={Boolean(authError)}
+          aria-describedby={authError ? 'admin-auth-error' : undefined}
+          className="mt-2 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-slate-900 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-50"
+          placeholder="Token administrativo"
+        />
+        {authError && <p id="admin-auth-error" role="alert" className="mt-3 text-sm font-semibold text-rose-700 dark:text-rose-300">{authError}</p>}
+        <button
+          type="submit"
+          disabled={isAuthenticating || !adminTokenInput.trim()}
+          className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-3 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-60"
+        >
+          {isAuthenticating && <Loader2 size={18} className="animate-spin" aria-hidden="true" />}
+          {isAuthenticating ? 'Verificando acesso...' : 'Entrar'}
+        </button>
+      </form>
+    </div>
+  );
+};
+
+const AdminPanel = ({adminFetch, onSignOut}: {
+  adminFetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+  onSignOut: () => void;
+}) => {
   const [activeSection, setActiveSection] = useState<AdminSection>('coleta');
+  const judicialFetch = useMemo(() => (input: RequestInfo | URL, init?: RequestInit) => adminFetch(input, init), [adminFetch]);
   const [from, setFrom] = useState('2016-01-01');
   const [to, setTo] = useState('2020-12-31');
   const [selectedDatasets, setSelectedDatasets] = useState<string[]>([
@@ -299,6 +422,7 @@ export const Admin = () => {
   const [periods, setPeriods] = useState<PopulatedPeriod[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
+  const [reprocessEmpty, setReprocessEmpty] = useState(false);
   const [clearingDataset, setClearingDataset] = useState<string | null>(null);
   const [isPolling, setIsPolling] = useState(false);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
@@ -319,12 +443,6 @@ export const Admin = () => {
   const [isSavingAi, setIsSavingAi] = useState(false);
   const aiModelError = getGroqModelValidationError(aiSettings.groqModel);
   const refreshInFlightRef = useRef(false);
-
-  const adminFetch = useCallback((input: RequestInfo | URL, init: RequestInit = {}) => {
-    const headers = new Headers(init.headers);
-    headers.set('Authorization', `Bearer ${adminToken}`);
-    return fetch(input, {...init, headers});
-  }, [adminToken]);
 
   const loadSummary = useCallback(async () => {
     setIsLoading(true);
@@ -386,9 +504,8 @@ export const Admin = () => {
   }, [loadLogs, loadSummary]);
 
   useEffect(() => {
-    if (!adminToken) return;
     void Promise.all([refreshAdminData(), loadAiSettings()]);
-  }, [adminToken, loadAiSettings, refreshAdminData]);
+  }, [loadAiSettings, refreshAdminData]);
 
   const groupedCheckpoints = useMemo(() => {
     return datasetOptions.map((dataset) => {
@@ -483,7 +600,7 @@ export const Admin = () => {
       const response = await adminFetch('/api/admin/ingestion/run', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({from, to, datasets: selectedDatasets}),
+        body: JSON.stringify({from, to, datasets: selectedDatasets, reprocessEmpty}),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? 'Erro ao iniciar ingestao.');
@@ -572,48 +689,16 @@ export const Admin = () => {
     }
   };
 
-  if (!adminToken) {
-    return (
-      <div className="min-h-screen bg-slate-50 px-4 py-16 dark:bg-slate-950">
-        <form
-          className="mx-auto max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-900"
-          onSubmit={(event) => {
-            event.preventDefault();
-            const token = adminTokenInput.trim();
-            if (!token) return;
-            window.sessionStorage.setItem('admin_api_token', token);
-            setAdminToken(token);
-            setAdminTokenInput('');
-          }}
-        >
-          <h1 className="text-2xl font-black text-slate-900 dark:text-slate-50">Acesso administrativo</h1>
-          <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">Informe o token administrativo configurado no servidor.</p>
-          <input
-            type="password"
-            autoComplete="current-password"
-            value={adminTokenInput}
-            onChange={(event) => setAdminTokenInput(event.target.value)}
-            className="mt-5 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-50"
-            placeholder="Token administrativo"
-          />
-          <button type="submit" className="mt-4 w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-black text-white hover:bg-blue-700">
-            Entrar
-          </button>
-        </form>
-      </div>
-    );
-  }
-
   return (
     <div className="min-h-screen overflow-x-hidden bg-slate-50 py-8 dark:bg-slate-950">
       <div className="mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8">
         <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <div className="flex items-center gap-2 text-sm font-bold uppercase text-blue-600 dark:text-blue-400">
+            <div className="flex items-center gap-2 text-sm font-bold uppercase text-brand-700 dark:text-brand-300">
               <Settings size={16} />
               Administracao
             </div>
-            <h1 className="mt-2 text-3xl font-black text-slate-900 dark:text-slate-50">
+            <h1 className="mt-2 text-3xl font-semibold text-slate-900 dark:text-slate-50">
               Ingestao de dados
             </h1>
           </div>
@@ -621,24 +706,21 @@ export const Admin = () => {
             type="button"
             onClick={refreshAdminData}
             disabled={isLoading}
-            className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 transition hover:bg-slate-100 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+            className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 transition hover:bg-slate-100 disabled:opacity-60 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
           >
             <RefreshCw size={18} className={cn(isLoading && 'animate-spin')} />
             Atualizar
           </button>
           <button
             type="button"
-            onClick={() => {
-              window.sessionStorage.removeItem('admin_api_token');
-              setAdminToken('');
-            }}
-            className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+            onClick={onSignOut}
+            className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200"
           >
             Sair
           </button>
         </div>
 
-        <nav className="mb-6 flex gap-2 overflow-x-auto rounded-lg border border-slate-200 bg-white p-2 dark:border-slate-700 dark:bg-slate-900">
+        <nav className="mb-6 flex gap-2 overflow-x-auto rounded-lg border border-slate-200 bg-white p-2 dark:border-slate-800 dark:bg-slate-900">
           {adminSections.map((section) => {
             const Icon = section.icon;
             const isActive = activeSection === section.id;
@@ -648,7 +730,7 @@ export const Admin = () => {
                 type="button"
                 onClick={() => setActiveSection(section.id)}
                 className={cn(
-                  'inline-flex shrink-0 items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-black transition',
+                  'inline-flex shrink-0 items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition',
                   isActive
                     ? 'bg-blue-600 text-white'
                     : 'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800',
@@ -661,13 +743,15 @@ export const Admin = () => {
           })}
         </nav>
 
+        {activeSection === 'judicial' && <JudicialAdmin adminFetch={judicialFetch} />}
+
         {activeSection === 'coleta' && (
         <section className="min-w-0">
           <div className="grid min-w-0 gap-6 lg:grid-cols-[minmax(280px,420px)_minmax(280px,1fr)]">
-          <div className="min-w-0 rounded-lg border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-900">
+          <div className="min-w-0 rounded-lg border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
             <div className="mb-5 flex items-center gap-2">
-              <CalendarDays size={20} className="text-blue-600 dark:text-blue-400" />
-              <h2 className="text-lg font-black text-slate-900 dark:text-slate-50">Nova coleta</h2>
+              <CalendarDays size={20} className="text-brand-700 dark:text-brand-300" />
+              <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-50">Nova coleta</h2>
             </div>
             <div className="space-y-4">
               <div className="grid grid-cols-2 gap-3">
@@ -690,7 +774,7 @@ export const Admin = () => {
                       type="button"
                       onClick={() => toggleDataset(dataset.id)}
                       className={cn(
-                        'rounded-lg px-3 py-2 text-xs font-black ring-1 ring-inset transition',
+                        'rounded-lg px-3 py-2 text-xs font-semibold ring-1 ring-inset transition',
                         selectedDatasets.includes(dataset.id)
                           ? 'bg-blue-600 text-white ring-blue-600'
                           : 'bg-slate-50 text-slate-600 ring-slate-200 hover:bg-slate-100 dark:bg-slate-950 dark:text-slate-300 dark:ring-slate-700 dark:hover:bg-slate-800',
@@ -702,12 +786,20 @@ export const Admin = () => {
                 </div>
               </div>
 
+              <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-slate-200 p-3 text-sm text-slate-700 dark:border-slate-700 dark:text-slate-300">
+                <input type="checkbox" aria-labelledby="reprocess-empty-label" aria-describedby="reprocess-empty-description" checked={reprocessEmpty} onChange={(event) => setReprocessEmpty(event.target.checked)} className="mt-1 h-4 w-4 shrink-0 accent-blue-600" />
+                <span>
+                  <span id="reprocess-empty-label" className="font-semibold">Reconsultar períodos já concluídos sem registros</span>
+                  <span id="reprocess-empty-description" className="mt-1 block text-xs leading-5 text-slate-500 dark:text-slate-400">Deixe desmarcado para retomar a fila preservando as consultas já concluídas.</span>
+                </span>
+              </label>
+
               <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-950">
                 <div className="mb-2 flex items-center justify-between gap-3">
-                  <span className="text-xs font-black uppercase text-slate-500 dark:text-slate-400">
+                  <span className="text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">
                     Criacao da fila
                   </span>
-                  <span className="text-sm font-black text-slate-900 dark:text-slate-50">
+                  <span className="text-sm font-semibold text-slate-900 dark:text-slate-50">
                     {queuePercent}%
                   </span>
                 </div>
@@ -723,10 +815,10 @@ export const Admin = () => {
                 </div>
 
                 <div className="mb-2 mt-4 flex items-center justify-between gap-3">
-                  <span className="text-xs font-black uppercase text-slate-500 dark:text-slate-400">
+                  <span className="text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">
                     Processamento
                   </span>
-                  <span className="text-sm font-black text-slate-900 dark:text-slate-50">
+                  <span className="text-sm font-semibold text-slate-900 dark:text-slate-50">
                     {formatPercent(overallProgress.percent, overallProgress.done, overallProgress.total)}
                   </span>
                 </div>
@@ -749,6 +841,7 @@ export const Admin = () => {
                 </div>
                 <div className="mt-3 grid grid-cols-2 gap-2 text-xs font-bold text-slate-500 dark:text-slate-400">
                   <span>{overallProgress.done} concluidas</span>
+                  <span className="text-right text-amber-700 dark:text-amber-400">{overallProgress.empty} concluídas sem registros</span>
                   <span className="text-right">{overallProgress.total} tarefas</span>
                   <span>{overallProgress.running} rodando</span>
                   <span className="text-right">{overallProgress.pending} na fila</span>
@@ -772,7 +865,7 @@ export const Admin = () => {
                 </div>
               </div>
 
-              <button type="button" onClick={runIngestion} disabled={isRunning || selectedDatasets.length === 0} className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-3 text-sm font-black text-white transition hover:bg-blue-700 disabled:opacity-60">
+              <button type="button" onClick={runIngestion} disabled={isRunning || selectedDatasets.length === 0} className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:opacity-60">
                 <Play size={18} />
                 {isRunning ? 'Iniciando...' : 'Iniciar coleta'}
               </button>
@@ -784,7 +877,7 @@ export const Admin = () => {
           <div className="min-w-0 rounded-lg border border-rose-200 bg-white p-5 dark:border-rose-900 dark:bg-slate-900">
             <div className="mb-4 flex items-center gap-2">
               <Trash2 size={20} className="text-rose-600 dark:text-rose-400" />
-              <h2 className="text-lg font-black text-slate-900 dark:text-slate-50">Limpar banco</h2>
+              <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-50">Limpar banco</h2>
             </div>
             <p className="mb-4 text-sm font-semibold text-slate-600 dark:text-slate-300">
               Remove dados oficiais e checkpoints por categoria. Use antes de reingerir uma base que ficou inconsistente.
@@ -800,7 +893,7 @@ export const Admin = () => {
                     onClick={() => clearDataset(dataset.id, dataset.label)}
                     disabled={clearingDataset != null || overallProgress.running > 0}
                     className={cn(
-                      'inline-flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs font-black ring-1 ring-inset transition disabled:cursor-not-allowed disabled:opacity-50',
+                      'inline-flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold ring-1 ring-inset transition disabled:cursor-not-allowed disabled:opacity-50',
                       isAll
                         ? 'col-span-2 bg-rose-600 text-white ring-rose-600 hover:bg-rose-700'
                         : 'bg-rose-50 text-rose-700 ring-rose-200 hover:bg-rose-100 dark:bg-rose-950 dark:text-rose-200 dark:ring-rose-900 dark:hover:bg-rose-900',
@@ -826,10 +919,10 @@ export const Admin = () => {
           <div className="min-w-0 space-y-6">
             <div className="grid min-w-0 gap-4 md:grid-cols-2 xl:grid-cols-3">
               {groupedCheckpoints.map((dataset) => (
-                <div key={dataset.id} className="min-w-0 rounded-lg border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-900">
+                <div key={dataset.id} className="min-w-0 rounded-lg border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
                   <div className="flex items-center justify-between gap-3">
                     <div>
-                      <div className="text-sm font-black text-slate-900 dark:text-slate-50">{dataset.label}</div>
+                      <div className="text-sm font-semibold text-slate-900 dark:text-slate-50">{dataset.label}</div>
                       <div className="mt-1 text-xs font-semibold text-slate-500 dark:text-slate-400">{dataset.done} de {dataset.total} tarefas</div>
                     </div>
                     <Database size={20} className="text-slate-400" />
@@ -845,13 +938,13 @@ export const Admin = () => {
               ))}
             </div>
 
-            <div className="min-w-0 rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900">
+            <div className="min-w-0 rounded-lg border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
               <div className="border-b border-slate-200 p-5 dark:border-slate-700">
-                <h2 className="text-lg font-black text-slate-900 dark:text-slate-50">Checkpoints</h2>
+                <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-50">Checkpoints</h2>
               </div>
               <div className="min-w-0 overflow-x-auto">
                 <table className="min-w-[720px] w-full text-left text-sm">
-                  <thead className="bg-slate-50 text-xs font-black uppercase text-slate-500 dark:bg-slate-950 dark:text-slate-400">
+                  <thead className="bg-slate-50 text-xs font-semibold uppercase text-slate-500 dark:bg-slate-950 dark:text-slate-400">
                     <tr>
                       <th className="px-4 py-3">Dataset</th>
                       <th className="px-4 py-3">Status</th>
@@ -866,7 +959,7 @@ export const Admin = () => {
                       <tr key={`${row.dataset}-${row.status}`} className="text-slate-700 dark:text-slate-200">
                         <td className="px-4 py-3 font-bold">{row.dataset}</td>
                         <td className="px-4 py-3">
-                          <span className={cn('inline-flex rounded-full px-2.5 py-1 text-xs font-black ring-1 ring-inset', statusClasses[row.status] ?? 'bg-slate-100 text-slate-600 ring-slate-200')}>
+                          <span className={cn('inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ring-inset', statusClasses[row.status] ?? 'bg-slate-100 text-slate-600 ring-slate-200')}>
                             {row.status}
                           </span>
                         </td>
@@ -903,11 +996,11 @@ export const Admin = () => {
         )}
 
         {activeSection === 'logs' && (
-            <div className="min-w-0 rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900">
+            <div className="min-w-0 rounded-lg border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
               <div className="flex items-center justify-between gap-3 border-b border-slate-200 p-5 dark:border-slate-700">
                 <div className="flex items-center gap-2">
-                  <ScrollText size={20} className="text-blue-600 dark:text-blue-400" />
-                  <h2 className="text-lg font-black text-slate-900 dark:text-slate-50">Logs recentes da ingestão</h2>
+                  <ScrollText size={20} className="text-brand-700 dark:text-brand-300" />
+                  <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-50">Logs recentes da ingestão</h2>
                 </div>
                 <button
                   type="button"
@@ -924,11 +1017,11 @@ export const Admin = () => {
                 <p className="mb-4 text-sm text-slate-600 dark:text-slate-400">As métricas e a linha do tempo representam os eventos recentes disponíveis nos logs.{logsTruncated ? ' A leitura foi limitada aos últimos 512 KB por arquivo; eventos anteriores não estão incluídos.' : ' Este painel não representa um histórico completo.'}</p>
                 <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
                   <div className="rounded-lg bg-slate-50 p-3 dark:bg-slate-950">
-                    <div className="flex items-center gap-2 text-xs font-black uppercase text-slate-500 dark:text-slate-400">
+                    <div className="flex items-center gap-2 text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">
                       <Activity size={14} />
                       Processadas
                     </div>
-                    <div className="mt-2 text-xl font-black tabular-nums text-slate-900 dark:text-slate-50">
+                    <div className="mt-2 text-xl font-semibold tabular-nums text-slate-900 dark:text-slate-50">
                       {formatNumber(logStats.okItems + logStats.okZero)}
                     </div>
                     <div className="mt-1 text-xs font-bold text-slate-500 dark:text-slate-400">
@@ -936,10 +1029,10 @@ export const Admin = () => {
                     </div>
                   </div>
                   <div className="rounded-lg bg-slate-50 p-3 dark:bg-slate-950">
-                    <div className="text-xs font-black uppercase text-slate-500 dark:text-slate-400">
+                    <div className="text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">
                       Com dados
                     </div>
-                    <div className="mt-2 text-xl font-black tabular-nums text-emerald-700 dark:text-emerald-300">
+                    <div className="mt-2 text-xl font-semibold tabular-nums text-emerald-700 dark:text-emerald-300">
                       {formatNumber(logStats.okItems)}
                     </div>
                     <div className="mt-1 text-xs font-bold text-slate-500 dark:text-slate-400">
@@ -947,10 +1040,10 @@ export const Admin = () => {
                     </div>
                   </div>
                   <div className="rounded-lg bg-slate-50 p-3 dark:bg-slate-950">
-                    <div className="text-xs font-black uppercase text-slate-500 dark:text-slate-400">
+                    <div className="text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">
                       Em andamento
                     </div>
-                    <div className="mt-2 text-xl font-black tabular-nums text-blue-700 dark:text-blue-300">
+                    <div className="mt-2 text-xl font-semibold tabular-nums text-blue-700 dark:text-blue-300">
                       {formatNumber(logStats.progressItems)}
                     </div>
                     <div className="mt-1 text-xs font-bold text-slate-500 dark:text-slate-400">
@@ -958,10 +1051,10 @@ export const Admin = () => {
                     </div>
                   </div>
                   <div className="rounded-lg bg-slate-50 p-3 dark:bg-slate-950">
-                    <div className="text-xs font-black uppercase text-slate-500 dark:text-slate-400">
+                    <div className="text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">
                       Sem itens
                     </div>
-                    <div className="mt-2 text-xl font-black tabular-nums text-amber-700 dark:text-amber-300">
+                    <div className="mt-2 text-xl font-semibold tabular-nums text-amber-700 dark:text-amber-300">
                       {formatNumber(logStats.okZero)}
                     </div>
                     <div className="mt-1 text-xs font-bold text-slate-500 dark:text-slate-400">
@@ -969,10 +1062,10 @@ export const Admin = () => {
                     </div>
                   </div>
                   <div className="rounded-lg bg-slate-50 p-3 dark:bg-slate-950">
-                    <div className="text-xs font-black uppercase text-slate-500 dark:text-slate-400">
+                    <div className="text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">
                       Retentativas
                     </div>
-                    <div className="mt-2 text-xl font-black tabular-nums text-rose-700 dark:text-rose-300">
+                    <div className="mt-2 text-xl font-semibold tabular-nums text-rose-700 dark:text-rose-300">
                       {formatNumber(logStats.httpRetries)}
                     </div>
                     <div className="mt-1 truncate text-xs font-bold text-slate-500 dark:text-slate-400">
@@ -1009,7 +1102,7 @@ export const Admin = () => {
                 <div className="mb-5 rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-950">
                   <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                     <div>
-                      <div className="text-sm font-black text-slate-900 dark:text-slate-50">
+                      <div className="text-sm font-semibold text-slate-900 dark:text-slate-50">
                         Status operacional
                       </div>
                       <div className="text-xs font-bold text-slate-500 dark:text-slate-400">
@@ -1020,7 +1113,7 @@ export const Admin = () => {
                             : 'Aguardando eventos da ingestao ou da IA'}
                       </div>
                     </div>
-                    <div className="inline-flex items-center gap-2 rounded-full bg-white px-3 py-1 text-xs font-black text-slate-500 ring-1 ring-slate-200 dark:bg-slate-900 dark:text-slate-300 dark:ring-slate-700">
+                    <div className="inline-flex items-center gap-2 rounded-full bg-white px-3 py-1 text-xs font-semibold text-slate-500 ring-1 ring-slate-200 dark:bg-slate-900 dark:text-slate-300 dark:ring-slate-700">
                       <RefreshCw size={13} className={cn((isPolling || activeSection === 'logs') && 'animate-spin')} />
                       Atualiza a cada 5s
                     </div>
@@ -1028,9 +1121,9 @@ export const Admin = () => {
 
                   {(currentIngestionEvents.length > 0 || currentAiEvents.length > 0) ? (
                     <div className="grid gap-3 lg:grid-cols-2">
-                      <div className="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900">
+                      <div className="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-900">
                         <div className="mb-2 flex items-center justify-between gap-2">
-                          <span className="text-xs font-black uppercase text-slate-500 dark:text-slate-400">Ingestao ativa</span>
+                          <span className="text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">Ingestao ativa</span>
                           <span className="text-[11px] font-bold text-slate-400">{currentIngestionEvents.length} agora</span>
                         </div>
                         <div className="grid gap-2">
@@ -1046,9 +1139,9 @@ export const Admin = () => {
                         </div>
                       </div>
 
-                      <div className="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900">
+                      <div className="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-900">
                         <div className="mb-2 flex items-center justify-between gap-2">
-                          <span className="text-xs font-black uppercase text-slate-500 dark:text-slate-400">IA em execucao</span>
+                          <span className="text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">IA em execucao</span>
                           <span className="text-[11px] font-bold text-slate-400">{currentAiEvents.length} agora</span>
                         </div>
                         <div className="grid gap-2">
@@ -1072,7 +1165,7 @@ export const Admin = () => {
 
                   {logTimeline.length > 0 && (
                     <div className="mt-4">
-                      <div className="mb-2 text-xs font-black uppercase text-slate-500 dark:text-slate-400">
+                      <div className="mb-2 text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">
                         Linha do tempo recente
                       </div>
                       <div className="grid gap-2">
@@ -1100,18 +1193,18 @@ export const Admin = () => {
         )}
 
         {activeSection === 'cobertura' && (
-            <div className="min-w-0 rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900">
+            <div className="min-w-0 rounded-lg border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
               <div className="border-b border-slate-200 p-5 dark:border-slate-700">
-                <h2 className="text-lg font-black text-slate-900 dark:text-slate-50">Cobertura populada</h2>
+                <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-50">Cobertura populada</h2>
               </div>
               <div className="grid min-w-0 gap-2 p-5 sm:grid-cols-2 xl:grid-cols-3">
                 {periods.map((period) => (
                   <div key={`${period.dataset}-${period.periodStart ?? 'static'}-${period.periodEnd ?? 'static'}`} className="rounded-lg bg-slate-50 p-3 dark:bg-slate-950">
                     <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs font-black uppercase text-slate-500 dark:text-slate-400">{period.dataset}</span>
+                      <span className="text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">{period.dataset}</span>
                       <span className="text-xs font-bold text-slate-500 dark:text-slate-400">{period.total.toLocaleString('pt-BR')}</span>
                     </div>
-                    <div className="mt-2 text-sm font-black text-slate-900 dark:text-slate-50">
+                    <div className="mt-2 text-sm font-semibold text-slate-900 dark:text-slate-50">
                       {formatPeriodRange(period.periodStart, period.periodEnd)}
                     </div>
                   </div>
@@ -1123,10 +1216,10 @@ export const Admin = () => {
 
         {activeSection === 'ia' && (
           <div className="grid gap-6 lg:grid-cols-[minmax(280px,520px)_minmax(0,1fr)]">
-            <div className="rounded-lg border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-900">
+            <div className="rounded-lg border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
               <div className="mb-5 flex items-center gap-2">
-                <Bot size={20} className="text-blue-600 dark:text-blue-400" />
-                <h2 className="text-lg font-black text-slate-900 dark:text-slate-50">Resumo por IA</h2>
+                <Bot size={20} className="text-brand-700 dark:text-brand-300" />
+                <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-50">Resumo por IA</h2>
               </div>
               <div className="space-y-4">
                 <label className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 px-3 py-3 text-sm font-bold text-slate-700 dark:border-slate-700 dark:text-slate-200">
@@ -1135,7 +1228,7 @@ export const Admin = () => {
                     type="checkbox"
                     checked={aiSettings.enabled}
                     onChange={(event) => setAiSettings((current) => ({...current, enabled: event.target.checked}))}
-                    className="h-5 w-5 rounded border-slate-300 text-blue-600"
+                    className="h-5 w-5 rounded border-slate-300 text-brand-700"
                   />
                 </label>
 
@@ -1181,7 +1274,7 @@ export const Admin = () => {
                   type="button"
                   onClick={saveAiSettings}
                   disabled={isSavingAi || Boolean(aiModelError)}
-                  className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-3 text-sm font-black text-white transition hover:bg-blue-700 disabled:opacity-60"
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:opacity-60"
                 >
                   <Settings size={18} />
                   {isSavingAi ? 'Salvando...' : 'Salvar IA'}
@@ -1189,11 +1282,11 @@ export const Admin = () => {
               </div>
             </div>
 
-            <div className="rounded-lg border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-900">
-              <h2 className="text-lg font-black text-slate-900 dark:text-slate-50">Como sera usado</h2>
+            <div className="rounded-lg border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900">
+              <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-50">Como sera usado</h2>
               <div className="mt-4 space-y-3 text-sm font-semibold text-slate-600 dark:text-slate-300">
                 <p>
-                  Modelo recomendado: <span className="font-black text-slate-900 dark:text-slate-50">llama-3.3-70b-versatile</span>.
+                  Modelo recomendado: <span className="font-semibold text-slate-900 dark:text-slate-50">llama-3.3-70b-versatile</span>.
                 </p>
                 <p>
                   A IA é opcional e executada fora da requisição pública. Ela só simplifica fatos previamente classificados e nunca escolhe o objeto real da votação.

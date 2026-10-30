@@ -1,10 +1,29 @@
 import React from 'react';
-import {act,screen,waitFor} from '@testing-library/react';
+import {act,screen,waitFor,within} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {afterEach,expect,it,vi} from 'vitest';
 import {renderWithProviders} from '../test/render';
 import {Home} from './Home';
 afterEach(()=>vi.unstubAllGlobals());
+it('mostra a lista pronta enquanto a outra está pendente e permite repetir só a que falhou',async()=>{
+ let finish!: (value:Response)=>void;
+ const fetcher=vi.fn(async(input)=>{
+  const url=new URL(String(input),'http://local');
+  if(url.searchParams.get('filter')==='worst')return new Promise<Response>(resolve=>{finish=resolve;});
+  if(url.searchParams.get('filter')==='best')return {ok:true,json:async()=>({items:[{id:'1',nome:'Lista pronta',partido:'ABC',estado:'SP',notaMedia:4,foto:'x'}]})} as Response;
+  return {ok:true,json:async()=>({items:[]})} as Response;
+ });
+ vi.stubGlobal('fetch',fetcher);renderWithProviders(<Home/>);
+ expect(await screen.findByText('Lista pronta')).toBeVisible();
+ const worst=screen.getByText('Piores da semana').closest('.surface') as HTMLElement;
+ expect(within(worst).queryByText(/Ainda sem avaliações/)).not.toBeInTheDocument();
+ await act(async()=>finish({ok:false,status:500} as Response));
+ expect(screen.getByText('Lista pronta')).toBeVisible();
+ expect(within(worst).getByRole('button',{name:/Tentar novamente/})).toBeVisible();
+ const before=fetcher.mock.calls.filter(([url])=>String(url).includes('filter=best')).length;
+ act(()=>within(worst).getByRole('button',{name:/Tentar novamente/}).click());
+ expect(fetcher.mock.calls.filter(([url])=>String(url).includes('filter=best'))).toHaveLength(before);
+});
 it('atualiza destaques e novos cadastros por uma única conexão',async()=>{
  let update!:(event:{data:string})=>void; let changed=false; let connections=0;
  vi.stubGlobal('EventSource',class{constructor(){connections++;}addEventListener(name:string,fn:typeof update){if(name==='catalogo')update=fn;}close(){}});
@@ -69,9 +88,9 @@ it('mantém erro do ranking durante a busca e diferencia carregamento, falha e v
   return {ok:true,json:async()=>({items:[]})} as Response;
  }));
  const user=userEvent.setup();renderWithProviders(<Home/>);
- expect(await screen.findByText('Não foi possível carregar o ranking. Tente novamente.')).toBeInTheDocument();
+ expect(await screen.findByText(/Não foi possível carregar os mais bem avaliados/)).toBeInTheDocument();
  await user.type(screen.getByPlaceholderText('Busque por nome, partido ou estado'),'Maria');
- expect(screen.getByText('Não foi possível carregar o ranking. Tente novamente.')).toBeInTheDocument();
+ expect(screen.getByText(/Não foi possível carregar os mais bem avaliados/)).toBeInTheDocument();
  expect(screen.queryByText(/Nenhum deputado encontrado/)).not.toBeInTheDocument();
  expect(screen.getByRole('status')).toHaveTextContent('Buscando');
  await waitFor(()=>expect(finish).toBeTypeOf('function'));
@@ -79,5 +98,5 @@ it('mantém erro do ranking durante a busca e diferencia carregamento, falha e v
  expect(await screen.findByText('Não foi possível carregar os resultados da busca. Tente novamente.')).toBeInTheDocument();
  expect(screen.queryByText(/Nenhum deputado encontrado/)).not.toBeInTheDocument();
  await user.clear(screen.getByPlaceholderText('Busque por nome, partido ou estado'));
- expect(screen.getByText('Não foi possível carregar o ranking. Tente novamente.')).toBeInTheDocument();
+ expect(screen.getByText(/Não foi possível carregar os mais bem avaliados/)).toBeInTheDocument();
 });

@@ -106,6 +106,6 @@ describe('CLI de ingestão: streaming e preservação de detalhes', () => {
     }
     expect(fetch).toHaveBeenCalledTimes(2);
     expect(db.end).toHaveBeenCalledTimes(1);
-    expect(process.exitCode).toBe(0);
+    expect(process.exitCode).toBe(status === 404 ? 0 : 1);
   });
 });

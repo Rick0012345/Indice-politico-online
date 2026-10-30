@@ -1,8 +1,12 @@
 import 'dotenv/config';
 import {upsertExpenseBatch} from './lib/expensePersistence';
+import {accumulateExpensePage, expenseQueryParams, readExpensePageProgress} from './lib/expenseIngestion';
+import {aggregateExpenseEntries,expenseRawResourceId} from './lib/expenseAggregation';
+import {claimExpenseBatch,runExpenseBatch,ExpenseBatchHandledError,ExpenseBatchCleanupError,type ExpenseBatchResult} from './lib/expenseBatch';
+import {createHttpRateLimiter} from './lib/ingestionRateLimiter';
 import {seedCheckpointBatch, type CheckpointSeed} from './lib/ingestionSeeds';
 import {upsertRawBatch, type RawItemUpsert} from './lib/rawPersistence';
-import {iteratePages, readPageProgress, commitCheckpointPage} from './lib/ingestionPages';
+import {iteratePages, commitCheckpointPage} from './lib/ingestionPages';
 import {votePresentationAssignments} from './lib/votePresentationPersistence';
 import {setTimeout as sleep} from 'node:timers/promises';
 import {Pool, type PoolClient, type QueryResult, type QueryResultRow} from 'pg';
@@ -31,6 +35,7 @@ type CliOptions = {
   window: 'month' | 'quarter' | 'year';
   concurrency: number;
   minDelayMs: number;
+  expenseBatchMonths: number;
   maxAttempts: number;
   staleMinutes: number;
   resetFailed: boolean;
@@ -195,8 +200,7 @@ const optionalChildStats = new Map<
   string,
   {attempts: number; badRequests: number; skipped: number}
 >();
-let nextHttpRequestAt = 0;
-let httpRequestQueue = Promise.resolve();
+const httpRateLimiter = createHttpRateLimiter({intervalMs:HTTP_REQUEST_MIN_INTERVAL_MS});
 
 class HttpError extends Error {
   constructor(
@@ -226,19 +230,8 @@ const writeEvent = (
   writeLog('log', `[event] ${JSON.stringify({stage, label, timestamp: new Date().toISOString(), ...details})}`);
 };
 
-const waitForHttpSlot = async () => {
-  const wait = httpRequestQueue.then(async () => {
-    const delay = Math.max(0, nextHttpRequestAt - Date.now());
-    if (delay > 0) await sleep(delay);
-    nextHttpRequestAt = Date.now() + HTTP_REQUEST_MIN_INTERVAL_MS;
-  });
-  httpRequestQueue = wait.catch(() => undefined);
-  await wait;
-};
-
-const applyHttpCooldown = (delay: number) => {
-  nextHttpRequestAt = Math.max(nextHttpRequestAt, Date.now() + delay);
-};
+const waitForHttpSlot = httpRateLimiter.waitForSlot;
+const applyHttpCooldown = httpRateLimiter.cooldown;
 
 const optionalChildKey = (proposal: RawItem, resource: ProposalChildResource) => {
   const siglaTipo = textOrNull(proposal.siglaTipo) ?? 'sem-tipo';
@@ -313,7 +306,8 @@ const parseArgs = (): CliOptions => {
     datasets,
     window: (get('window', 'month') ?? 'month') as CliOptions['window'],
     concurrency: Math.max(1, Math.min(2, Number(get('concurrency', '2')) || 2)),
-    minDelayMs: Math.max(0, Number(get('min-delay-ms', '750')) || 750),
+    minDelayMs: Number.isFinite(Number(get('min-delay-ms','750'))) ? Math.max(0,Number(get('min-delay-ms','750'))) : 750,
+    expenseBatchMonths: Math.max(1,Math.min(12,Math.trunc(Number(get('expense-batch-months','12')) || 12))),
     maxAttempts: Math.max(1, Number(get('max-attempts', '5')) || 5),
     staleMinutes: Math.max(5, Number(get('stale-minutes', '30')) || 30),
     resetFailed: args.includes('--reset-failed'),
@@ -600,6 +594,7 @@ const claimCheckpoint = async (dataset: Dataset, maxAttempts: number, from: stri
     period_start: string;
     period_end: string;
     progress_json: unknown;
+    items_count: number;
   }>(
     `
     UPDATE ingestion_checkpoints
@@ -622,7 +617,7 @@ const claimCheckpoint = async (dataset: Dataset, maxAttempts: number, from: stri
       FOR UPDATE SKIP LOCKED
       LIMIT 1
     )
-    RETURNING id, entity_id, period_start::text, period_end::text, progress_json
+    RETURNING id, entity_id, period_start::text, period_end::text, progress_json, items_count
     `,
     [dataset, maxAttempts, from, to],
   );
@@ -832,15 +827,18 @@ const upsertExpenses = async (
   politicoId: string, year: number, month: number, checkpoint: {id: string; progress_json?: unknown},
 ) => {
   const resource = '/deputados/' + politicoId + '/despesas';
-  const params = {ano: year, mes: month};
-  let progress = readPageProgress(checkpoint.progress_json, resource, params);
+  const params = expenseQueryParams(year, month);
+  let progress = readExpensePageProgress(checkpoint.progress_json, resource, params);
   if (progress.finished) return progress.itemsCount;
   for await (const page of fetchPagedPages<Expense>(resource, params, {}, progress.nextPage)) {
-    const next = {...progress, nextPage: page.page + 1, itemsCount: progress.itemsCount + page.items.length, finished: !page.hasNext};
+    let aggregate: ReturnType<typeof accumulateExpensePage>;
+    try { aggregate = accumulateExpensePage(progress,page.items); }
+    catch (error) { throw new Error(`Despesas do deputado ${politicoId}, ${year}-${String(month).padStart(2,'0')}: ${error instanceof Error ? error.message : String(error)}`); }
+    const next = {...progress,expenseAggregation:aggregate.expenseAggregation, nextPage: page.page + 1, itemsCount: progress.itemsCount + page.items.length, finished: !page.hasNext};
     await commitCheckpointPage(pool, checkpoint.id, next, async client => {
-      await upsertExpenseBatch(client, politicoId, year, month, page.items);
-      await upsertRawItems(page.items.filter(expense => expense.codDocumento != null).map(expense => ({
-        resource: 'deputados_despesas', resourceId: String(expense.codDocumento), endpoint: resource,
+      await upsertExpenseBatch(client, politicoId, year, month, aggregate.items);
+      await upsertRawItems(aggregate.items.map(expense => ({
+        resource: 'deputados_despesas', resourceId: expenseRawResourceId(expense,year,month), endpoint: resource,
         rawJson: expense, parentResource: 'deputados', parentId: politicoId, queryParams: params,
       })), client);
     }, checkCancellation);
@@ -1879,11 +1877,16 @@ const runCheckpointWorkers = async (
     period_start: string;
     period_end: string;
     progress_json?: unknown;
-  }) => Promise<number>,
+    items_count?: number;
+  }) => Promise<number | ExpenseBatchResult>,
 ) => {
+  const unresolvedFailures = new Map<string, string>();
+  let fatalCleanup: ExpenseBatchCleanupError | undefined;
   const worker = async () => {
     for (;;) {
+      if (fatalCleanup) return;
       await checkCancellation();
+      if (fatalCleanup) return;
       const checkpoint = await claimCheckpoint(dataset, options.maxAttempts, options.from, options.to);
       if (!checkpoint) return;
 
@@ -1904,28 +1907,36 @@ const runCheckpointWorkers = async (
           if (cancelled) cancellationObserved = true;
           return cancelled;
         });
-        const itemsCount = await checkpointContext.run(guard, async () => {
+        const outcome = await checkpointContext.run(guard, async () => {
           await guard();
           const count = await handler(checkpoint);
-          await guard();
+          if (typeof count === 'number') await guard();
           return count;
         });
-        if (!await finishCheckpoint(checkpoint.id, 'done', itemsCount, null)) throw new IngestionCancelledError();
+        if (typeof outcome === 'number' && !await finishCheckpoint(checkpoint.id,'done',outcome,null)) throw new IngestionCancelledError();
+        const completed = typeof outcome==='number' ? [{checkpoint,itemsCount:outcome}] : outcome.completed;
+        for (const id of typeof outcome==='number' ? [checkpoint.id] : outcome.completedIds) unresolvedFailures.delete(id);
+        for (const {checkpoint:done,itemsCount} of completed) {
         writeLog(
           'log',
-          `[${itemsCount > 0 ? 'ok-items' : 'ok-zero'}] ${dataset} ${checkpoint.entity_id} ${checkpoint.period_start}..${checkpoint.period_end}: ${itemsCount}`,
+          `[${itemsCount > 0 ? 'ok-items' : 'ok-zero'}] ${dataset} ${done.entity_id} ${done.period_start}..${done.period_end}: ${itemsCount}`,
         );
         writeEvent('checkpoint_done', itemsCount > 0 ? 'Checkpoint concluido com dados' : 'Checkpoint concluido sem itens', {
           dataset,
-          entityId: checkpoint.entity_id,
-          periodStart: checkpoint.period_start,
-          periodEnd: checkpoint.period_end,
+          entityId: done.entity_id,
+          periodStart: done.period_start,
+          periodEnd: done.period_end,
           total: itemsCount,
         });
+        }
       } catch (error) {
+        if (error instanceof ExpenseBatchCleanupError) {fatalCleanup=error;throw error;}
         if (error instanceof IngestionCancelledError) throw error;
         const message = error instanceof Error ? error.message : String(error);
-        await finishCheckpoint(checkpoint.id, 'failed', 0, message);
+        if (!(error instanceof ExpenseBatchHandledError)) {
+          await finishCheckpoint(checkpoint.id, 'failed', 0, message);
+          unresolvedFailures.set(checkpoint.id, message);
+        }
         writeLog(
           'warn',
           `[retry] ${dataset} ${checkpoint.entity_id} ${checkpoint.period_start}..${checkpoint.period_end}: ${message}`,
@@ -1944,8 +1955,19 @@ const runCheckpointWorkers = async (
   };
 
   const results = await Promise.allSettled(Array.from({length: options.concurrency}, worker));
+  if (fatalCleanup) throw fatalCleanup;
   const failed = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
   if (failed) throw failed.reason;
+  const exhausted = await guardedQuery<{id: string; last_error: string | null}>(
+    `SELECT id, last_error FROM ingestion_checkpoints
+     WHERE source = 'camara' AND dataset = $1 AND status IN ('pending', 'failed')
+       AND attempts >= $2 AND period_start >= $3::date AND period_end <= $4::date`,
+    [dataset, options.maxAttempts, options.from, options.to],
+  );
+  for (const row of exhausted.rows) unresolvedFailures.set(row.id, row.last_error ?? 'Tentativas esgotadas.');
+  if (unresolvedFailures.size) {
+    throw new Error(`Ingestão incompleta: ${unresolvedFailures.size} checkpoint(s) de ${dataset} falharam após as tentativas: ${[...unresolvedFailures.values()].slice(0, 3).join('; ')}`);
+  }
 };
 
 const seedExpenseCheckpoints = async (options: CliOptions) => {
@@ -2063,6 +2085,28 @@ const run = async () => {
     if (options.datasets.includes('despesas')) {
       await seedExpenseCheckpoints(options);
       await runCheckpointWorkers('despesas', options, async (checkpoint) => {
+        let members: Awaited<ReturnType<typeof claimExpenseBatch>>;
+        try {members=await claimExpenseBatch(pool,checkpoint,{...options,limit:options.expenseBatchMonths});}
+        catch(error) {if(error instanceof IngestionCancelledError)cancellationObserved=true;throw error;}
+        if (members.length>1) {
+          try {
+            return await runExpenseBatch(pool,members,{
+              pages:params=>fetchPagedPages<Expense>(`/deputados/${checkpoint.entity_id}/despesas`,params),
+              persist:async(client,member,progress,requestParams)=>{
+                await checkCancellation(client);
+                const year=Number(member.period_start.slice(0,4)),month=Number(member.period_start.slice(5,7));
+                const items=aggregateExpenseEntries(progress.expenseAggregation.entries,year,month);
+                await upsertExpenseBatch(client,member.entity_id,year,month,items);
+                await upsertRawItems(items.map(expense=>({resource:'deputados_despesas',resourceId:expenseRawResourceId(expense,year,month),
+                  endpoint:`/deputados/${member.entity_id}/despesas`,rawJson:expense,parentResource:'deputados',parentId:member.entity_id,
+                  queryParams:{...expenseQueryParams(year,month),requestParams}})),client);
+              },
+            });
+          } catch(error) {
+            if(error instanceof IngestionCancelledError) cancellationObserved=true;
+            throw error;
+          }
+        }
         const date = new Date(`${checkpoint.period_start}T00:00:00.000Z`);
         return upsertExpenses(
           checkpoint.entity_id,

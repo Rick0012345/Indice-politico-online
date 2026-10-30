@@ -1,7 +1,9 @@
 import type {PoolClient} from 'pg';
+import {aggregateExpenseEntries, expenseIssuerDocument, expenseSourceIdentity, expenseType, mergeExpenseEntries} from './expenseAggregation';
 
 export type Expense = {
-  ano?: number; mes?: number; tipoDespesa?: string; codDocumento?: number | string;
+  sourceEntries?: Expense[];
+  ano?: number; mes?: number; tipoDespesa?: string; codDocumento?: number | string | null;
   cnpjCpfFornecedor?: string; nomeFornecedor?: string; tipoDocumento?: string;
   codTipoDocumento?: number; dataDocumento?: string; numDocumento?: string;
   valorDocumento?: number; valorGlosa?: number; valorLiquido?: number;
@@ -23,7 +25,7 @@ const numberOrNull = (value: unknown) => {
 // Types match the persisted columns, including monetary scale and nullable codes.
 const columns = [
   ['politico_id', 'bigint'], ['ano', 'smallint'], ['mes', 'smallint'],
-  ['tipo_despesa', 'varchar(255)'], ['cod_documento', 'varchar(100)'],
+  ['tipo_despesa', 'varchar(255)'], ['cod_documento', 'varchar(100)'], ['identidade_origem','varchar(100)'],
   ['cnpj_cpf_fornecedor', 'varchar(14)'], ['nome_fornecedor', 'varchar(255)'],
   ['tipo_documento', 'varchar(50)'], ['data_documento', 'date'], ['num_documento', 'varchar(100)'],
   ['valor_documento', 'numeric(12,2)'], ['valor_glosa', 'numeric(12,2)'], ['valor_liquido', 'numeric(12,2)'],
@@ -32,10 +34,10 @@ const columns = [
 ] as const;
 const names = columns.map(([name]) => name);
 const updates = names.filter((name) => name !== 'cod_documento');
-const batchSql = `INSERT INTO despesas AS current (${names.join(', ')})
+const batchSql = (withoutCode: boolean) => `INSERT INTO despesas AS current (${names.join(', ')})
   SELECT ${names.join(', ')} FROM jsonb_to_recordset($1::jsonb)
     AS item (${columns.map(([name, type]) => `${name} ${type}`).join(', ')})
-  ON CONFLICT (cod_documento) DO UPDATE SET
+  ON CONFLICT ${withoutCode ? '(politico_id, ano, mes, tipo_despesa, identidade_origem) WHERE cod_documento IS NULL' : '(politico_id, ano, mes, cod_documento, tipo_despesa)'} DO UPDATE SET
     ${updates.map((name) => `${name} = EXCLUDED.${name}`).join(', ')}
   WHERE ROW(${names.map((name) => `current.${name}`).join(', ')})
     IS DISTINCT FROM ROW(${names.map((name) => `EXCLUDED.${name}`).join(', ')})`;
@@ -45,13 +47,15 @@ export async function upsertExpenseBatch(
 ): Promise<{processed: number; changed: number}> {
   if (expenses.length === 0) return {processed: 0, changed: 0};
 
-  const normalized = expenses.map((expense) => ({
+  // Each document stores all distinct source entries, rather than discarding earlier financial entries.
+  const normalized = aggregateExpenseEntries(mergeExpenseEntries([],expenses),year,month).map((expense) => ({
     politico_id: politicoId,
     ano: expense.ano ?? year,
     mes: expense.mes ?? month,
-    tipo_despesa: textOrNull(expense.tipoDespesa) ?? 'Nao informado',
+    tipo_despesa: expenseType(expense),
     cod_documento: textOrNull(expense.codDocumento),
-    cnpj_cpf_fornecedor: textOrNull(expense.cnpjCpfFornecedor),
+    identidade_origem: expenseSourceIdentity(expense),
+    cnpj_cpf_fornecedor: textOrNull(expense.codDocumento) === null ? expenseIssuerDocument(expense) : textOrNull(expense.cnpjCpfFornecedor),
     nome_fornecedor: textOrNull(expense.nomeFornecedor),
     tipo_documento: textOrNull(expense.tipoDocumento),
     data_documento: textOrNull(expense.dataDocumento),
@@ -67,13 +71,13 @@ export async function upsertExpenseBatch(
     cod_lote: textOrNull(expense.codLote) ?? textOrNull(expense.numLote),
     raw_json: expense,
   }));
-  // PostgreSQL cannot update the same conflicting row twice in one INSERT.
-  // Preserve the last observation, as the previous sequential writer did.
-  const lastIndex = new Map<string, number>();
-  normalized.forEach((row, index) => {
-    if (row.cod_documento !== null) lastIndex.set(row.cod_documento, index);
-  });
-  const rows = normalized.filter((row, index) => row.cod_documento === null || lastIndex.get(row.cod_documento) === index);
-  const result = await client.query(batchSql, [JSON.stringify(rows)]);
-  return {processed: expenses.length, changed: result.rowCount ?? 0};
+  let changed = 0;
+  // Both statements participate in the caller's page transaction; no independent COMMIT here.
+  for (const withoutCode of [false,true]) {
+    const rows = normalized.filter(row => (row.cod_documento === null) === withoutCode);
+    if (!rows.length) continue;
+    const result = await client.query(batchSql(withoutCode), [JSON.stringify(rows)]);
+    changed += result.rowCount ?? 0;
+  }
+  return {processed: expenses.length, changed};
 }

@@ -1,4 +1,5 @@
 import {useEffect, useRef, useState} from 'react';
+import {invalidateCatalogResources, setCatalogRevision} from '../lib/catalogResource';
 
 export type CatalogConnectionState = 'connecting' | 'live' | 'reconnecting' | 'paused' | 'offline';
 type Subscription = {notify: () => void | Promise<void>; status: (state: CatalogConnectionState) => void; running: boolean; dirty: boolean; nextAllowed: number};
@@ -39,9 +40,9 @@ function invalidate() {
 }
 function visibility() {
   publish();
-  if (!document.hidden) invalidate();
+  if (!document.hidden) { invalidateCatalogResources(); invalidate(); }
 }
-function online() { invalidate(); }
+function online() { invalidateCatalogResources(); invalidate(); }
 function offline() { connection = 'offline'; publish(); }
 function start() {
   document.addEventListener('visibilitychange', visibility);
@@ -52,7 +53,7 @@ function start() {
       source = new EventSource('/api/catalogo/events');
       source.addEventListener('open', () => {
         connection = 'live'; publish();
-        if (opened) invalidate();
+        if (opened) { invalidateCatalogResources(); invalidate(); }
         opened = true;
       });
       source.addEventListener('error', () => { connection = navigator.onLine ? 'reconnecting' : 'offline'; publish(); });
@@ -61,6 +62,7 @@ function start() {
           const value = JSON.parse((event as MessageEvent).data)?.revision;
           if (typeof value !== 'string' || value === revision) return;
           revision = value;
+          setCatalogRevision(value);
           // The first snapshot also closes the initial query/subscription race.
           invalidate();
         } catch { /* Ignore malformed events; the next valid snapshot reconciles. */ }
@@ -75,7 +77,7 @@ function start() {
       if (!response.ok) return;
       const data = await response.json();
       if (controller.signal.aborted || typeof data.revision !== 'string') return;
-      if (revision !== data.revision) { revision = data.revision; invalidate(); }
+      if (revision !== data.revision) { revision = data.revision; setCatalogRevision(data.revision); invalidate(); }
     } catch { /* Retry on the next interval. */ }
     finally { if (pollController === controller) pollController = undefined; }
   }, 30_000);

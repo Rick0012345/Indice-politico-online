@@ -2,6 +2,9 @@
 import {CalendarDays, ExternalLink, FileText, Landmark, Search, Users} from 'lucide-react';
 import {Link} from 'react-router-dom';
 import {cn} from '../lib/utils';
+import {useCatalogRefresh} from '../hooks/useCatalogRefresh';
+import {useDebouncedValue} from '../hooks/useDebouncedValue';
+import {fetchCatalogJson} from '../lib/catalogResource';
 
 type TabId = 'proposicoes' | 'eventos' | 'orgaos' | 'frentes';
 
@@ -50,9 +53,9 @@ type FrenteItem = {
 };
 
 const tabs: Array<{id: TabId; label: string; icon: React.ComponentType<{size?: number; className?: string}>}> = [
-  {id: 'proposicoes', label: 'Proposicoes', icon: FileText},
+  {id: 'proposicoes', label: 'Proposições', icon: FileText},
   {id: 'eventos', label: 'Eventos', icon: CalendarDays},
-  {id: 'orgaos', label: 'Orgaos', icon: Landmark},
+  {id: 'orgaos', label: 'Órgãos', icon: Landmark},
   {id: 'frentes', label: 'Frentes', icon: Users},
 ];
 
@@ -64,19 +67,39 @@ const formatDate = (value: string | null) => {
 };
 
 const EmptyState = () => (
-  <div className="rounded-3xl border border-slate-200 bg-white p-8 text-center text-sm font-medium text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
-    Nenhum registro encontrado na base importada para esses filtros.
+  <div className="rounded-2xl border border-dashed border-slate-300 px-6 py-14 text-center dark:border-slate-700">
+    <p className="text-sm font-semibold text-slate-900 dark:text-slate-50">Nenhum registro encontrado</p>
+    <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Ajuste a busca ou os filtros. Só aparecem dados já importados da Câmara.</p>
   </div>
 );
+
+const CardSkeleton = () => (
+  <div className="grid grid-cols-1 gap-4 lg:grid-cols-2" aria-hidden="true">
+    {[0, 1, 2, 3].map((key) => (
+      <div key={key} className="surface space-y-3 p-5">
+        <div className="skeleton h-4 w-32" />
+        <div className="skeleton h-5 w-4/5" />
+        <div className="skeleton h-4 w-3/5" />
+        <div className="skeleton h-3 w-1/2" />
+      </div>
+    ))}
+  </div>
+);
+
+const cardClass = 'surface lift-card group flex flex-col gap-3 p-5';
+const tagClass = 'tabular inline-flex rounded-md bg-brand-50 px-2 py-0.5 font-mono text-xs font-semibold text-brand-800 dark:bg-brand-950 dark:text-brand-200';
 
 export const Camara = () => {
   const [requestError, setRequestError] = useState('');
   const [activeTab, setActiveTab] = useState<TabId>('proposicoes');
   const [search, setSearch] = useState('');
+  const querySearch = useDebouncedValue(search);
   const [year, setYear] = useState('');
   const [kind, setKind] = useState('');
   const [items, setItems] = useState<Array<ProposicaoItem | EventoItem | OrgaoItem | FrenteItem>>([]);
   const [isLoading, setIsLoading] = useState(false);
+
+  const {revision, refreshing} = useCatalogRefresh(JSON.stringify([activeTab, querySearch, year, kind]), isLoading);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -86,35 +109,32 @@ export const Camara = () => {
       setIsLoading(true);
       try {
         const params = new URLSearchParams({limit: '120'});
-        const trimmedSearch = search.trim();
+        const trimmedSearch = querySearch.trim();
         const trimmedKind = kind.trim();
         if (trimmedSearch) params.set('search', trimmedSearch);
         if (trimmedKind) params.set(activeTab === 'frentes' ? 'legislatura' : 'tipo', trimmedKind);
         if (activeTab === 'proposicoes' && year.trim()) params.set('ano', year.trim());
 
-        const response = await fetch(`/api/camara/${activeTab}?${params.toString()}`, {
+        const data = await fetchCatalogJson<{items?: Array<ProposicaoItem | EventoItem | OrgaoItem | FrenteItem>}>(`/api/camara/${activeTab}?${params.toString()}`, {
           signal: controller.signal,
         });
-        if (!response.ok) throw new Error('HTTP');
-        const data = (await response.json()) as {items?: Array<ProposicaoItem | EventoItem | OrgaoItem | FrenteItem>};
         if (controller.signal.aborted) return;
         setItems(data.items ?? []);
       } catch {
         if (controller.signal.aborted) return;
         setRequestError('Não foi possível carregar os dados. Tente novamente.');
         if (controller.signal.aborted) return;
-        setItems([]);
+        if (!refreshing) setItems([]);
       } finally {
         if (!controller.signal.aborted) setIsLoading(false);
       }
     };
 
-    const timeoutId = setTimeout(run, 250);
+    void run();
     return () => {
-      clearTimeout(timeoutId);
       controller.abort();
     };
-  }, [activeTab, search, year, kind]);
+  }, [activeTab, querySearch, year, kind, revision]);
 
   useEffect(() => {
     setItems([]);
@@ -131,115 +151,126 @@ export const Camara = () => {
   }, [activeTab]);
 
   return (
-    <div className="mx-auto max-w-7xl px-4 py-12 sm:px-6 lg:px-8">
-      {requestError && <p role="alert" className="mb-4 rounded-xl bg-rose-50 p-4 text-rose-800">{requestError}</p>}
-      <div className="mb-10">
-        <h1 className="text-4xl font-extrabold text-slate-900 dark:text-slate-50">Atuação Parlamentar</h1>
-        <p className="mt-4 max-w-3xl text-lg text-slate-600 dark:text-slate-400">
-          Explore proposicoes, eventos, orgaos e frentes com dados sincronizados da API da Camara.
+    <div className="mx-auto max-w-7xl px-4 pb-24 pt-10 sm:px-6 lg:px-8">
+      {requestError && <p role="alert" className="mb-4 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800 dark:border-rose-900 dark:bg-rose-950/50 dark:text-rose-200">{requestError}</p>}
+      <div className="mb-8">
+        <h1 className="text-3xl font-semibold tracking-tight text-slate-950 sm:text-4xl dark:text-slate-50">Atuação parlamentar</h1>
+        <p className="mt-2 max-w-3xl text-slate-600 dark:text-slate-400">
+          O que está sendo proposto, discutido e organizado na Câmara, com link para o registro oficial.
         </p>
       </div>
 
-      <div className="mb-8 -mx-4 flex overflow-x-auto border-b border-slate-200 px-4 no-scrollbar sm:mx-0 sm:px-0 dark:border-slate-700">
-        {tabs.map((tab) => (
-          <button
-            key={tab.id}
-            type="button"
-            onClick={() => setActiveTab(tab.id)}
-            className={cn(
-              'flex items-center gap-2 whitespace-nowrap border-b-2 px-4 py-3 text-sm font-bold transition-colors sm:px-6 sm:py-4',
-              activeTab === tab.id
-                ? 'border-blue-600 text-blue-600 dark:text-blue-400'
-                : 'border-transparent text-slate-400 hover:text-slate-600 dark:text-slate-500 dark:hover:text-slate-300',
-            )}
-          >
-            <tab.icon size={18} />
-            {tab.label}
-          </button>
-        ))}
-      </div>
+      <div className="mb-6 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div role="tablist" aria-label="Tipo de registro" className="no-scrollbar flex gap-1 overflow-x-auto rounded-xl bg-slate-100 p-1 dark:bg-slate-800">
+          {tabs.map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              aria-selected={activeTab === tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={cn(
+                'flex items-center gap-2 whitespace-nowrap rounded-lg px-3.5 py-2 text-sm font-medium transition-colors',
+                activeTab === tab.id
+                  ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-950 dark:text-slate-50'
+                  : 'text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-50',
+              )}
+            >
+              <tab.icon size={16} aria-hidden="true" />
+              {tab.label}
+            </button>
+          ))}
+        </div>
 
-      <section className="mb-8 rounded-3xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900">
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-[minmax(220px,1fr)_160px_180px]">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(240px,1fr)_150px_110px] lg:min-w-[560px]">
           <label className="relative block">
-            <Search size={18} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <span className="sr-only">Buscar</span>
+            <Search size={16} aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
             <input
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               placeholder={placeholder}
-              className="w-full rounded-xl border-slate-200 pl-10 text-sm font-medium focus:ring-blue-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+              className="h-10 w-full rounded-xl border border-slate-200 bg-white pl-9 pr-3 text-sm text-slate-900 placeholder:text-slate-500 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:placeholder:text-slate-400"
             />
           </label>
-          <input
-            value={kind}
-            onChange={(event) => setKind(event.target.value)}
-            placeholder={activeTab === 'frentes' ? 'Legislatura' : 'Tipo'}
-            className="w-full rounded-xl border-slate-200 text-sm font-medium focus:ring-blue-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
-          />
-          <input
-            value={year}
-            disabled={activeTab !== 'proposicoes'}
-            onChange={(event) => setYear(event.target.value)}
-            placeholder="Ano"
-            className="w-full rounded-xl border-slate-200 text-sm font-medium focus:ring-blue-600 disabled:bg-slate-100 disabled:text-slate-400 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:disabled:bg-slate-800/50"
-          />
+          <label className="block">
+            <span className="sr-only">{activeTab === 'frentes' ? 'Legislatura' : 'Tipo'}</span>
+            <input
+              value={kind}
+              onChange={(event) => setKind(event.target.value)}
+              placeholder={activeTab === 'frentes' ? 'Legislatura' : 'Tipo'}
+              className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 placeholder:text-slate-500 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:placeholder:text-slate-400"
+            />
+          </label>
+          <label className="block">
+            <span className="sr-only">Ano</span>
+            <input
+              value={year}
+              disabled={activeTab !== 'proposicoes'}
+              onChange={(event) => setYear(event.target.value)}
+              placeholder="Ano"
+              inputMode="numeric"
+              className="tabular h-10 w-full rounded-xl border border-slate-200 bg-white px-3 font-mono text-sm text-slate-900 placeholder:text-slate-500 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-100 disabled:bg-slate-100 disabled:text-slate-400 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:disabled:bg-slate-800/50"
+            />
+          </label>
         </div>
-      </section>
+      </div>
 
-      {isLoading ? (
-        <div className="rounded-3xl border border-slate-200 bg-white p-8 text-center text-sm font-medium text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
-          Carregando dados...
-        </div>
-      ) : requestError ? null : items.length === 0 ? (
+      {isLoading && (!refreshing || items.length === 0) ? (
+        <CardSkeleton />
+      ) : requestError && items.length === 0 ? null : items.length === 0 ? (
         <EmptyState />
       ) : (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           {activeTab === 'proposicoes' &&
             (items as ProposicaoItem[]).map((item) => (
-              <Link key={item.id} to={`/camara/proposicoes/${item.id}`} className="group rounded-3xl border border-slate-200 bg-white p-5 shadow-sm transition-colors hover:border-blue-200 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:hover:border-blue-900 dark:hover:bg-slate-800/60">
-                <div className="flex flex-wrap items-center gap-2 text-xs font-bold uppercase text-slate-400 dark:text-slate-500">
-                  <span>{item.siglaTipo} {item.numero}/{item.ano}</span>
-                  {item.situacao && <span className="rounded-full bg-blue-50 px-2 py-1 text-blue-700 dark:bg-blue-950 dark:text-blue-300">{item.situacao}</span>}
+              <Link key={item.id} to={`/camara/proposicoes/${item.id}`} className={cardClass}>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className={tagClass}>{item.siglaTipo} {item.numero}/{item.ano}</span>
+                  <span className="text-xs text-slate-500 dark:text-slate-400">{formatDate(item.dataApresentacao)}</span>
                 </div>
-                <h2 className="mt-3 line-clamp-3 text-lg font-extrabold text-slate-900 group-hover:text-blue-600 dark:text-slate-50 dark:group-hover:text-blue-400">{item.ementa || 'Proposicao sem ementa'}</h2>
-                <div className="mt-4 flex flex-wrap gap-2 text-xs font-semibold text-slate-500 dark:text-slate-400">
-                  <span>{formatDate(item.dataApresentacao)}</span>
-                  <span>{item.totalAutores} autores</span>
-                  <span>{item.totalTemas} temas</span>
-                  <span>{item.totalTramitacoes} tramitacoes</span>
+                <h2 className="line-clamp-3 text-base font-semibold leading-snug text-slate-900 group-hover:text-brand-700 dark:text-slate-50 dark:group-hover:text-brand-300">{item.ementa || 'Proposição sem ementa'}</h2>
+                <div className="mt-auto flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3 text-xs text-slate-600 dark:border-slate-800 dark:text-slate-400">
+                  <span className="flex items-center gap-1.5">
+                    {item.situacao && <span aria-hidden="true" className="h-2 w-2 rounded-full bg-brand-500" />}
+                    {item.situacao || 'Situação não informada'}
+                  </span>
+                  <span className="tabular font-mono">{item.totalAutores} autores · {item.totalTemas} temas · {item.totalTramitacoes} tramitações</span>
                 </div>
               </Link>
             ))}
 
           {activeTab === 'eventos' &&
             (items as EventoItem[]).map((item) => (
-              <article key={item.id} className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-900">
-                <div className="flex flex-wrap items-center gap-2 text-xs font-bold uppercase text-slate-400 dark:text-slate-500">
-                  <span>{formatDate(item.dataHoraInicio)}</span>
-                  {item.situacao && <span>{item.situacao}</span>}
+              <article key={item.id} className={cardClass}>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className={tagClass}>{formatDate(item.dataHoraInicio)}</span>
+                  {item.situacao && <span className="text-xs text-slate-500 dark:text-slate-400">{item.situacao}</span>}
                 </div>
-                <h2 className="mt-3 text-lg font-extrabold text-slate-900 dark:text-slate-50">{item.descricaoTipo || 'Evento'}</h2>
-                <p className="mt-2 line-clamp-3 text-sm text-slate-600 dark:text-slate-400">{item.descricao || 'Descricao indisponivel'}</p>
-                <p className="mt-3 text-sm font-semibold text-slate-500 dark:text-slate-400">{item.localExterno || item.localCamara?.nome || 'Local nao informado'}</p>
-                {item.urlRegistro && <a href={item.urlRegistro} target="_blank" rel="noreferrer" className="mt-4 inline-flex items-center gap-1 text-sm font-bold text-blue-600 hover:underline dark:text-blue-400">Registro oficial <ExternalLink size={14} /></a>}
+                <h2 className="text-base font-semibold text-slate-900 dark:text-slate-50">{item.descricaoTipo || 'Evento'}</h2>
+                <p className="line-clamp-3 text-sm leading-6 text-slate-600 dark:text-slate-400">{item.descricao || 'Descrição indisponível'}</p>
+                <div className="mt-auto flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3 text-xs text-slate-600 dark:border-slate-800 dark:text-slate-400">
+                  <span>{item.localExterno || item.localCamara?.nome || 'Local não informado'}</span>
+                  {item.urlRegistro && <a href={item.urlRegistro} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 font-medium text-brand-700 hover:underline dark:text-brand-300">Registro oficial <ExternalLink size={13} /></a>}
+                </div>
               </article>
             ))}
 
           {activeTab === 'orgaos' &&
             (items as OrgaoItem[]).map((item) => (
-              <article key={item.id} className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-900">
-                <div className="text-xs font-bold uppercase text-slate-400 dark:text-slate-500">{item.tipoOrgao || 'Orgao'}</div>
-                <h2 className="mt-2 text-xl font-extrabold text-slate-900 dark:text-slate-50">{item.sigla || item.nomeResumido || item.id}</h2>
-                <p className="mt-2 text-sm text-slate-600 dark:text-slate-400">{item.nome || item.nomePublicacao || item.apelido || 'Nome indisponivel'}</p>
+              <article key={item.id} className={cardClass}>
+                <span className="text-xs text-slate-500 dark:text-slate-400">{item.tipoOrgao || 'Órgão'}</span>
+                <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-50">{item.sigla || item.nomeResumido || item.id}</h2>
+                <p className="text-sm text-slate-600 dark:text-slate-400">{item.nome || item.nomePublicacao || item.apelido || 'Nome indisponível'}</p>
               </article>
             ))}
 
           {activeTab === 'frentes' &&
             (items as FrenteItem[]).map((item) => (
-              <article key={item.id} className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-900">
-                <div className="text-xs font-bold uppercase text-slate-400 dark:text-slate-500">Legislatura {item.idLegislatura ?? '-'}</div>
-                <h2 className="mt-2 text-lg font-extrabold text-slate-900 dark:text-slate-50">{item.titulo || 'Frente parlamentar'}</h2>
-                {item.uri && <a href={item.uri} target="_blank" rel="noreferrer" className="mt-4 inline-flex items-center gap-1 text-sm font-bold text-blue-600 hover:underline dark:text-blue-400">Fonte oficial <ExternalLink size={14} /></a>}
+              <article key={item.id} className={cardClass}>
+                <span className="text-xs text-slate-500 dark:text-slate-400">Legislatura {item.idLegislatura ?? '-'}</span>
+                <h2 className="text-base font-semibold text-slate-900 dark:text-slate-50">{item.titulo || 'Frente parlamentar'}</h2>
+                {item.uri && <a href={item.uri} target="_blank" rel="noreferrer" className="mt-auto inline-flex items-center gap-1 text-sm font-medium text-brand-700 hover:underline dark:text-brand-300">Fonte oficial <ExternalLink size={13} /></a>}
               </article>
             ))}
         </div>
@@ -247,5 +278,3 @@ export const Camara = () => {
     </div>
   );
 };
-
-
