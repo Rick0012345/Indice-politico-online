@@ -12,6 +12,29 @@ const config={from:'2026-01-01',to:'2026-01-31',datasets:['despesas'],window:'mo
 const db=(counts:Record<string,unknown>[],active=true)=>({query:vi.fn().mockResolvedValue({rows:[{counts,active}]})}) as any;
 
 describe('registro da execução atual',()=>{
+  it.each(['completed','failed','cancelled'] as const)('prefere o resultado %s gravado durante uma leitura que perdeu a trava',async(status)=>{
+    const path=await directory();const pool=db([{dataset:'despesas',status:'done',total:2}]);
+    const tracker=await createIngestionTracker(pool,config,123,path,['1']);
+    const racing={query:vi.fn(async()=>{
+      await tracker.finish(status);
+      return {rows:[{counts:[{dataset:'despesas',status:'done',total:2}],active:false}]};
+    })} as any;
+    const observed=await loadCurrentIngestionRun(racing,path);
+    const frozen=await loadCurrentIngestionRun(db([]),path);
+    expect(observed).toEqual(frozen);
+    expect(observed).toMatchObject({status,completed:2,remaining:0});
+    expect(observed?.finishedAt).not.toBeNull();
+  });
+  it('não mistura o snapshot de outra execução que substituiu o arquivo durante a leitura',async()=>{
+    const path=await directory();await createIngestionTracker(db([{dataset:'despesas',status:'done',total:2}]),config,123,path,['1']);
+    const original=await loadCurrentIngestionRun(db([{dataset:'despesas',status:'done',total:2}]),path);
+    const racing={query:vi.fn(async()=>{
+      const replacement=await createIngestionTracker(db([{dataset:'despesas',status:'done',total:999}]),config,456,path,['2']);
+      await replacement.finish('completed');
+      return {rows:[{counts:[{dataset:'despesas',status:'done',total:2}],active:false}]};
+    })} as any;
+    expect(await loadCurrentIngestionRun(racing,path)).toMatchObject({id:original?.id,status:'interrupted',completed:2});
+  });
   it('mantém despesas sem catálogo como estimativa provisória mesmo após revisão vazia',async()=>{
     const path=await directory();const pool=db([],true);
     const tracker=await createIngestionTracker(pool,config,123,path,[]);

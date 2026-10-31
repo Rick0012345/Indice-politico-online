@@ -72,7 +72,14 @@ const readStored=async(directory:string):Promise<StoredRun|null>=>{
 export const loadCurrentIngestionRun=async(db:Db,directory=ingestionRunDirectory()):Promise<IngestionRunProgress|null>=>{
   const run=await readStored(directory);
   if(!run)return null;
-  return run.finalSnapshot??observe(db,run);
+  if(run.finalSnapshot)return run.finalSnapshot;
+  const observed=await observe(db,run);
+  if(observed.status==='interrupted'){
+    // The worker can finish between the initial file read and the lock query.
+    const latest=await readStored(directory);
+    if(latest?.id===run.id&&latest.finalSnapshot)return latest.finalSnapshot;
+  }
+  return observed;
 };
 
 export const createIngestionTracker=async(db:Db,config:IngestionPlanConfig,lockPid:number,directory=ingestionRunDirectory(),politicoIds:string[]=[])=>{
