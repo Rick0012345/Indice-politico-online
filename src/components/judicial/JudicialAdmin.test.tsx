@@ -1,4 +1,4 @@
-import {render, screen, fireEvent, act} from '@testing-library/react';
+import {render, screen, fireEvent, act, waitFor} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {describe, it, expect, vi, afterEach} from 'vitest';
 import {MemoryRouter} from 'react-router-dom';
@@ -13,6 +13,7 @@ describe('gestão de histórico judicial', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response({items: [{id: '100', nome: 'Pessoa fictícia', partido: 'TESTE', estado: 'SP'}]})));
     const adminFetch = vi.fn().mockImplementation((url: string) => Promise.resolve(response(url.endsWith('/audit') ? {items: []} : empty)));
     render(<MemoryRouter><JudicialAdmin adminFetch={adminFetch} /></MemoryRouter>);
+    await user.click(screen.getByText('Correções e cadastro manual de registros'));
     await user.type(screen.getByLabelText('Buscar político'), 'Pessoa');
     await user.click(screen.getByRole('button', {name: 'Buscar'}));
     await user.click(await screen.findByRole('button', {name: /Pessoa fictícia/}));
@@ -29,8 +30,9 @@ describe('gestão de histórico judicial', () => {
   it('falha de consulta não libera cadastro com versão desconhecida', async () => {
     const user = userEvent.setup();
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response({items: [{id: '100', nome: 'Pessoa fictícia', partido: 'TESTE', estado: 'SP'}]})));
-    const adminFetch = vi.fn().mockResolvedValue(response({error: 'Consulta indisponível'}, 503));
+    const adminFetch = vi.fn().mockImplementation((url: string) => Promise.resolve(url.includes('/ingestion/') ? response({items: [], total: 0}) : response({error: 'Consulta indisponível'}, 503)));
     render(<MemoryRouter><JudicialAdmin adminFetch={adminFetch} /></MemoryRouter>);
+    await user.click(screen.getByText('Correções e cadastro manual de registros'));
     await user.type(screen.getByLabelText('Buscar político'), 'Pessoa');
     await user.click(screen.getByRole('button', {name: 'Buscar'}));
     await user.click(await screen.findByRole('button', {name: /Pessoa fictícia/}));
@@ -42,10 +44,11 @@ describe('gestão de histórico judicial', () => {
   it('interrompe consulta sem resposta e permite tentar novamente', async () => {
     const user = userEvent.setup();
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response({items: [{id: '100', nome: 'Pessoa fictícia', partido: 'TESTE', estado: 'SP'}]})));
-    const adminFetch = vi.fn((_url: string, options?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+    const adminFetch = vi.fn((_url: string, options?: RequestInit) => _url.includes('/ingestion/') ? Promise.resolve(response({items: [], total: 0})) : new Promise<Response>((_resolve, reject) => {
       options?.signal?.addEventListener('abort', () => reject(new DOMException('Abortado', 'AbortError')), {once: true});
     }));
     render(<MemoryRouter><JudicialAdmin adminFetch={adminFetch} /></MemoryRouter>);
+    await user.click(screen.getByText('Correções e cadastro manual de registros'));
     await user.type(screen.getByLabelText('Buscar político'), 'Pessoa');
     await user.click(screen.getByRole('button', {name: 'Buscar'}));
     const person = await screen.findByRole('button', {name: /Pessoa fictícia/});
@@ -72,6 +75,7 @@ describe('gestão de histórico judicial', () => {
     };
     const adminFetch = vi.fn().mockImplementation((_url: string, options?: RequestInit) => Promise.resolve(response(options?.method === 'PUT' ? {...record, version: 3} : {...empty, records: [record]})));
     render(<MemoryRouter><JudicialAdmin adminFetch={adminFetch} /></MemoryRouter>);
+    await user.click(screen.getByText('Correções e cadastro manual de registros'));
     await user.type(screen.getByLabelText('Buscar político'), 'Pessoa');
     await user.click(screen.getByRole('button', {name: 'Buscar'}));
     await user.click(await screen.findByRole('button', {name: /Pessoa fictícia/}));
@@ -83,5 +87,40 @@ describe('gestão de histórico judicial', () => {
     expect(write?.[0]).toBe('/api/admin/judicial/politicos/100/records/00000000-0000-4000-8000-000000000001');
     expect(JSON.parse(write?.[1].body)).toMatchObject({expectedVersion: 2, verification: 'VERIFIED', identityEvidence: record.identityEvidence});
     expect(await screen.findByText(/Alteração salva/)).toBeInTheDocument();
+  });
+
+  it('abre a pessoa do candidato no formulário existente sem inferir data ou publicação e importa rascunho', async () => {
+    const user = userEvent.setup();
+    const candidate = {id: 'candidate-1', politicoId: '200', politicoName: 'Pessoa candidata', sourceId: 'STF_NEWS', status: 'PENDING', version: 3, evidence: [{kind: 'CONVICTION', status: 'REPORTED', matchedName: 'Pessoa candidata', excerpt: 'Pessoa candidata foi condenada pelo tribunal.'}], document: {title: 'Decisão oficial para revisão', text: 'Descrição documental que requer conferência humana.', url: 'https://noticias.stf.jus.br/posts/noticia/teste/', publishedAt: '2026-10-30', signals: ['CONVICTION']}};
+    let saved: Record<string, unknown> | null = null;
+    const adminFetch = vi.fn().mockImplementation((url: string, options?: RequestInit) => {
+      if (url.endsWith('/import')) {saved = JSON.parse(String(options?.body)); return Promise.resolve(response({...saved, version: 1}));}
+      if (url.includes('/candidates?')) return Promise.resolve(response({items: [candidate], total: 1}));
+      if (url.includes('/ingestion/')) return Promise.resolve(response({items: []}));
+      return Promise.resolve(response({...empty, records: saved ? [{...saved, id: saved.recordId, version: 1}] : []}));
+    });
+    render(<MemoryRouter><JudicialAdmin adminFetch={adminFetch} /></MemoryRouter>);
+    await screen.findByText('Decisão oficial para revisão');
+    await user.click(screen.getByText('Diagnóstico dos documentos e importação manual'));
+    await user.click(screen.getByRole('button', {name: 'Revisar candidato'}));
+    const title = await screen.findByLabelText('Título objetivo do registro');
+    expect(title).toHaveValue(candidate.document.title);
+    expect(screen.getByLabelText('Conduta reconhecida na decisão')).toHaveValue(candidate.evidence[0].excerpt);
+    expect(screen.getByLabelText('Data da decisão')).toHaveValue('');
+    expect(screen.getByLabelText('Situação da condenação')).toHaveValue('');
+    expect(screen.getByLabelText('Publicação')).toHaveValue('DRAFT');
+    expect(screen.getByLabelText('Publicação')).toBeDisabled();
+    await user.selectOptions(screen.getByLabelText('Tipo de registro'), 'IMPRISONMENT');
+    expect(screen.getByLabelText('Modalidade da prisão')).toHaveValue('');
+    await user.selectOptions(screen.getByLabelText('Tipo de registro'), 'CONVICTION');
+    expect(screen.getByLabelText('Situação da condenação')).toHaveValue('');
+    await user.type(screen.getByLabelText('Número do caso ou processo'), 'CASO-1');
+    await user.selectOptions(screen.getByLabelText('Situação da condenação'), 'APPEAL');
+    fireEvent.change(screen.getByLabelText('Data da decisão'), {target: {value: '2025-01-01'}});
+    await user.click(screen.getByRole('button', {name: 'Salvar registro'}));
+    await waitFor(() => expect(saved).toMatchObject({verification: 'DRAFT', expectedVersion: 0, candidateVersion: 3, eventDate: '2025-01-01', custodyConfirmed: false, finalityDate: null}));
+    expect(saved?.recordId).toMatch(/^[a-f0-9-]{36}$/);
+    expect(adminFetch).toHaveBeenCalledWith('/api/admin/judicial/politicos/200', expect.anything());
+    expect(await screen.findByRole('button', {name: 'Editar registro'})).toBeInTheDocument();
   });
 });

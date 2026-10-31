@@ -3,8 +3,10 @@ import {ExpenseBreakdown} from '../components/ExpenseBreakdown';
 import type {ExpenseAnalysis} from '../lib/expenseAnalyticsTypes';
 import {useCatalogRefresh} from '../hooks/useCatalogRefresh';
 import React, {Suspense, lazy, useEffect, useMemo, useRef, useState} from 'react';
-import { useParams, Link, useSearchParams } from 'react-router-dom';
+import { useParams, Link, useSearchParams, useLocation, useNavigate } from 'react-router-dom';
 import {JudicialProfile} from '../components/judicial/JudicialProfile';
+import {JudicialAttributes} from '../components/judicial/JudicialAttributes';
+import type {JudicialSummary} from '../lib/judicialTypes';
 import {
   Star,
   ChevronRight,
@@ -42,6 +44,7 @@ const SpendingChart = lazy(() =>
 );
 
 type PoliticoDetail = {
+  judicial?: JudicialSummary;
   id: string;
   nome: string;
   partido: string;
@@ -246,13 +249,25 @@ export const PoliticoProfile = () => {
   const { id } = useParams();
   const [profileParams, setProfileParams] = useSearchParams();
   const tabParam = profileParams.get('tab');
-  const activeTab = tabParam && ['geral', 'atuacao', 'votacoes', 'despesas', 'noticias', 'judicial'].includes(tabParam) ? tabParam : 'geral';
+  const activeTab = tabParam && ['geral', 'atuacao', 'votacoes', 'despesas', 'noticias'].includes(tabParam) ? tabParam : 'geral';
+  const location = useLocation();
+  const navigate = useNavigate();
+  useEffect(() => {
+    if (tabParam !== 'judicial') return;
+    const params = new URLSearchParams(profileParams);
+    params.set('tab', 'geral');
+    navigate({pathname: location.pathname, search: params.toString(), hash: '#historico-judicial'}, {replace: true});
+  }, [tabParam, profileParams, location.pathname, navigate]);
   const setActiveTab = (tab: string) => setProfileParams(previous => {const next = new URLSearchParams(previous); next.set('tab', tab); return next;});
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [politico, setPolitico] = useState<PoliticoDetail | null>(null);
   const [votacoes, setVotacoes] = useState<VotacaoItem[]>([]);
   const [despesas, setDespesas] = useState<DespesaItem[]>([]);
   const [isLoadingPolitico, setIsLoadingPolitico] = useState(true);
+  useEffect(() => {
+    if (isLoadingPolitico || activeTab !== 'geral' || location.hash !== '#historico-judicial') return;
+    document.getElementById('historico-judicial')?.scrollIntoView?.({block: 'start'});
+  }, [isLoadingPolitico, activeTab, location.hash]);
   const tabsContainer = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const container = tabsContainer.current;
@@ -921,7 +936,6 @@ export const PoliticoProfile = () => {
     { id: 'votacoes', label: 'Votações', icon: CheckCircle2 },
     { id: 'despesas', label: 'Despesas', icon: DollarSign },
     { id: 'noticias', label: 'Notícias', icon: FileText },
-    { id: 'judicial', label: 'Histórico judicial', icon: Landmark },
   ];
 
   if (isLoadingPolitico && !politico) {
@@ -1169,6 +1183,8 @@ export const PoliticoProfile = () => {
         ))}
       </section>
 
+      <JudicialAttributes summary={politico.judicial} detailsHref={`?tab=geral#historico-judicial`} />
+
       {/* Tabs Section */}
       <div ref={tabsContainer} className="mb-8 -mx-4 flex gap-1 overflow-x-auto border-b border-slate-200 px-4 no-scrollbar sm:mx-0 sm:px-0 dark:border-slate-800">
         {tabs.map((tab) => (
@@ -1203,7 +1219,6 @@ export const PoliticoProfile = () => {
 
       {/* Tab Content */}
       <div className="min-h-[400px]">
-        {activeTab === 'judicial' && id && <JudicialProfile politicoId={id} />}
         {activeTab === 'geral' && (
           <div className="grid grid-cols-1 gap-6 md:grid-cols-2 md:gap-8">
             <RaioXGastos indicadores={indicadoresPerfil} media={mediaCamara} loading={loadingIndicadores} />
@@ -1278,6 +1293,8 @@ export const PoliticoProfile = () => {
             </div>
           </div>
         )}
+
+        {activeTab === 'geral' && <div id="historico-judicial" className="mt-6 min-w-0 scroll-mt-24 md:mt-8">{id && <JudicialProfile politicoId={id} />}</div>}
 
         {activeTab === 'atuacao' && (!errors.atuacao || atuacaoLoaded) && (
           <div className="space-y-6">

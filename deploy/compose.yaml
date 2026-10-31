@@ -1,0 +1,90 @@
+name: indice-politico
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "3"
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    mem_limit: 1792m
+    memswap_limit: 1792m
+    cpus: 1.5
+    pids_limit: 256
+    shm_size: 256m
+    command: [postgres, -c, shared_preload_libraries=pg_stat_statements, -c, shared_buffers=256MB, -c, work_mem=8MB, -c, maintenance_work_mem=128MB, -c, max_connections=50]
+    environment:
+      POSTGRES_DB: indice
+      POSTGRES_USER: indice
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD}
+    volumes:
+      - database:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U indice -d indice"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    security_opt: ["no-new-privileges:true"]
+    logging: *logging
+
+  api:
+    image: indice-api:${RELEASE_ID:?Defina RELEASE_ID}
+    restart: unless-stopped
+    user: node
+    mem_limit: 3g
+    memswap_limit: 3g
+    cpus: 2
+    cpu_shares: 512
+    pids_limit: 256
+    environment:
+      NODE_ENV: production
+      NODE_OPTIONS: --max-old-space-size=1536
+      HOST: 0.0.0.0
+      PORT: "4000"
+      TRUST_PROXY_HOPS: "2"
+      RUN_PRISMA_MIGRATIONS: "false"
+      DATABASE_URL: ${DATABASE_URL:?Defina DATABASE_URL}
+      ADMIN_API_TOKEN: ${ADMIN_API_TOKEN:?Defina ADMIN_API_TOKEN}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GROQ_MODEL: ${GROQ_MODEL:-}
+    volumes:
+      - /opt/indice-politico/data/output:/app/output
+      - /opt/indice-politico/data/logs:/app/logs
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, node, -e, "const {Pool}=require('pg');const p=new Pool({connectionString:process.env.DATABASE_URL,connectionTimeoutMillis:5000,statement_timeout:5000});Promise.all([p.query('SELECT 1 FROM politicos LIMIT 1'),fetch('http://127.0.0.1:4000/api/catalogo/revision').then(r=>{if(!r.ok)throw Error('HTTP')})]).catch(()=>{process.exitCode=1}).finally(()=>p.end())"]
+      interval: 20s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    logging: *logging
+
+  web:
+    image: indice-web:${RELEASE_ID:?Defina RELEASE_ID}
+    restart: unless-stopped
+    mem_limit: 128m
+    memswap_limit: 128m
+    cpus: 0.25
+    pids_limit: 128
+    ports:
+      - 127.0.0.1:3080:80
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, wget, -q, --spider, http://127.0.0.1/]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+    security_opt: ["no-new-privileges:true"]
+    logging: *logging
+
+volumes:
+  database:

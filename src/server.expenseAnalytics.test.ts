@@ -1,5 +1,6 @@
 // @vitest-environment node
 import {createHash,randomUUID} from 'node:crypto';
+import {readFile} from 'node:fs/promises';
 import {Pool} from 'pg';
 import type {Server} from 'node:http';
 import {afterAll,beforeAll,describe,expect,it} from 'vitest';
@@ -23,7 +24,15 @@ describe.skipIf(!databaseUrl)('análise e cobertura financeira PostgreSQL',()=>{
       ('camara','despesas','900001','2025-02-01','2025-02-28','pending',0),('camara','despesas','900002','2025-01-01','2025-01-31','done',0),
       ('camara','despesas','900003','2026-10-01','2026-10-29','done',0)`);
     const url=new URL(databaseUrl!);url.searchParams.set('options',`-c search_path=${schema},public`);process.env.DATABASE_URL=url.toString();
-    const api=await import('./server');apiPool=api.pool;server=api.app.listen(0,'127.0.0.1');await new Promise<void>(resolve=>server.once('listening',resolve));
+    const api=await import('./server');apiPool=api.pool;
+    const isolated=await apiPool.connect();
+    try {
+      await isolated.query(`SET search_path=${schema},public`);
+      await isolated.query(await readFile('prisma/migrations/20261030030000_judicial_history/migration.sql','utf8'));
+      await isolated.query(await readFile('prisma/migrations/20261030120000_judicial_ingestion/migration.sql','utf8'));
+      await isolated.query(await readFile('prisma/migrations/20261030210000_judicial_proceedings/migration.sql','utf8'));
+    } finally {isolated.release();}
+    server=api.app.listen(0,'127.0.0.1');await new Promise<void>(resolve=>server.once('listening',resolve));
     base=`http://127.0.0.1:${(server.address() as {port:number}).port}`;
   },20000);
   afterAll(async()=>{if(server)await new Promise<void>(resolve=>server.close(()=>resolve()));await apiPool?.end();await database?.query(`DROP SCHEMA ${schema} CASCADE`);await database?.end();if(oldUrl===undefined)delete process.env.DATABASE_URL;else process.env.DATABASE_URL=oldUrl;});

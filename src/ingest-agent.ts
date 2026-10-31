@@ -4,6 +4,7 @@ import {accumulateExpensePage, expenseQueryParams, readExpensePageProgress} from
 import {aggregateExpenseEntries,expenseRawResourceId} from './lib/expenseAggregation';
 import {claimExpenseBatch,runExpenseBatch,ExpenseBatchHandledError,ExpenseBatchCleanupError,type ExpenseBatchResult} from './lib/expenseBatch';
 import {createHttpRateLimiter} from './lib/ingestionRateLimiter';
+import {getDefaultIngestionPeriod} from './lib/ingestionPeriod';
 import {seedCheckpointBatch, type CheckpointSeed} from './lib/ingestionSeeds';
 import {upsertRawBatch, type RawItemUpsert} from './lib/rawPersistence';
 import {iteratePages, commitCheckpointPage} from './lib/ingestionPages';
@@ -300,9 +301,10 @@ const parseArgs = (): CliOptions => {
     ? allDatasets
     : requestedDatasets.filter((item): item is Dataset => allDatasets.includes(item as Dataset));
 
+  const defaultPeriod = getDefaultIngestionPeriod();
   return {
-    from: get('from', '2016-01-01') ?? '2016-01-01',
-    to: get('to', '2020-12-31') ?? '2020-12-31',
+    from: get('from', defaultPeriod.from) ?? defaultPeriod.from,
+    to: get('to', defaultPeriod.to) ?? defaultPeriod.to,
     datasets,
     window: (get('window', 'month') ?? 'month') as CliOptions['window'],
     concurrency: Math.max(1, Math.min(2, Number(get('concurrency', '2')) || 2)),

@@ -7,6 +7,11 @@
     "api:dev": "tsx watch src/server.ts",
     "api:start": "tsx src/server.ts",
     "ingest": "tsx src/ingest-agent.ts",
+    "judicial:collect-archive": "tsx src/collect-judicial-archive.ts",
+    "judicial:process-archive": "tsx src/ingest-judicial-archive.ts",
+    "judicial:collect-processes": "tsx src/collect-judicial-processes.ts",
+    "judicial:ingest-processes": "tsx src/ingest-judicial-processes.ts",
+    "ingest:judicial": "npm run judicial:collect-archive && npm run judicial:process-archive",
     "backfill:votacoes": "tsx src/backfill-vote-presentations.ts",
     "enrich:votacoes:ai": "tsx src/enrich-vote-ai.ts",
     "dev": "vite --port=3000 --host=0.0.0.0",
@@ -19,6 +24,7 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
+    "cheerio": "1.2.0",
     "clsx": "^2.1.1",
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
@@ -30,6 +36,7 @@
     "react-dom": "^19.0.0",
     "react-router-dom": "^7.13.1",
     "recharts": "^3.8.1",
+    "saxes": "6.0.0",
     "tailwind-merge": "^3.5.0",
     "tsx": "^4.21.0"
   },

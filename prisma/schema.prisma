@@ -49,6 +49,9 @@ model Politico {
   judicialRecords JudicialRecord[]
   judicialCoverage JudicialCoverage?
   judicialAudit JudicialAudit[]
+  judicialCandidates JudicialCandidate[]
+  processObservations JudicialProcessObservation[]
+  processAttempts JudicialProcessAttempt[]
 
   @@map("politicos")
 }
@@ -67,8 +70,110 @@ model JudicialRecord {
   updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
   politico Politico @relation(fields:[politicoId],references:[id],onDelete:Restrict)
   audits JudicialAudit[]
+  ingestionCandidates JudicialCandidate[]
   @@unique([politicoId,dedupeKey])
   @@map("judicial_records")
+}
+
+// Private ingestion evidence. Source versions are immutable; candidate links retain history.
+model JudicialIngestionRun {
+  id String @id @db.Uuid
+  data Json
+  lockPid Int? @map("lock_pid")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+  evidence JudicialCandidateEvidence[]
+  processAttempts JudicialProcessAttempt[]
+  @@index([createdAt(sort:Desc)], map:"judicial_ingestion_runs_created_idx")
+  @@map("judicial_ingestion_runs")
+}
+model JudicialProcessObservation {
+  politicoId BigInt @map("politico_id")
+  sourceId String @map("source_id")
+  sourceKey String @map("source_key")
+  canonicalKey String @map("canonical_key")
+  identity String
+  payload Json
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+  politico Politico @relation(fields:[politicoId],references:[id],onDelete:Restrict)
+  @@id([politicoId,sourceId,sourceKey])
+  @@map("judicial_process_observations")
+}
+model JudicialProcessAttempt {
+  runId String @map("run_id") @db.Uuid
+  politicoId BigInt @map("politico_id")
+  sourceId String @map("source_id")
+  status String
+  processedPages Int @default(0) @map("processed_pages")
+  nominalMatches Int @default(0) @map("nominal_matches")
+  errors Json @default("[]")
+  truncated Boolean @default(false)
+  startedAt DateTime @default(dbgenerated("clock_timestamp()")) @map("started_at") @db.Timestamptz(6)
+  checkedAt DateTime? @map("checked_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+  politico Politico @relation(fields:[politicoId],references:[id],onDelete:Restrict)
+  run JudicialIngestionRun @relation(fields:[runId],references:[id],onDelete:Restrict)
+  pages JudicialProcessPage[]
+  @@id([runId,politicoId,sourceId])
+  @@index([politicoId,startedAt(sort:Desc)],map:"judicial_process_attempts_person_idx")
+  @@map("judicial_process_attempts")
+}
+model JudicialProcessPage {
+  runId String @map("run_id") @db.Uuid
+  politicoId BigInt @map("politico_id")
+  sourceId String @default("STF_CASES") @map("source_id")
+  page Int
+  succeeded Boolean
+  nominalMatches Int @map("nominal_matches")
+  errors Json @default("[]")
+  attempt JudicialProcessAttempt @relation(fields:[runId,politicoId,sourceId],references:[runId,politicoId,sourceId],onDelete:Restrict)
+  @@id([runId,politicoId,sourceId,page])
+  @@map("judicial_process_pages")
+}
+model JudicialSourceDocument {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  sourceId String @map("source_id")
+  sourceKey String @map("source_key")
+  contentHash String @map("content_hash")
+  payload Json
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  candidates JudicialCandidate[]
+  evidence JudicialCandidateEvidence[]
+  @@unique([sourceId,sourceKey,contentHash])
+  @@map("judicial_source_documents")
+}
+model JudicialCandidate {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  politicoId BigInt @map("politico_id")
+  sourceId String @map("source_id")
+  sourceKey String @map("source_key")
+  documentId String @map("document_id") @db.Uuid
+  matchedNames Json @default("[]") @map("matched_names")
+  status String @default("PENDING")
+  version Int @default(1)
+  recordId String? @map("record_id") @db.Uuid
+  contentChanged Boolean @default(false) @map("content_changed")
+  firstSeenAt DateTime @default(now()) @map("first_seen_at") @db.Timestamptz(6)
+  lastSeenAt DateTime @default(now()) @map("last_seen_at") @db.Timestamptz(6)
+  reviewNote String @default("") @map("review_note")
+  politico Politico @relation(fields:[politicoId],references:[id],onDelete:Restrict)
+  document JudicialSourceDocument @relation(fields:[documentId],references:[id],onDelete:Restrict)
+  record JudicialRecord? @relation(fields:[recordId],references:[id],onDelete:Restrict)
+  evidence JudicialCandidateEvidence[]
+  @@unique([politicoId,sourceId,sourceKey])
+  @@index([status,lastSeenAt(sort:Desc)],map:"judicial_candidates_review_idx")
+  @@map("judicial_candidates")
+}
+model JudicialCandidateEvidence {
+  candidateId String @map("candidate_id") @db.Uuid
+  documentId String @map("document_id") @db.Uuid
+  runId String @map("run_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  candidate JudicialCandidate @relation(fields:[candidateId],references:[id],onDelete:Restrict)
+  document JudicialSourceDocument @relation(fields:[documentId],references:[id],onDelete:Restrict)
+  run JudicialIngestionRun @relation(fields:[runId],references:[id],onDelete:Restrict)
+  @@id([candidateId,documentId,runId])
+  @@map("judicial_candidate_evidence")
 }
 
 model JudicialCoverage {

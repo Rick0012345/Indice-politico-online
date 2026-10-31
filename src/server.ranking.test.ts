@@ -1,12 +1,15 @@
 // @vitest-environment node
 import {afterAll, beforeAll, describe, expect, it} from 'vitest';
-import {Pool} from 'pg';
+import {Pool,type PoolClient} from 'pg';
 import type {Server} from 'node:http';
-import {createHash} from 'node:crypto';
+import {createHash,randomUUID} from 'node:crypto';
+import {readFile} from 'node:fs/promises';
+import {storeProceedingPage} from './lib/judicialProceedingsRepository';
+import type {ProceedingObservation} from './lib/judicialProceedingsTypes';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 describe.skipIf(!databaseUrl)('totais do ranking no PostgreSQL', () => {
-  const schema = `test_ranking_${Date.now()}`;
+  const schema = `test_ranking_${randomUUID().replaceAll('-','')}`;
   let database: Pool;
   let apiPool: Pool;
   let server: Server;
@@ -14,6 +17,7 @@ describe.skipIf(!databaseUrl)('totais do ranking no PostgreSQL', () => {
   const previousDatabaseUrl = process.env.DATABASE_URL;
 
   beforeAll(async () => {
+    if(new URL(databaseUrl!).pathname!=='/app_test')throw new Error('TEST_DATABASE_URL deve apontar ao banco app_test.');
     database = new Pool({connectionString: databaseUrl});
     await database.query(`CREATE SCHEMA ${schema}`);
     const sourceSchema = new URL(databaseUrl!).searchParams.get('schema') ?? 'public';
@@ -32,6 +36,13 @@ describe.skipIf(!databaseUrl)('totais do ranking no PostgreSQL', () => {
     process.env.DATABASE_URL = url.toString();
     const api = await import('./server');
     apiPool = api.pool;
+    const isolated=await apiPool.connect();
+    try {
+      await isolated.query(`SET search_path=${schema},public`);
+      await isolated.query(await readFile('prisma/migrations/20261030030000_judicial_history/migration.sql','utf8'));
+      await isolated.query(await readFile('prisma/migrations/20261030120000_judicial_ingestion/migration.sql','utf8'));
+      await isolated.query(await readFile('prisma/migrations/20261030210000_judicial_proceedings/migration.sql','utf8'));
+    } finally {isolated.release();}
     server = api.app.listen(0, '127.0.0.1');
     await new Promise<void>(resolve => server.once('listening', resolve));
     base = `http://127.0.0.1:${(server.address() as {port:number}).port}`;
@@ -186,8 +197,106 @@ describe.skipIf(!databaseUrl)('totais do ranking no PostgreSQL', () => {
     } finally {await database.query(`DELETE FROM ${schema}.despesas WHERE ano=2023`);}
   });
 
+  it('integra resumo judicial e ordenação global, preservando categorias, publicação e privacidade',async()=>{
+    const add=async(id:number,category='CRIMINAL',kind='CONVICTION',convictionStatus='FINAL',verification='VERIFIED')=>{
+      const key=randomUUID();
+      const payload={kind,category,court:'STF',convictionStatus,verification,caseNumber:key,eventDate:'2025-01-01',custodyType:kind==='IMPRISONMENT'?'PREVENTIVE':null,custodyConfirmed:kind==='IMPRISONMENT',identityEvidence:'SEGREDO DE IDENTIDADE',reviewNote:'SEGREDO DE REVISÃO'};
+      await database.query(`INSERT INTO ${schema}.judicial_records(id,politico_id,kind,category,case_key,dedupe_key,verification,payload,checked_at)
+        VALUES($1::text::uuid,$2,$3,$4,$1::text,$1::text,$5,$6,now())`,[key,id,kind,category,verification,JSON.stringify(payload)]);
+    };
+    await database.query(`INSERT INTO ${schema}.judicial_coverage(politico_id,status,scope,sources) VALUES(900001,'REVIEWED','Teste','[]')`);
+    await add(900001,'CRIMINAL','CONVICTION','FINAL','DRAFT');
+    await add(900001,'CRIMINAL','CONVICTION','ANNULLED');
+    await add(900002);await add(900002);await add(900002,'ELECTORAL');
+    await add(900003,'ELECTORAL');await add(900003,'ELECTORAL');
+    await add(900003,'CRIMINAL','IMPRISONMENT');
+    await add(900004,'CRIMINAL','IMPRISONMENT','FINAL','DRAFT');
+    try {
+      for(const direction of ['asc','desc']) {
+        const expected=direction==='asc'?['900001','900003','900002']:['900002','900001','900003'];
+        for(const view of ['','&view=items']) {
+          const ranked=await get(`metric=condenacoes&direction=${direction}&limit=3${view}`);
+          expect(ranked.items.map((p:{id:string})=>p.id)).toEqual(expected);
+          expect(ranked.items.find((p:{id:string})=>p.id==='900001').judicial.finalConvictions).toBe(0);
+          const unknown=await get(`metric=condenacoes&direction=${direction}&limit=1&offset=3${view}`);
+          expect(unknown.items[0].judicial.finalConvictions).toBeNull();
+          expect(JSON.stringify(ranked)).not.toMatch(/identityEvidence|reviewNote|SEGREDO|"records"|judicialKnown|judicialFinal/);
+          const page=await get(`metric=condenacoes&direction=${direction}&limit=1&offset=1${view}`);
+          expect(page.items[0].id).toBe(expected[1]);
+        }
+      }
+      for(const view of ['','&view=items']) {
+        const electoral=await get(`metric=condenacoes&category=ELECTORAL&limit=1${view}`);
+        expect(electoral.items[0]).toMatchObject({id:'900003',judicial:{finalConvictions:0,counts:{ELECTORAL:{final:2}},confirmedImprisonments:1}});
+        const prison=await get(`metric=condenacoes&prisonOnly=true${view}`);
+        expect(prison).toMatchObject({total:1,items:[{id:'900003',judicial:{finalConvictions:0,confirmedImprisonments:1}}]});
+      }
+      const prisonFull=await get('metric=condenacoes&prisonOnly=true');
+      expect(await get('view=summary&prisonOnly=true')).toMatchObject({total:1,totalDespesas:prisonFull.totalDespesas,totalAvaliacoes:0});
+      const cards=await get('view=cards&metric=condenacoes');
+      expect(cards.items.map((p:{id:string})=>p.id)).toEqual((await get('view=cards')).items.map((p:{id:string})=>p.id));
+      expect(cards.items[0]).toHaveProperty('judicial');
+      expect(await get('view=cards&prisonOnly=true')).toMatchObject({total:1,items:[{id:'900003'}]});
+      const full=(await get('search=Pessoa%202&metric=condenacoes')).items.find((p:{id:string})=>p.id==='900002');
+      const profile=await fetch(`${base}/api/politicos/900002`);expect(profile.status).toBe(200);
+      expect((await profile.json()).politico.judicial).toEqual(full.judicial);
+      const list=await fetch(`${base}/api/politicos?search=Pessoa%202`);expect(list.status).toBe(200);
+      expect((await list.json()).items.find((p:{id:string})=>p.id==='900002').judicial).toEqual(full.judicial);
+      // Publish on another connection precisely between ranking and enrichment.
+      for(const view of ['','&view=items']) {
+        const before=(await get('metric=condenacoes&search=ABC')).items.find((p:{id:string})=>p.id==='900002').judicial.finalConvictions;
+        let intercepted=false;
+        const intercept=(client:PoolClient)=>{
+          const original=client.query;
+          client.query=function(...args:Parameters<typeof original>){
+            const pending=original.apply(this,args);
+            const text=args[0];
+            if(typeof text==='string'&&text.includes('WITH filtrados AS')) {
+              client.query=original;intercepted=true;
+              return Promise.resolve(pending).then(async result=>{await add(900002);return result;});
+            }
+            return pending;
+          } as typeof original;
+        };
+        apiPool.once('acquire',intercept);
+        try {
+          const concurrent=await get(`metric=condenacoes&search=ABC${view}`);
+          expect(intercepted).toBe(true);
+          expect(concurrent.items.find((p:{id:string})=>p.id==='900002').judicial.finalConvictions).toBe(before);
+          expect((await get('metric=condenacoes&search=ABC')).items.find((p:{id:string})=>p.id==='900002').judicial.finalConvictions).toBe(before+1);
+        } finally {apiPool.off('acquire',intercept);}
+      }
+      for(const query of ['category=INVALID','category=CRIMINAL&category=ELECTORAL','prisonOnly=yes','prisonOnly=true&prisonOnly=false'])expect((await fetch(`${base}/api/politicos/ranking?${query}`)).status).toBe(400);
+    } finally {
+      await database.query(`DELETE FROM ${schema}.judicial_records; DELETE FROM ${schema}.judicial_coverage`);
+    }
+  });
+
+  it('integra processos no ranking legado/progressivo e preserva desconhecidos após a página',async()=>{
+    const runId=randomUUID();await apiPool.query("INSERT INTO judicial_ingestion_runs(id,data) VALUES($1,'{}')",[runId]);
+    const obs=(key:string):ProceedingObservation=>({sourceId:'STF_CASES',sourceKey:key,sourcePersonId:'SEGREDO',court:'STF',caseNumber:`AP ${key}`,cnjNumber:null,phase:'ACTION',status:'ACTIVE',filedAt:null,subjects:[],roles:[{role:'DEFENDANT',label:'Réu'}],sourceUrl:'https://portal.stf.jus.br/processos/',sourceLabel:'STF',fetchedAt:'2026-10-30T12:00:00Z',contentHash:'SEGREDO',identity:'CONFIRMED',identityEvidence:[]});
+    const client=await apiPool.connect();
+    try {
+      await client.query('BEGIN');
+      for(const [id,observations] of [['900001',[]],['900002',[obs('1'),obs('2')]],['900003',[obs('3')]]] as Array<[string,ProceedingObservation[]]>)await storeProceedingPage(client,{runId,politicoId:id,page:1,result:{observations,nominalMatches:observations.length,errors:[]},done:true,truncated:false,error:null});
+      await client.query('COMMIT');
+      for(const direction of ['asc','desc'])for(const view of ['','&view=items']){
+        const expected=direction==='asc'?['900001','900003','900002']:['900002','900003','900001'];
+        const ranked=await get(`metric=processos&direction=${direction}&limit=3${view}`);
+        expect(ranked.items.map((item:{id:string})=>item.id)).toEqual(expected);
+        expect(ranked.items.find((item:{id:string})=>item.id==='900002').judicial.proceedings.againstPerson).toBe(2);
+        const next=await get(`metric=processos&direction=${direction}&limit=1&offset=3${view}`);
+        expect(next.items[0].judicial.proceedings.againstPerson).toBeNull();
+        expect(JSON.stringify(ranked)).not.toMatch(/SEGREDO|sourcePersonId|contentHash|proceedingsKnown|proceedingsCount/);
+      }
+    } finally {
+      await client.query('ROLLBACK');client.release();
+      await apiPool.query('DELETE FROM judicial_process_pages; DELETE FROM judicial_process_attempts; DELETE FROM judicial_process_observations; DELETE FROM judicial_ingestion_runs');
+    }
+  });
+
   it('devolve ambos totais zerados quando não há políticos cadastrados', async () => {
-    await database.query(`TRUNCATE ${schema}.politicos, ${schema}.avaliacoes, ${schema}.despesas, ${schema}.votos_deputados`);
+    await database.query(`TRUNCATE ${schema}.politicos, ${schema}.avaliacoes, ${schema}.despesas, ${schema}.votos_deputados,${schema}.judicial_records,${schema}.judicial_coverage,${schema}.judicial_audit,${schema}.judicial_candidates,${schema}.judicial_candidate_evidence,${schema}.judicial_process_observations,${schema}.judicial_process_pages,${schema}.judicial_process_attempts`);
     expect(await get()).toMatchObject({items:[],totalCadastrados:0,total:0,totalDespesas:0,totalAvaliacoes:0,totalVotacoes:0,notaMedia:0,votacoesDisponiveis:false,cobertura:{status:'not_imported',periods:0,expectedPeriods:0,missing:0,politicians:0}});
     expect(await (await fetch(`${base}/api/despesas/anos`)).json()).toEqual({items:[]});
   });

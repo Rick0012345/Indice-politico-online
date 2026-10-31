@@ -2,6 +2,8 @@ import React, {useCallback, useEffect, useRef, useState, useSyncExternalStore} f
 import {Link} from 'react-router-dom';
 import {judicialCategories, convictionStatuses, custodyTypes, type JudicialAdminProfile, type JudicialAdminRecord, type JudicialRecordInput, type JudicialCoverage} from '../../lib/judicialTypes';
 import {getJudicialAction, reconcileJudicialAction, saveJudicialAction, subscribeJudicialAction, type JudicialAdminFetch, type JudicialSaveRequest} from '../../lib/judicialAdminActions';
+import {JudicialIngestionAdmin} from './JudicialIngestionAdmin';
+import type {JudicialCandidate} from '../../lib/judicialIngestionTypes';
 
 const inputClass = 'mt-1 min-h-11 w-full min-w-0 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:outline-2 focus:outline-blue-600 disabled:opacity-60 dark:border-slate-600 dark:bg-slate-950 dark:text-slate-100';
 const buttonClass = 'min-h-11 rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold hover:bg-slate-100 disabled:opacity-50 dark:border-slate-600 dark:hover:bg-slate-800';
@@ -38,6 +40,7 @@ export function JudicialAdmin({adminFetch}: {adminFetch: JudicialAdminFetch}) {
   const [searchDone, setSearchDone] = useState(false);
   const [searchError, setSearchError] = useState('');
   const [person, setPerson] = useState<Person | null>(null);
+  const [candidate, setCandidate] = useState<JudicialCandidate | null>(null);
   const searchController = useRef<AbortController | null>(null);
   useEffect(() => () => searchController.current?.abort(), []);
   const findPeople = async (event: React.FormEvent) => {
@@ -52,19 +55,22 @@ export function JudicialAdmin({adminFetch}: {adminFetch: JudicialAdminFetch}) {
   };
   return <section className="space-y-5 text-slate-800 dark:text-slate-100" aria-labelledby="judicial-admin-title">
     <div><h2 id="judicial-admin-title" className="text-xl font-semibold">Histórico judicial</h2>
-      <p className="mt-2 max-w-3xl text-sm text-slate-600 dark:text-slate-300">Cadastre evidências oficiais, confira a identidade e publique os registros revisados. A coleta parlamentar não pesquisa condenações ou prisões automaticamente.</p></div>
+      <p className="mt-2 max-w-3xl text-sm text-slate-600 dark:text-slate-300">Colete fontes oficiais para obter os casos judiciais prontos. Fatos comprovados são consolidados e publicados automaticamente; documentos incompletos permanecem no diagnóstico privado. Correções e cadastros manuais continuam disponíveis nas ferramentas opcionais.</p></div>
+    <JudicialIngestionAdmin adminFetch={adminFetch} person={person} refreshKey={candidate?.id ?? ''} onReview={item => {setPerson({id: item.politicoId, nome: item.politicoName, partido: '', estado: ''}); setCandidate(item);}} />
+    <details open={Boolean(candidate)} className="space-y-5"><summary className="cursor-pointer py-2 font-medium">Correções e cadastro manual de registros</summary>
     <form onSubmit={findPeople} className="surface flex flex-wrap items-end gap-3 p-4">
       <label className="min-w-0 flex-1 text-sm font-medium">Buscar político<input className={inputClass} value={search} minLength={2} required onChange={event => setSearch(event.target.value)} placeholder="Nome do parlamentar" /></label>
       <button className={buttonClass} disabled={searching || search.trim().length < 2}>{searching ? 'Buscando…' : 'Buscar'}</button>
     </form>
     {searchError && <p role="alert">{searchError}</p>}
     {searchDone && !people.length && <p role="status">Nenhum político encontrado para essa busca.</p>}
-    {!!people.length && <ul className="grid gap-2 sm:grid-cols-2">{people.map(item => <li key={item.id}><button type="button" className={`${buttonClass} w-full text-left`} onClick={() => setPerson(item)} aria-pressed={person?.id === item.id}>{item.nome} · {item.partido}/{item.estado}</button></li>)}</ul>}
-    {person && <PersonJudicialEditor key={person.id} person={person} adminFetch={adminFetch} />}
+    {!!people.length && <ul className="grid gap-2 sm:grid-cols-2">{people.map(item => <li key={item.id}><button type="button" className={`${buttonClass} w-full text-left`} onClick={() => {setPerson(item); setCandidate(null);}} aria-pressed={person?.id === item.id}>{item.nome} · {item.partido}/{item.estado}</button></li>)}</ul>}
+    {person && <PersonJudicialEditor key={person.id} person={person} adminFetch={adminFetch} candidate={candidate} onCandidateClose={() => setCandidate(null)} />}
+    </details>
   </section>;
 }
 
-const PersonJudicialEditor: React.FC<{person: Person; adminFetch: JudicialAdminFetch}> = ({person, adminFetch}) => {
+const PersonJudicialEditor: React.FC<{person: Person; adminFetch: JudicialAdminFetch; candidate: JudicialCandidate | null; onCandidateClose: () => void}> = ({person, adminFetch, candidate, onCandidateClose}) => {
   const [profile, setProfile] = useState<JudicialAdminProfile | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
@@ -82,6 +88,11 @@ const PersonJudicialEditor: React.FC<{person: Person; adminFetch: JudicialAdminF
   const snapshot = useCallback(() => getJudicialAction(adminFetch, person.id), [adminFetch, person.id]);
   const action = useSyncExternalStore(subscribe, snapshot, snapshot);
   const base = `/api/admin/judicial/politicos/${person.id}`;
+  const [candidateRecordId, setCandidateRecordId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!candidate) return;
+    setEditingId(null); setCreatingId(null); setCandidateRecordId(crypto.randomUUID());
+  }, [candidate?.id, candidate?.version]);
   const refresh = useCallback(async () => {
     controllerRef.current?.abort();
     const controller = new AbortController(); controllerRef.current = controller;
@@ -107,10 +118,11 @@ const PersonJudicialEditor: React.FC<{person: Person; adminFetch: JudicialAdminF
     if (wasPending.current && action.status === 'idle') {setAudit(null); void refresh();}
     wasPending.current = action.status === 'pending';
   }, [action.status, refresh]);
-  const save = async (request: JudicialSaveRequest) => {
-    await saveJudicialAction(adminFetch, person.id, request);
+  const save = async (request: JudicialSaveRequest, retry = false) => {
+    await saveJudicialAction(adminFetch, person.id, request, retry);
     if (mounted.current && getJudicialAction(adminFetch, person.id).saved) {
       if (request.recordId) {setEditingId(request.recordId); setCreatingId(null);}
+      if (request.url.includes('/ingestion/candidates/')) onCandidateClose();
     }
   };
   const loadAudit = async () => {
@@ -123,19 +135,20 @@ const PersonJudicialEditor: React.FC<{person: Person; adminFetch: JudicialAdminF
   const record = profile?.records.find(item => item.id === editingId);
   const disabled = action.status !== 'idle' || loading;
   return <div className="space-y-5">
-    <div className="flex flex-wrap items-center justify-between gap-3"><h3 className="text-lg font-semibold">{person.nome} · {person.partido}/{person.estado}</h3><Link className="text-sm font-semibold text-blue-700 underline dark:text-blue-300" to={`/politico/${person.id}?tab=judicial`}>Ver perfil público</Link></div>
+    <div className="flex flex-wrap items-center justify-between gap-3"><h3 className="text-lg font-semibold">{person.nome}{person.partido ? ` · ${person.partido}/${person.estado}` : ''}</h3><Link className="text-sm font-semibold text-blue-700 underline dark:text-blue-300" to={`/politico/${person.id}?tab=judicial`}>Ver perfil público</Link></div>
     {action.message && <div role="status" className="surface space-y-3 p-4"><p>{action.message}</p>
-      {action.status === 'uncertain' && <div className="flex flex-wrap gap-2"><button type="button" className={buttonClass} onClick={() => void refresh()} disabled={loading}>Conferir resultado</button><button type="button" className={buttonClass} onClick={() => void saveJudicialAction(adminFetch, person.id, action.request!, true)}>Repetir o mesmo envio</button></div>}
+      {action.status === 'uncertain' && <div className="flex flex-wrap gap-2"><button type="button" className={buttonClass} onClick={() => void refresh()} disabled={loading}>Conferir resultado</button><button type="button" className={buttonClass} onClick={() => void save(action.request!, true)}>Repetir o mesmo envio</button></div>}
     </div>}
     {loading && <p role="status">Consultando histórico…</p>}
     {error && <div role="alert" className="surface space-y-2 p-4"><p>{error}</p><button type="button" className={buttonClass} onClick={() => void refresh()}>Tentar novamente</button></div>}
     {profile && <>
       <section className="surface space-y-4 p-4 sm:p-5" aria-label="Registros cadastrados">
-        <div className="flex flex-wrap justify-between gap-2"><h4 className="font-semibold">Registros cadastrados</h4><button type="button" className={buttonClass} disabled={disabled} onClick={() => {setEditingId(null); setCreatingId(crypto.randomUUID());}}>Novo registro</button></div>
+        <div className="flex flex-wrap justify-between gap-2"><h4 className="font-semibold">Registros cadastrados</h4><button type="button" className={buttonClass} disabled={disabled} onClick={() => {onCandidateClose(); setEditingId(null); setCreatingId(crypto.randomUUID());}}>Novo registro</button></div>
         {!profile.records.length && <p className="text-sm">Nenhum registro cadastrado.</p>}
-        <ul className="space-y-3">{profile.records.map(item => <li key={item.id} className="flex flex-wrap items-start justify-between gap-3 border-t border-slate-200 pt-3 dark:border-slate-700"><div className="min-w-0 flex-1"><p className="break-words font-medium">{item.title}</p><p className="mt-1 text-sm">{item.kind === 'IMPRISONMENT' ? 'Prisão' : judicialCategories[item.category]} · {item.verification === 'VERIFIED' ? 'Revisado e publicado' : 'Rascunho'} · {dateLabel(item.eventDate)}</p><p className="mt-1 break-words text-xs text-slate-500">{item.court} · {item.caseNumber}</p></div><button type="button" className={buttonClass} disabled={disabled} onClick={() => {setCreatingId(null); setEditingId(item.id);}}>Editar registro</button></li>)}</ul>
+        <ul className="space-y-3">{profile.records.map(item => <li key={item.id} className="flex flex-wrap items-start justify-between gap-3 border-t border-slate-200 pt-3 dark:border-slate-700"><div className="min-w-0 flex-1"><p className="break-words font-medium">{item.title}</p><p className="mt-1 text-sm">{item.kind === 'IMPRISONMENT' ? 'Prisão' : judicialCategories[item.category]} · {item.verification === 'VERIFIED' ? 'Revisado e publicado' : 'Rascunho'} · {dateLabel(item.eventDate)}</p><p className="mt-1 break-words text-xs text-slate-500">{item.court} · {item.caseNumber}</p></div><button type="button" className={buttonClass} disabled={disabled} onClick={() => {onCandidateClose(); setCreatingId(null); setEditingId(item.id);}}>Editar registro</button></li>)}</ul>
       </section>
-      {(record || creatingId) && <RecordForm key={`${record?.id ?? creatingId}:${record?.version ?? 0}`} record={record} disabled={disabled} onSave={value => save({url: `${base}/records/${record?.id ?? creatingId}`, recordId: record?.id ?? creatingId!, body: {...value, expectedVersion: record?.version ?? 0}})} onClose={() => {setEditingId(null); setCreatingId(null);}} />}
+      {candidate && candidateRecordId && <RecordForm key={`candidate:${candidate.id}:${candidate.version}`} seed={{...newRecord(), convictionStatus: null, title: candidate.document.title.slice(0, 300), description: [...new Set((candidate.evidence ?? []).map(item => item.excerpt))].join('\n\n').slice(0, 5000), sourceUrl: candidate.document.url, sourceLabel: candidate.sourceId === 'STF_NEWS' ? 'STF — notícias' : 'STJ — notícias', court: candidate.sourceId === 'STF_NEWS' ? 'Supremo Tribunal Federal' : 'Superior Tribunal de Justiça', ...(candidate.evidence?.some(item => item.kind === 'IMPRISONMENT') && !candidate.evidence.some(item => item.kind === 'CONVICTION') ? {kind: 'IMPRISONMENT' as const, convictionStatus: null, custodyType: null} : {})}} importOnly disabled={disabled} onSave={value => save({url: `/api/admin/judicial/ingestion/candidates/${candidate.id}/import`, recordId: candidateRecordId, body: {...value, verification: 'DRAFT', expectedVersion: 0, candidateVersion: candidate.version, recordId: candidateRecordId}})} onClose={onCandidateClose} />}
+      {!candidate && (record || creatingId) && <RecordForm key={`${record?.id ?? creatingId}:${record?.version ?? 0}`} record={record} disabled={disabled} onSave={value => save({url: `${base}/records/${record?.id ?? creatingId}`, recordId: record?.id ?? creatingId!, body: {...value, expectedVersion: record?.version ?? 0}})} onClose={() => {setEditingId(null); setCreatingId(null);}} />}
       <CoverageForm key={profile.summary.coverage.version} coverage={profile.summary.coverage} disabled={disabled} onSave={coverage => save({url: `${base}/coverage`, body: {...coverage, expectedVersion: profile.summary.coverage.version}})} />
       <section className="surface space-y-3 p-4"><div className="flex flex-wrap items-center justify-between gap-3"><h4 className="font-semibold">Histórico de revisões</h4><button type="button" className={buttonClass} onClick={() => void loadAudit()} disabled={auditLoading}>{auditLoading ? 'Consultando…' : 'Consultar revisões'}</button></div>
         <p className="text-sm text-slate-600 dark:text-slate-300">As revisões e as evidências de identidade são privadas. São exibidas até as 100 alterações mais recentes.</p>
@@ -147,17 +160,20 @@ const PersonJudicialEditor: React.FC<{person: Person; adminFetch: JudicialAdminF
   </div>;
 }
 
-const RecordForm: React.FC<{record?: JudicialAdminRecord; disabled: boolean; onSave: (value: JudicialRecordInput) => Promise<void>; onClose: () => void}> = ({record, disabled, onSave, onClose}) => {
-  const [form, setForm] = useState<JudicialRecordInput>(() => record ? {...record} : newRecord());
+const RecordForm: React.FC<{record?: JudicialAdminRecord; seed?: JudicialRecordInput; importOnly?: boolean; disabled: boolean; onSave: (value: JudicialRecordInput) => Promise<void>; onClose: () => void}> = ({record, seed, importOnly, disabled, onSave, onClose}) => {
+  const [form, setForm] = useState<JudicialRecordInput>(() => record ? {...record} : seed ?? newRecord());
   const [confirmedReview, setConfirmedReview] = useState(false);
+  const titleRef = useRef<HTMLHeadingElement | null>(null);
+  useEffect(() => {if (importOnly) titleRef.current?.focus();}, [importOnly]);
   const set = <K extends keyof JudicialRecordInput>(key: K, value: JudicialRecordInput[K]) => setForm(current => ({...current, [key]: value}));
   const field = (key: 'caseNumber' | 'court' | 'title' | 'description' | 'grounds' | 'outcome' | 'sourceUrl' | 'sourceLabel' | 'identityEvidence' | 'reviewNote', label: string, required = true, minLength?: number, multiline = false) => <label className="min-w-0 text-sm font-medium">{label}{multiline ? <textarea className={inputClass} value={form[key]} onChange={event => set(key, event.target.value)} rows={3} required={required} minLength={minLength} maxLength={5000} /> : <input className={inputClass} type={key === 'sourceUrl' ? 'url' : 'text'} value={form[key]} onChange={event => set(key, event.target.value)} required={required} minLength={minLength} maxLength={key === 'sourceUrl' ? 2000 : 500} />}</label>;
   return <form className="surface space-y-4 p-4 sm:p-5" onSubmit={event => {event.preventDefault(); if (!disabled) void onSave(form);}}>
-    <h4 className="font-semibold">{record ? 'Editar evidência' : 'Nova evidência'}</h4>
+    <h4 ref={titleRef} tabIndex={importOnly ? -1 : undefined} className="font-semibold">{record ? 'Editar evidência' : 'Nova evidência'}</h4>
+    {importOnly && <p className="text-sm">Revise a identidade e a fonte. O tipo é apenas uma sugestão; informe a data do fato e a situação comprovadas no documento. A importação salva um rascunho privado, que poderá ser revisado e publicado no editor habitual.</p>}
     <fieldset disabled={disabled} className="space-y-4">
       <div className="grid gap-4 sm:grid-cols-2"><label className="text-sm font-medium">Tipo de registro<select className={inputClass} value={form.kind} disabled={Boolean(record)} onChange={event => {
         const prison = event.target.value === 'IMPRISONMENT';
-        setForm(current => ({...current, kind: prison ? 'IMPRISONMENT' : 'CONVICTION', category: 'CRIMINAL', convictionStatus: prison ? null : 'APPEAL', finalityDate: null, custodyType: prison ? 'PREVENTIVE' : null, custodyConfirmed: false, releasedAt: null, grounds: ''}));
+        setForm(current => ({...current, kind: prison ? 'IMPRISONMENT' : 'CONVICTION', category: 'CRIMINAL', convictionStatus: prison || importOnly ? null : 'APPEAL', finalityDate: null, custodyType: prison && !importOnly ? 'PREVENTIVE' : null, custodyConfirmed: false, releasedAt: null, grounds: ''}));
       }}><option value="CONVICTION">Condenação</option><option value="IMPRISONMENT">Prisão</option></select></label>
         <label className="text-sm font-medium">Categoria<select className={inputClass} value={form.category} disabled={form.kind === 'IMPRISONMENT'} onChange={event => set('category', event.target.value as JudicialRecordInput['category'])}>{Object.entries(judicialCategories).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
         {field('caseNumber', 'Número do caso ou processo')}{field('court', 'Tribunal ou órgão responsável')}
@@ -165,11 +181,11 @@ const RecordForm: React.FC<{record?: JudicialAdminRecord; disabled: boolean; onS
       {field('title', 'Título objetivo do registro', true, 5)}
       <p className="text-xs text-slate-600 dark:text-slate-300">Descreva o que a fonte comprova. Em prisão cautelar, identifique o fato investigado como investigação.</p>
       <div className="grid gap-4 sm:grid-cols-2">{field('description', form.kind === 'IMPRISONMENT' ? 'Motivo e fato investigado' : 'Conduta reconhecida na decisão', true, 10, true)}{field('outcome', 'Desfecho e situação atual', false, undefined, true)}</div>
-      <div className="grid gap-4 sm:grid-cols-2"><label className="min-w-0 text-sm font-medium">{form.kind === 'IMPRISONMENT' ? 'Data da prisão' : 'Data da decisão'}<input type="date" required className={inputClass} value={form.eventDate} onChange={event => set('eventDate', event.target.value)} /></label>
-        {form.kind === 'CONVICTION' ? <><label className="text-sm font-medium">Situação da condenação<select className={inputClass} value={form.convictionStatus ?? 'APPEAL'} onChange={event => {set('convictionStatus', event.target.value as JudicialRecordInput['convictionStatus']); if (event.target.value !== 'FINAL') set('finalityDate', null);}}>{Object.entries(convictionStatuses).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-          {form.convictionStatus === 'FINAL' && <label className="min-w-0 text-sm font-medium">Data do trânsito em julgado<input type="date" className={inputClass} required min={form.eventDate} value={form.finalityDate ?? ''} onChange={event => set('finalityDate', event.target.value || null)} /></label>}</> : <>
-          <label className="text-sm font-medium">Modalidade da prisão<select className={inputClass} value={form.custodyType ?? 'PREVENTIVE'} onChange={event => set('custodyType', event.target.value as JudicialRecordInput['custodyType'])}>{Object.entries(custodyTypes).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-          <label className="min-w-0 text-sm font-medium">Data da soltura (se confirmada)<input type="date" className={inputClass} min={form.eventDate} value={form.releasedAt ?? ''} onChange={event => set('releasedAt', event.target.value || null)} /></label>
+      <div className="grid gap-4 sm:grid-cols-2"><label className="min-w-0 text-sm font-medium">{form.kind === 'IMPRISONMENT' ? 'Data da prisão' : 'Data da decisão'}<input type="date" required className={inputClass} value={form.eventDate ?? ''} onChange={event => set('eventDate', event.target.value || null)} /></label>
+        {form.kind === 'CONVICTION' ? <><label className="text-sm font-medium">Situação da condenação<select className={inputClass} required value={form.convictionStatus ?? ''} onChange={event => {set('convictionStatus', event.target.value as JudicialRecordInput['convictionStatus']); if (event.target.value !== 'FINAL') set('finalityDate', null);}}><option value="" disabled>Selecione a situação comprovada</option>{Object.entries(convictionStatuses).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+          {form.convictionStatus === 'FINAL' && <label className="min-w-0 text-sm font-medium">Data do trânsito em julgado<input type="date" className={inputClass} required min={form.eventDate ?? undefined} value={form.finalityDate ?? ''} onChange={event => set('finalityDate', event.target.value || null)} /></label>}</> : <>
+          <label className="text-sm font-medium">Modalidade da prisão<select className={inputClass} required value={form.custodyType ?? ''} onChange={event => set('custodyType', event.target.value as JudicialRecordInput['custodyType'])}><option value="" disabled>Selecione a modalidade comprovada</option>{Object.entries(custodyTypes).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+          <label className="min-w-0 text-sm font-medium">Data da soltura (se confirmada)<input type="date" className={inputClass} min={form.eventDate ?? undefined} value={form.releasedAt ?? ''} onChange={event => set('releasedAt', event.target.value || null)} /></label>
           {field('grounds', 'Fundamento da prisão', true, 10, true)}
         </>}
       </div>
@@ -178,7 +194,7 @@ const RecordForm: React.FC<{record?: JudicialAdminRecord; disabled: boolean; onS
       <p className="text-xs text-slate-600 dark:text-slate-300">Use documento público em domínio oficial do Judiciário, governo, Ministério Público ou Legislativo. Um mandado pendente não comprova prisão efetiva.</p>
       <div className="grid gap-4 sm:grid-cols-2">{field('identityEvidence', 'Evidência de identidade (privada)', form.verification === 'VERIFIED', form.verification === 'VERIFIED' ? 20 : undefined, true)}{field('reviewNote', 'Nota desta revisão (privada)', form.verification === 'VERIFIED', form.verification === 'VERIFIED' ? 10 : undefined, true)}</div>
       <p className="text-xs text-slate-600 dark:text-slate-300">Explique como a fonte vincula o registro à pessoa; apenas coincidência de nome não basta. Evite copiar dados pessoais desnecessários.</p>
-      <label className="block text-sm font-medium">Publicação<select className={inputClass} value={form.verification} onChange={event => {set('verification', event.target.value as 'DRAFT' | 'VERIFIED'); setConfirmedReview(false);}}><option value="DRAFT">Rascunho — não aparece ao público</option><option value="VERIFIED">Revisado — aparece ao público</option></select></label>
+      <label className="block text-sm font-medium">Publicação<select className={inputClass} value={form.verification} disabled={importOnly} onChange={event => {set('verification', event.target.value as 'DRAFT' | 'VERIFIED'); setConfirmedReview(false);}}><option value="DRAFT">Rascunho — não aparece ao público</option>{!importOnly && <option value="VERIFIED">Revisado — aparece ao público</option>}</select></label>
       {record?.verification === 'VERIFIED' && form.verification === 'DRAFT' && <p className="text-sm">Ao salvar como rascunho, este registro sairá do perfil público e das contagens. A revisão será preservada.</p>}
       {form.verification === 'VERIFIED' && <label className="flex items-start gap-3 py-2 text-sm"><input type="checkbox" required className="mt-1 h-5 w-5 shrink-0" checked={confirmedReview} onChange={event => setConfirmedReview(event.target.checked)} />Conferi identidade, fonte oficial e situação atual desta decisão ou prisão.</label>}
       <div className="flex flex-wrap gap-3"><button type="submit" className={`${buttonClass} bg-blue-700 text-white hover:bg-blue-800`}>Salvar registro</button><button type="button" className={buttonClass} onClick={onClose}>Fechar edição</button></div>

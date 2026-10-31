@@ -19,6 +19,7 @@ import {
 import {getGroqModelValidationError} from '../lib/aiSettings';
 import {cn} from '../lib/utils';
 import {JudicialAdmin} from '../components/judicial/JudicialAdmin';
+import {getDefaultIngestionPeriod, INGESTION_SUPPORTED_FROM} from '../lib/ingestionPeriod';
 
 type CheckpointSummary = {
   dataset: string;
@@ -407,8 +408,21 @@ const AdminPanel = ({adminFetch, onSignOut}: {
 }) => {
   const [activeSection, setActiveSection] = useState<AdminSection>('coleta');
   const judicialFetch = useMemo(() => (input: RequestInfo | URL, init?: RequestInit) => adminFetch(input, init), [adminFetch]);
-  const [from, setFrom] = useState('2016-01-01');
-  const [to, setTo] = useState('2020-12-31');
+  const [from, setFrom] = useState(INGESTION_SUPPORTED_FROM);
+  const [today, setToday] = useState(() => getDefaultIngestionPeriod().to);
+  const [toOverride, setToOverride] = useState<string | null>(null);
+  const to = toOverride ?? today;
+  useEffect(() => {
+    const updateToday = () => setToday(getDefaultIngestionPeriod().to);
+    const timer = window.setInterval(updateToday, 60_000);
+    window.addEventListener('focus', updateToday);
+    document.addEventListener('visibilitychange', updateToday);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('focus', updateToday);
+      document.removeEventListener('visibilitychange', updateToday);
+    };
+  }, []);
   const [selectedDatasets, setSelectedDatasets] = useState<string[]>([
     'deputados',
     'despesas',
@@ -600,7 +614,7 @@ const AdminPanel = ({adminFetch, onSignOut}: {
       const response = await adminFetch('/api/admin/ingestion/run', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({from, to, datasets: selectedDatasets, reprocessEmpty}),
+        body: JSON.stringify({from, to: toOverride ?? getDefaultIngestionPeriod().to, datasets: selectedDatasets, reprocessEmpty}),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? 'Erro ao iniciar ingestao.');
@@ -761,9 +775,11 @@ const AdminPanel = ({adminFetch, onSignOut}: {
                 </label>
                 <label className="text-sm font-bold text-slate-700 dark:text-slate-200">
                   Fim
-                  <input type="date" value={to} onChange={(event) => setTo(event.target.value)} className="mt-2 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-50" />
+                  <input type="date" value={to} onChange={(event) => setToOverride(event.target.value === getDefaultIngestionPeriod().to ? null : event.target.value)} className="mt-2 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-50" />
                 </label>
               </div>
+
+              <p className="text-xs leading-5 text-slate-500 dark:text-slate-400">Por padrão, do início do período suportado pela coleta até hoje. Você pode ajustar as datas.</p>
 
               <div>
                 <span className="text-sm font-bold text-slate-700 dark:text-slate-200">Dados</span>

@@ -1,5 +1,5 @@
 import React from 'react';
-import {Routes, Route} from 'react-router-dom';
+import {Routes, Route, useLocation} from 'react-router-dom';
 import {act, screen, waitFor} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {afterEach, beforeEach, expect, it, vi} from 'vitest';
@@ -10,6 +10,8 @@ let catalogUpdate: () => Promise<void>;
 vi.mock('../hooks/useCatalogUpdates', () => ({useCatalogUpdates: (callback: typeof catalogUpdate) => {catalogUpdate = callback; return 'live';}}));
 const expense = {id:'e1', ano:2026, mes:1, tipo:'Combustível', valor:10};
 const json = (data:unknown) => ({ok:true,json:async()=>data}) as Response;
+const judicialSummary = {finalConvictions:4,appealConvictions:3,confirmedImprisonments:1,prisonHistory:'CONFIRMED',counts:{CRIMINAL:{final:2,appeal:1},IMPROBITY:{final:2,appeal:2},ELECTORAL:{final:0,appeal:0},ACCOUNTS:{final:0,appeal:0}},coverage:{status:'PARTIAL',scope:'Tribunal consultado',sources:[],checkedAt:null,version:1},lastCheckedAt:null};
+function ProfileLocation() {const location=useLocation();return <output aria-label="Endereço do perfil">{location.search}{location.hash}</output>;}
 const analysis = {
  total:6260,totalValor:123456.78,
  categorias:[{tipo:'Combustível',total:100,quantidade:2,participacao:80},{tipo:'Estorno',total:-25,quantidade:1,participacao:-20}],
@@ -20,12 +22,37 @@ const analysis = {
 };
 beforeEach(() => {
  vi.stubGlobal('fetch', vi.fn(async (input: string) => {
+  if(input.endsWith('/judicial')) return json({summary:judicialSummary,records:[]});
   if(input.includes('/despesas/analise')) return json(analysis);
   if(input.includes('/despesas?')) return json({items:[expense],total:6260,totalValor:123456.78,tiposDisponiveis:['Combustível','Passagens'],hasMore:true});
   if(input.endsWith('/anos')) return json({items:[2026]});
   if(input.includes('/resumo') || input.includes('/media')) return json({items:[]});
   return json({politico:{id:'220554',nome:'Maria',partido:'ABC',estado:'SP',cargo:'Deputado Federal',foto:'x',notaMedia:0,totalAvaliacoes:0}});
  }));
+});
+it('integra atributos criminais e detalhe à visão geral, preservando o link legado', async()=>{
+ const original=vi.mocked(fetch).getMockImplementation()!;
+ vi.mocked(fetch).mockImplementation(async(input,init)=>String(input).endsWith('/220554') ? json({politico:{id:'220554',nome:'Maria',partido:'ABC',estado:'SP',cargo:'Deputado Federal',notaMedia:0,totalAvaliacoes:0,judicial:judicialSummary}}) : original(input,init));
+ renderWithProviders(<><ProfileLocation/><Routes><Route path='/politico/:id' element={<PoliticoProfile/>}/></Routes></>,{route:'/politico/220554?tab=judicial&origem=ranking'});
+ await screen.findByRole('heading',{name:'Maria'});
+ expect(screen.queryByRole('button',{name:'Histórico judicial'})).not.toBeInTheDocument();
+ expect(screen.getByRole('button',{name:'Visão Geral'})).toHaveAttribute('aria-pressed','true');
+ const attributes=screen.getByRole('region',{name:'Atributos judiciais'});
+ expect(attributes).toHaveTextContent('Condenações criminais definitivas2');
+ expect(attributes).toHaveTextContent('Condenações criminais em recurso1');
+ expect(attributes).toHaveTextContent('1 registro(s) de prisão confirmada');
+ await screen.findByRole('heading',{name:'Histórico judicial'});
+ expect(document.getElementById('historico-judicial')).toBeInTheDocument();
+ expect(screen.getByLabelText('Endereço do perfil')).toHaveTextContent('?tab=geral&origem=ranking#historico-judicial');
+});
+it('mantém atributos indisponíveis e oferece repetição quando o detalhe judicial falha',async()=>{
+ const original=vi.mocked(fetch).getMockImplementation()!;
+ vi.mocked(fetch).mockImplementation(async(input,init)=>String(input).endsWith('/judicial') ? ({ok:false,status:500} as Response) : original(input,init));
+ renderWithProviders(<Routes><Route path='/politico/:id' element={<PoliticoProfile/>}/></Routes>,{route:'/politico/220554'});
+ await screen.findByRole('heading',{name:'Maria'});
+ expect(screen.getByRole('region',{name:'Atributos judiciais'})).toHaveTextContent('Indisponível');
+ expect(await screen.findByText('Não foi possível consultar os registros judiciais.')).toBeVisible();
+ expect(screen.getByRole('button',{name:'Tentar novamente'})).toBeVisible();
 });
 it('exibe análise integral, estornos e fornecedor/documento também no desktop', async () => {
  const original=vi.mocked(fetch).getMockImplementation()!;

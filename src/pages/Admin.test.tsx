@@ -17,12 +17,44 @@ const successfulResponse = (input: RequestInfo | URL) => {
 
 beforeEach(() => window.sessionStorage.clear());
 afterEach(() => {
+  vi.useRealTimers();
   window.sessionStorage.clear();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
 describe('autorização administrativa', () => {
+  it('preenche o período suportado até hoje e acompanha a virada do dia em Brasília', async () => {
+    vi.useFakeTimers({toFake:['Date']});
+    vi.setSystemTime(new Date('2026-10-31T01:30:00Z'));
+    window.sessionStorage.setItem('admin_api_token','token-atual');
+    vi.stubGlobal('fetch',vi.fn(async input=>successfulResponse(input)));
+    render(<Admin />);
+    await screen.findByRole('button',{name:'Iniciar coleta'});
+    expect(screen.getByLabelText('Inicio')).toHaveValue('2015-01-01');
+    expect(screen.getByLabelText('Fim')).toHaveValue('2026-10-30');
+    vi.setSystemTime(new Date('2026-10-31T03:01:00Z'));
+    fireEvent.focus(window);
+    expect(screen.getByLabelText('Fim')).toHaveValue('2026-10-31');
+  });
+
+  it('preserva um fim escolhido manualmente e volta a hoje ao reabrir o painel', async () => {
+    vi.useFakeTimers({toFake:['Date']});
+    vi.setSystemTime(new Date('2026-12-31T20:00:00Z'));
+    window.sessionStorage.setItem('admin_api_token','token-atual');
+    vi.stubGlobal('fetch',vi.fn(async input=>successfulResponse(input)));
+    const view=render(<Admin />);
+    await screen.findByRole('button',{name:'Iniciar coleta'});
+    fireEvent.change(screen.getByLabelText('Fim'),{target:{value:'2026-12-15'}});
+    vi.setSystemTime(new Date('2027-01-01T12:00:00Z'));
+    fireEvent.focus(window);
+    expect(screen.getByLabelText('Fim')).toHaveValue('2026-12-15');
+    view.unmount();
+    render(<Admin />);
+    await screen.findByRole('button',{name:'Iniciar coleta'});
+    expect(screen.getByLabelText('Fim')).toHaveValue('2027-01-01');
+  });
+
   it.each([false, true])('solicita reconsulta de vazios apenas por escolha explícita: %s', async (reprocessEmpty) => {
     window.sessionStorage.setItem('admin_api_token', 'token-atual');
     const requests: unknown[] = [];

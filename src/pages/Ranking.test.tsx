@@ -301,6 +301,11 @@ it('ignora paginação antiga após pesquisa e impede duplicação por clique du
  await user.dblClick(more);
  expect(vi.mocked(fetch).mock.calls.filter(([input])=>new URL(String(input),'http://localhost').searchParams.get('offset')==='50')).toHaveLength(1);
  await user.type(screen.getByPlaceholderText('Buscar por nome, partido, UF ou cargo'),'Nova');
+ // Wait for the debounce without repeatedly scanning the still-rendered 50-row result.
+ await waitFor(()=>expect(vi.mocked(fetch).mock.calls.some(([input])=>{
+  const url=new URL(String(input),'http://localhost');
+  return url.pathname==='/api/politicos/ranking'&&url.searchParams.get('view')==='items'&&url.searchParams.get('search')==='Nova';
+ })).toBe(true));
  await screen.findAllByText('Resultado atual');
  await act(async()=>{ resolvePage(json({items:[politico(666,'Resultado obsoleto')],total:9999,totalCadastrados:9999,totalDespesas:999999})); });
  await waitFor(()=>expect(screen.queryByText('Resultado obsoleto')).not.toBeInTheDocument());
@@ -339,8 +344,10 @@ it('não transforma disponibilidade desconhecida em gastos e votos zerados',asyn
  expect(document.querySelector('tbody tr')).not.toHaveTextContent(currency(0));
  expect(screen.queryByText('0 votações')).not.toBeInTheDocument();
  const cells=document.querySelectorAll('tbody tr td');
- expect(cells[6]).toHaveTextContent('—');
- expect(cells[7]).toHaveTextContent('—');
+ const expenseColumn=document.querySelector('thead button[aria-label="Ordenar por despesas declaradas"]')!.closest('th')!.cellIndex;
+ const votesColumn=document.querySelector('thead button[aria-label="Ordenar por número de votações"]')!.closest('th')!.cellIndex;
+ expect(cells[expenseColumn]).toHaveTextContent('—');
+ expect(cells[votesColumn]).toHaveTextContent('—');
 });
 
 it('não consulta a aba antiga quando um aviso aguardava a página anterior',async()=>{
@@ -438,4 +445,32 @@ it('atualiza linhas ao voltar de partidos após aviso mesmo com resumo pendente'
  await user.click(screen.getByRole('button',{name:'Parlamentares'}));
  await screen.findAllByText('Nome atualizado');
  expect(screen.queryByText('Nome anterior')).not.toBeInTheDocument();
+});
+
+it('ordena por processos, mostra cobertura própria e exporta valores desconhecidos vazios',async()=>{
+ let csv='';const OriginalBlob=Blob;
+ vi.stubGlobal('Blob',class extends OriginalBlob{constructor(parts:BlobPart[],options?:BlobPropertyBag){super(parts,options);csv=parts.join('');}});
+ vi.stubGlobal('URL',class extends URL{static createObjectURL=()=> 'blob:processos';static revokeObjectURL=()=>{};});
+ const click=vi.spyOn(HTMLAnchorElement.prototype,'click').mockImplementation(()=>{});
+ const judicial={identifiedConvictions:0,finalConvictions:0,appealConvictions:0,confirmedImprisonments:0,prisonHistory:'NO_RECORDS',counts:{CRIMINAL:{final:0,appeal:0}},coverage:{status:'PARTIAL'},proceedings:{identified:9,againstPerson:3,activeAgainstPerson:2,investigations:4,enforcements:1,coverage:{status:'PARTIAL',scope:'Processos públicos STF',sourceLabel:'STF',checkedAt:'2026-10-30',unresolved:2}}};
+ vi.stubGlobal('fetch',vi.fn(async(input)=>String(input).startsWith('/api/politicos/ranking?')?json({items:[{...politico(1),judicial},politico(2)],total:2,totalCadastrados:2}):json({items:[]})));
+ try{
+  renderWithProviders(<Ranking/>,{route:'/ranking?metrica=processos'});
+  await screen.findAllByText('Pessoa 1');
+  expect(screen.getByRole('button',{name:'Processos'})).toHaveAttribute('aria-pressed','true');
+  expect(screen.getAllByText('3 processos contra').length).toBeGreaterThan(0);
+  expect(screen.getAllByText(/Consulta processual parcial/).length).toBeGreaterThan(0);
+  expect(screen.getAllByLabelText('Sem classificação').length).toBeGreaterThan(0);
+  await userEvent.click(screen.getByRole('button',{name:'Ordenar por processos contra identificados'}));
+  await waitFor(()=>expect(vi.mocked(fetch).mock.calls.some(([url])=>String(url).includes('metric=processos')&&String(url).includes('direction=asc'))).toBe(true));
+  await userEvent.click(screen.getByRole('button',{name:'Exportar CSV'}));
+  const [header,known,unknown]=csv.trimStart().split('\n').map(line=>line.split(';'));
+  expect(known[header.indexOf('processos_contra_identificados')]).toBe('3');
+  expect(known[header.indexOf('processos_ativos_contra')]).toBe('2');
+  expect(known[header.indexOf('investigacoes')]).toBe('4');
+  expect(known[header.indexOf('cobertura_processos')]).toBe('PARTIAL');
+  expect(known[header.indexOf('data_consulta_processos')]).toBe('2026-10-30');
+  expect(unknown[header.indexOf('processos_contra_identificados')]).toBe('');
+  expect(unknown[header.indexOf('posicao')]).toBe('');
+ }finally{click.mockRestore();}
 });

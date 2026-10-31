@@ -10,7 +10,7 @@ import {CatalogEvents} from './lib/catalogEvents';
 const url=process.env.TEST_DATABASE_URL;
 const fixture=(delta={})=>({kind:'CONVICTION',category:'CRIMINAL',caseNumber:'0001-23.2025',court:'Tribunal fictício',title:'Teste judicial',description:'Registro fictício apenas para testes',eventDate:'2025-01-01',convictionStatus:'FINAL',finalityDate:'2025-02-01',custodyType:null,custodyConfirmed:false,releasedAt:null,grounds:'Fundamento de teste',outcome:'Desfecho de teste',sourceUrl:'https://stf.jus.br/caso',sourceLabel:'Fonte oficial',verification:'VERIFIED',identityEvidence:'Identidade confirmada em documento oficial fictício',reviewNote:'Revisado em teste isolado',expectedVersion:0,...delta});
 describe.skipIf(!url)('API judicial PostgreSQL isolado',()=>{
-  const schema=`test_judicial_${Date.now()}`;let admin:Pool;let pool:Pool;let server:Server;let base:string;const events=new CatalogEvents(1);
+  const schema=`test_judicial_${randomUUID().replaceAll('-','')}`;let admin:Pool;let pool:Pool;let server:Server;let base:string;const events=new CatalogEvents(1);
   const auth={authorization:'Bearer teste','content-type':'application/json'};
   const request=async(path:string,body?:unknown,authenticated=true)=>{const res=await fetch(base+path,{method:body?'PUT':'GET',headers:authenticated?auth:{'content-type':'application/json'},body:body?JSON.stringify(body):undefined});return {status:res.status,data:await res.json()};};
   const recordPath=(id:string,p='1')=>`/api/admin/judicial/politicos/${p}/records/${id}`;
@@ -21,6 +21,8 @@ describe.skipIf(!url)('API judicial PostgreSQL isolado',()=>{
     pool=new Pool({connectionString:configured.toString()});
     await pool.query('CREATE TABLE politicos(id bigint PRIMARY KEY,nome text,sigla_partido text,sigla_uf text,url_foto text,ativo boolean,situacao text)');
     await pool.query(await readFile('prisma/migrations/20261030030000_judicial_history/migration.sql','utf8'));
+    await pool.query(await readFile('prisma/migrations/20261030120000_judicial_ingestion/migration.sql','utf8'));
+    await pool.query(await readFile('prisma/migrations/20261030210000_judicial_proceedings/migration.sql','utf8'));
     await pool.query("INSERT INTO politicos VALUES(1,'Fictício A','TST','SP',null,true,'Exercício'),(2,'Fictício B','TST','RJ',null,true,'Exercício'),(3,'Fictício C','TST','MG',null,true,'Exercício'),(4,'Fictício D','TST','BA',null,false,'Fim')");
     const app=express();app.use(express.json());attachJudicialRoutes(app,pool,(req,res,next)=>{if(req.header('authorization')!=='Bearer teste'){res.status(401).json({error:'Sem autorização'});return;}next();},events);
     server=app.listen(0,'127.0.0.1');await new Promise<void>(resolve=>server.once('listening',resolve));base=`http://127.0.0.1:${(server.address() as {port:number}).port}`;

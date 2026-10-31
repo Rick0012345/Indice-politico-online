@@ -33,7 +33,9 @@ import {
 import {useCompare} from '../lib/compare';
 import {fetchIndicadores, formatPercent, type Indicadores} from '../lib/indicadores';
 import {CompareTray, Sparkline} from '../components/DataBits';
-import {JudicialRanking} from '../components/judicial/JudicialRanking';
+import {PrisonHistory} from '../components/judicial/JudicialDetails';
+import {proceedingCount, proceedingCoverageText} from '../components/judicial/JudicialAttributes';
+import {judicialCategories, type JudicialCategory, type JudicialSummary} from '../lib/judicialTypes';
 
 type RankingView = 'parlamentares' | 'partidos';
 
@@ -50,6 +52,7 @@ type PoliticoRankingItem = {
   totalVotacoes: number;
   ativo?: boolean | null;
   situacao?: string | null;
+  judicial?: JudicialSummary;
 };
 
 type PartidoGastosItem = {
@@ -80,6 +83,8 @@ const metricOptions = [
   {value: 'nota', label: 'Nota', description: 'média das avaliações populares'},
   {value: 'despesas', label: 'Gastos', description: 'total declarado na base'},
   {value: 'votacoes', label: 'Votações', description: 'registros de votação encontrados'},
+  {value: 'processos', label: 'Processos', description: 'processos identificados com papel de réu ou requerido'},
+  {value: 'condenacoes', label: 'Condenações', description: 'condenações definitivas verificadas'},
 ] as const;
 
 type MetricValue = (typeof metricOptions)[number]['value'];
@@ -109,6 +114,19 @@ const expenseText = (value: number | undefined, imported: boolean | null | undef
   value == null || (value === 0 && imported == null) ? '—' : value === 0 && !imported ? 'Dados não importados' : money.format(value);
 const votesText = (value: number | undefined, available: boolean | null | undefined) =>
   value == null || (value === 0 && available == null) ? '—' : available === false ? 'Não importado' : value.toLocaleString('pt-BR');
+const convictionCount = (summary: JudicialSummary | undefined, category: JudicialCategory) =>
+  summary?.finalConvictions == null ? null : summary.counts[category].final;
+const convictionText = (summary: JudicialSummary | undefined, category: JudicialCategory) =>
+  summary == null ? 'Dados indisponíveis' : convictionCount(summary, category) == null ? 'Não pesquisado' : `${summary.counts[category].final.toLocaleString('pt-BR')} definitivas`;
+const proceedingText = (summary?: JudicialSummary) => summary?.proceedings?.againstPerson == null ? 'Não apurado' : `${proceedingCount(summary.proceedings.againstPerson)} processos contra`;
+const metricUnknown = (metric: MetricValue, summary: JudicialSummary | undefined, category: JudicialCategory) => metric === 'condenacoes' ? convictionCount(summary, category) === null : metric === 'processos' ? summary?.proceedings?.againstPerson == null : false;
+const ProceedingsRankingAttributes = ({summary}: {summary?: JudicialSummary}) => !summary?.proceedings ? <div className="space-y-1 text-xs leading-5"><p>Não apurado</p><p className="text-slate-500 dark:text-slate-400">Consulta processual não realizada</p></div> : <div className="space-y-1 text-xs leading-5"><p className="font-semibold">{proceedingText(summary)}</p><p>{proceedingCount(summary?.proceedings?.activeAgainstPerson)} ativos contra · {proceedingCount(summary?.proceedings?.investigations)} investigações · {proceedingCount(summary?.proceedings?.enforcements)} execuções</p><p className="text-slate-500 dark:text-slate-400">{proceedingCoverageText(summary?.proceedings)}</p></div>;
+const JudicialRankingAttributes = ({summary, category}: {summary?: JudicialSummary; category: JudicialCategory}) => <div className="space-y-1 text-xs leading-5">
+  <div className="font-semibold text-slate-900 dark:text-slate-100">{convictionText(summary, category)}</div>
+  <div className="text-slate-500 dark:text-slate-400">{judicialCategories[category]}{summary?.finalConvictions != null && <> · <span>{summary.counts[category].appeal.toLocaleString('pt-BR')} sujeitas a recurso</span></>}</div>
+  <div className="text-slate-600 dark:text-slate-300">{summary ? <PrisonHistory summary={summary} /> : 'Histórico de prisão indisponível'}</div>
+  {summary && <div className="text-slate-500 dark:text-slate-400">{summary.coverage.status === 'PARTIAL' ? 'Pesquisa parcial · escopo limitado' : summary.coverage.status === 'REVIEWED' ? 'Pesquisa revisada · escopo informado' : 'Pesquisa não realizada'}</div>}
+</div>;
 
 const RankingMobileCard: React.FC<{
   politico: PoliticoRankingItem;
@@ -118,14 +136,15 @@ const RankingMobileCard: React.FC<{
   indicadores?: Indicadores;
   votesAvailable?: boolean | null;
   expensesImported?: boolean | null;
-}> = ({politico, index, metric, money, indicadores, votesAvailable, expensesImported}) => {
+  category: JudicialCategory;
+}> = ({politico, index, metric, money, indicadores, votesAvailable, expensesImported, category}) => {
   return (
     <Link
       to={`/politico/${politico.id}`}
       className="surface block p-4 transition-colors hover:border-brand-200 dark:hover:border-brand-900"
     >
       <div className="flex items-start gap-3">
-        <span className="tabular mt-1 w-6 shrink-0 text-center font-mono text-sm text-slate-500 dark:text-slate-400">{index + 1}</span>
+        <span aria-label={metricUnknown(metric, politico.judicial, category) ? 'Sem classificação' : undefined} className="tabular mt-1 w-6 shrink-0 text-center font-mono text-sm text-slate-500 dark:text-slate-400">{metricUnknown(metric, politico.judicial, category) ? '—' : index + 1}</span>
 
         <img
           src={politico.foto}
@@ -137,7 +156,7 @@ const RankingMobileCard: React.FC<{
         />
 
         <div className="min-w-0 flex-1">
-          <div className="flex items-start justify-between gap-3">
+          <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0">
               <h3 className="break-words font-semibold text-slate-900 dark:text-slate-50">{politico.nome}</h3>
               <p className="mt-0.5 text-sm text-slate-500 dark:text-slate-400">
@@ -148,12 +167,12 @@ const RankingMobileCard: React.FC<{
               </p>
             </div>
 
-            <div className="shrink-0 rounded-xl bg-slate-50 px-3 py-2 text-center dark:bg-slate-800">
+            <div className="max-w-full rounded-xl bg-slate-50 px-3 py-2 text-center dark:bg-slate-800">
               <div className="flex items-center justify-center gap-1">
                 {metric === 'nota' && hasRating(politico) && <Star size={14} aria-hidden="true" className="fill-amber-400 text-amber-400" />}
-                <span className="tabular font-mono text-sm font-semibold text-slate-900 dark:text-slate-50">{metric === 'nota' ? hasRating(politico) ? politico.notaMedia.toFixed(1) : 'Sem avaliações' : metric === 'despesas' ? expenseText(politico.totalDespesas, expensesImported, money) : votesText(politico.totalVotacoes, votesAvailable)}</span>
+                <span className="tabular font-mono text-sm font-semibold text-slate-900 dark:text-slate-50">{metric === 'processos' ? proceedingText(politico.judicial) : metric === 'condenacoes' ? convictionText(politico.judicial, category) : metric === 'nota' ? hasRating(politico) ? politico.notaMedia.toFixed(1) : 'Sem avaliações' : metric === 'despesas' ? expenseText(politico.totalDespesas, expensesImported, money) : votesText(politico.totalVotacoes, votesAvailable)}</span>
               </div>
-              <span className="text-xs text-slate-500 dark:text-slate-400">{metric === 'nota' ? 'Nota popular' : metric === 'despesas' ? 'Despesas' : 'Votações'}</span>
+              <span className="text-xs text-slate-500 dark:text-slate-400">{metric === 'processos' ? 'Réu ou requerido' : metric === 'condenacoes' ? judicialCategories[category] : metric === 'nota' ? 'Nota popular' : metric === 'despesas' ? 'Despesas' : 'Votações'}</span>
             </div>
           </div>
 
@@ -178,6 +197,7 @@ const RankingMobileCard: React.FC<{
               </span>
             )}
           </div>
+          <div className="mt-3 border-t border-slate-100 pt-3 dark:border-slate-800"><span className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">Condenações, prisões e processos</span><JudicialRankingAttributes summary={politico.judicial} category={category} /><div className="mt-2 border-t border-slate-100 pt-2 dark:border-slate-800"><ProceedingsRankingAttributes summary={politico.judicial}/></div></div>
         </div>
       </div>
     </Link>
@@ -185,34 +205,27 @@ const RankingMobileCard: React.FC<{
 };
 
 export const Ranking = () => {
-  const [params] = useSearchParams();
-  const judicial = params.get('view') === 'judicial';
-  const target = (view: boolean) => {const next = new URLSearchParams(params); if (view) next.set('view', 'judicial'); else {next.delete('view'); next.delete('offset');} return `/ranking?${next}`;};
-  return <>
-    <nav aria-label="Tipo de ranking" className="flex flex-wrap gap-2 px-4 pt-6 sm:px-6 lg:px-8">
-      <Link to={target(false)} aria-current={!judicial ? 'page' : undefined} className={cn('inline-flex min-h-11 items-center rounded-xl border px-4 text-sm font-medium', !judicial ? 'border-brand-300 bg-brand-50 text-brand-900 dark:border-brand-800 dark:bg-brand-950 dark:text-brand-100' : 'border-slate-200 text-slate-600 dark:border-slate-700 dark:text-slate-300')}>Notas, gastos e votações</Link>
-      <Link to={target(true)} aria-current={judicial ? 'page' : undefined} className={cn('inline-flex min-h-11 items-center rounded-xl border px-4 text-sm font-medium', judicial ? 'border-brand-300 bg-brand-50 text-brand-900 dark:border-brand-800 dark:bg-brand-950 dark:text-brand-100' : 'border-slate-200 text-slate-600 dark:border-slate-700 dark:text-slate-300')}>Condenações</Link>
-    </nav>
-    {judicial ? <JudicialRanking /> : <ParliamentaryRanking />}
-  </>;
-};
-
-const ParliamentaryRanking = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const [activeView, setActiveView] = useState<RankingView>(() => (searchParams.get('ver') === 'partidos' ? 'partidos' : 'parlamentares'));
   const activeViewRef = useRef(activeView);
   activeViewRef.current = activeView;
   const [metric, setMetric] = useState<MetricValue>(() => {
     const raw = searchParams.get('metrica');
-    return isMetric(raw) ? raw : 'nota';
+    return isMetric(raw) ? raw : searchParams.get('view') === 'judicial' ? 'condenacoes' : 'nota';
   });
-  const [direction, setDirection] = useState<'desc' | 'asc'>(() => (searchParams.get('ordem') === 'asc' ? 'asc' : 'desc'));
+  const [direction, setDirection] = useState<'desc' | 'asc'>(() => ((searchParams.get('ordem') ?? searchParams.get('direction')) === 'asc' ? 'asc' : 'desc'));
+  const [category, setCategory] = useState<JudicialCategory>(() => {
+    const raw = searchParams.get('category');
+    return raw && Object.hasOwn(judicialCategories, raw) ? raw as JudicialCategory : 'CRIMINAL';
+  });
+  const [prisonOnly, setPrisonOnly] = useState(() => searchParams.get('prisonOnly') === 'true');
+  const effectivePrisonOnly = activeView === 'parlamentares' && prisonOnly;
   const [cargo, setCargo] = useState('Todos os Cargos');
   const [status, setStatus] = useState<PoliticoStatusFilter>(() => {
     const raw = searchParams.get('status');
     return isStatus(raw) ? raw : 'ativo';
   });
-  const [search, setSearch] = useState(() => searchParams.get('q') ?? '');
+  const [search, setSearch] = useState(() => searchParams.get('q') ?? searchParams.get('search') ?? '');
   const debouncedSearch = useDebouncedValue(search);
   const [density, setDensity] = useState<'compacta' | 'confortavel'>(readDensity);
   const [linkCopied, setLinkCopied] = useState(false);
@@ -268,9 +281,11 @@ const ParliamentaryRanking = () => {
     if (metric !== 'nota') next.set('metrica', metric);
     if (direction !== 'desc') next.set('ordem', direction);
     if (activeView !== 'parlamentares') next.set('ver', activeView);
+    if (category !== 'CRIMINAL') next.set('category', category);
+    if (prisonOnly) next.set('prisonOnly', 'true');
     if (next.toString() !== searchParams.toString()) setSearchParams(next, {replace: true});
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search, status, metric, direction, activeView]);
+  }, [search, status, metric, direction, activeView, category, prisonOnly]);
 
   useEffect(() => {
     try {
@@ -285,8 +300,8 @@ const ParliamentaryRanking = () => {
   const rankingSearch = debouncedSearch.trim();
   const [error, setError] = useState('');
   const [partidosError, setPartidosError] = useState('');
-  const contextKey = JSON.stringify([metric, direction, cargo, status, rankingSearch,expenseYear,firstMonth,lastMonth]);
-  const expenseFilterKey = JSON.stringify([cargo, status, rankingSearch,expenseYear,firstMonth,lastMonth]);
+  const contextKey = JSON.stringify([metric, direction, cargo, status, rankingSearch,expenseYear,firstMonth,lastMonth,category,effectivePrisonOnly]);
+  const expenseFilterKey = JSON.stringify([cargo, status, rankingSearch,expenseYear,firstMonth,lastMonth,effectivePrisonOnly]);
   summaryContext.current = expenseFilterKey;
   const context = useRef(contextKey);
   context.current = contextKey;
@@ -324,6 +339,8 @@ const ParliamentaryRanking = () => {
         limit: String(Math.min(prefixSize + 1, 2000)),
         offset: String(offset),
         status,
+        category,
+        prisonOnly: String(effectivePrisonOnly),
       });
 
       if (rankingSearch) params.set('search', rankingSearch);
@@ -376,7 +393,7 @@ const ParliamentaryRanking = () => {
         if (pendingPage.current === controller) pendingPage.current = null;
       }
     },
-    [contextKey, direction, expenseFilterKey, expenseYear,firstMonth,lastMonth,metric, rankingSearch, status],
+    [contextKey, direction, expenseFilterKey, expenseYear,firstMonth,lastMonth,metric, rankingSearch, status, category, effectivePrisonOnly],
   );
 
   const loadSummary = useCallback(async (force = false) => {
@@ -386,7 +403,7 @@ const ParliamentaryRanking = () => {
     const key = expenseFilterKey;
     setIsLoadingSummary(true);
     setSummaryError('');
-    const params = new URLSearchParams({view: 'summary', status});
+    const params = new URLSearchParams({view: 'summary', status, prisonOnly: String(effectivePrisonOnly)});
     if (rankingSearch) params.set('search', rankingSearch);
     if (expenseYear) {params.set('ano', expenseYear); params.set('mesInicio', firstMonth); params.set('mesFim', lastMonth);}
     try {
@@ -399,7 +416,7 @@ const ParliamentaryRanking = () => {
     } finally {
       if (!controller.signal.aborted && summaryContext.current === key) setIsLoadingSummary(false);
     }
-  }, [expenseFilterKey, status, rankingSearch, expenseYear, firstMonth, lastMonth]);
+  }, [expenseFilterKey, status, rankingSearch, expenseYear, firstMonth, lastMonth, effectivePrisonOnly]);
 
   useEffect(() => {
     if (isUnsupportedCargo || activeView !== 'parlamentares') return;
@@ -614,12 +631,13 @@ const ParliamentaryRanking = () => {
   };
 
   const exportCsv = () => {
-    const header = ['posicao', 'nome', 'partido', 'uf', 'nota', 'avaliacoes', 'despesas', 'votacoes', 'participacao_pct', 'alinhamento_governo_pct', 'proposicoes'];
+    const header = ['posicao', 'nome', 'partido', 'uf', 'nota', 'avaliacoes', 'despesas', 'votacoes', 'participacao_pct', 'alinhamento_governo_pct', 'proposicoes', 'categoria_judicial', 'condenacoes_definitivas', 'condenacoes_em_recurso', 'prisoes_confirmadas', 'cobertura_judicial', 'ultima_verificacao_judicial', 'processos_contra_identificados', 'processos_ativos_contra', 'investigacoes', 'cobertura_processos', 'data_consulta_processos'];
     const rows = filteredItems.map((p, index) => {
       const ind = indicadores.get(p.id);
       const expenseKnown = p.totalDespesas !== 0 || (currentStats?.coverage && currentStats.coverage.status !== 'not_imported');
       const votesKnown = p.totalVotacoes > 0 || currentStats?.votesAvailable === true;
-      return [index + 1, p.nome, p.partido, p.estado, p.notaMedia.toFixed(2), p.totalAvaliacoes ?? '', expenseKnown && p.totalDespesas != null ? p.totalDespesas.toFixed(2) : '', votesKnown ? p.totalVotacoes : '', ind?.participacao ?? '', ind?.alinhamentoGoverno ?? '', ind?.proposicoes ?? ''];
+      const finalCount = convictionCount(p.judicial, category);
+      return [metricUnknown(metric, p.judicial, category) ? '' : index + 1, p.nome, p.partido, p.estado, p.notaMedia.toFixed(2), p.totalAvaliacoes ?? '', expenseKnown && p.totalDespesas != null ? p.totalDespesas.toFixed(2) : '', votesKnown ? p.totalVotacoes : '', ind?.participacao ?? '', ind?.alinhamentoGoverno ?? '', ind?.proposicoes ?? '', judicialCategories[category], finalCount ?? '', finalCount === null ? '' : p.judicial!.counts[category].appeal, p.judicial?.confirmedImprisonments ?? '', p.judicial?.coverage.status ?? 'UNAVAILABLE', p.judicial?.lastCheckedAt ?? '', p.judicial?.proceedings?.againstPerson ?? '', p.judicial?.proceedings?.activeAgainstPerson ?? '', p.judicial?.proceedings?.investigations ?? '', p.judicial?.proceedings?.coverage.status ?? 'NOT_RESEARCHED', p.judicial?.proceedings?.coverage.checkedAt ?? ''];
     });
     const csv = [header, ...rows].map((row) => row.map(csvCell).join(';')).join('\n');
     const url = URL.createObjectURL(new Blob([`﻿${csv}`], {type: 'text/csv;charset=utf-8'}));
@@ -659,7 +677,7 @@ const ParliamentaryRanking = () => {
         <div>
           <h1 className="text-3xl font-semibold tracking-tight text-slate-950 sm:text-4xl dark:text-slate-50">Ranking parlamentar</h1>
           <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600 sm:text-base dark:text-slate-400">
-            Compare avaliações populares, gastos declarados e participação em votações. Marque até 3 para comparar.
+            Compare avaliações populares, gastos, votações, processos e condenações verificadas de cada parlamentar. Marque até 3 para comparar.
           </p>
         </div>
         <div className="flex flex-col items-start gap-2 lg:items-end">
@@ -880,6 +898,15 @@ const ParliamentaryRanking = () => {
             </div>
           )}
         </div>
+        {activeView === 'parlamentares' && <div className="mt-4 flex flex-wrap items-end gap-x-6 gap-y-3 border-t border-slate-100 pt-4 dark:border-slate-800">
+          <label className="w-full text-xs font-medium text-slate-600 sm:w-64 dark:text-slate-400">Categoria judicial
+            <select value={category} onChange={event => setCategory(event.target.value as JudicialCategory)} className="mt-2 min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100">
+              {(Object.entries(judicialCategories) as Array<[JudicialCategory, string]>).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            </select>
+          </label>
+          <label className="flex min-h-11 cursor-pointer items-center gap-2 text-sm text-slate-700 dark:text-slate-300"><input type="checkbox" checked={prisonOnly} onChange={event => setPrisonOnly(event.target.checked)} className="h-4 w-4 accent-brand-600" />Somente com prisão confirmada</label>
+          <p className="basis-full text-xs leading-5 text-slate-500 dark:text-slate-400">Condenações definitivas e decisões em recurso são contadas separadamente. Prisões não somam condenações. Processos contam casos únicos em que a pessoa é ré ou requerida; investigações e execuções ficam separadas. A cobertura atual é do STF e não é nacional. Não apurado não significa zero. <Link to="/metodologia#judicial" className="underline underline-offset-2">Critérios e cobertura</Link>.</p>
+        </div>}
         <div role="group" aria-label="Período das despesas" className="mt-5 border-t border-slate-200 pt-4 dark:border-slate-800">
           <p className="mb-3 text-sm font-semibold text-slate-700 dark:text-slate-200">Período das despesas</p>
           <div className="grid gap-3 sm:max-w-2xl sm:grid-cols-3">
@@ -900,7 +927,7 @@ const ParliamentaryRanking = () => {
               </select>
             </label>
           </div>
-          <p className="mt-3 text-xs leading-5 text-slate-500 dark:text-slate-400">O período selecionado se aplica aos gastos. Avaliações populares e votações representam os dados disponíveis na base.</p>
+          <p className="mt-3 text-xs leading-5 text-slate-500 dark:text-slate-400">O período selecionado se aplica aos gastos. Avaliações populares, votações e histórico judicial representam os dados disponíveis na base.</p>
           {yearsError && <p role="alert" className="mt-2 text-xs text-amber-700 dark:text-amber-300">Não foi possível carregar os anos disponíveis. A consulta de todos os anos continua disponível.</p>}
         </div>
       </section>
@@ -1012,7 +1039,7 @@ const ParliamentaryRanking = () => {
             <>
               <div className="space-y-3 p-4 sm:p-6 lg:hidden">
                 {filteredItems.map((p, index) => (
-                  <RankingMobileCard key={p.id} politico={p} index={index} metric={metric} money={money} indicadores={indicadores.get(p.id)} votesAvailable={currentStats?.votesAvailable} expensesImported={currentStats?.coverage ? currentStats.coverage.status!=='not_imported' : null} />
+                  <RankingMobileCard key={p.id} politico={p} index={index} metric={metric} category={category} money={money} indicadores={indicadores.get(p.id)} votesAvailable={currentStats?.votesAvailable} expensesImported={currentStats?.coverage ? currentStats.coverage.status!=='not_imported' : null} />
                 ))}
               </div>
 
@@ -1028,6 +1055,8 @@ const ParliamentaryRanking = () => {
                       <th className="px-3 py-3 text-right text-xs font-medium text-slate-500 dark:text-slate-400" title="Votos registrados / votações nominais no período do parlamentar">Participação</th>
                       <th className="px-3 py-3 text-right text-xs font-medium text-slate-500 dark:text-slate-400" title="Votos iguais à orientação do governo">Alinh. governo</th>
                       <SortHeader value="despesas" label="Despesas" hint="despesas declaradas" />
+                      <SortHeader value="condenacoes" label="Condenações" hint="condenações definitivas" />
+                      <SortHeader value="processos" label="Processos" hint="processos contra identificados" />
                       <SortHeader value="votacoes" label="Votações" hint="número de votações" />
                       <th className="px-3 py-3 text-right text-xs font-medium text-slate-500 dark:text-slate-400">Proposições</th>
                       <th className="px-3 py-3 text-xs font-medium text-slate-500 dark:text-slate-400">Gastos 12 meses</th>
@@ -1054,7 +1083,7 @@ const ParliamentaryRanking = () => {
                           />
                         </td>
                         <td className={cn('tabular px-3 font-mono text-sm text-slate-500 dark:text-slate-400', cellPad)}>
-                          {index + 1}
+                          {metricUnknown(metric, p.judicial, category) ? <span aria-label="Sem classificação">—</span> : index + 1}
                         </td>
                         <td className={cn('px-3', cellPad)}>
                           <Link to={`/politico/${p.id}`} className="flex items-center gap-3">
@@ -1114,6 +1143,10 @@ const ParliamentaryRanking = () => {
                             </span>
                           )}
                         </td>
+                        <td className={cn('min-w-48 px-3 text-right', cellPad)}>
+                          <Link to={`/politico/${p.id}#historico-judicial`} aria-label={`Ver histórico judicial de ${p.nome}`} className="block rounded-md hover:underline focus-visible:outline-2 focus-visible:outline-brand-500"><JudicialRankingAttributes summary={p.judicial} category={category} /></Link>
+                        </td>
+                        <td className={cn('min-w-52 px-3 text-right', cellPad)}><Link to={`/politico/${p.id}#historico-judicial`} aria-label={`Ver processos de ${p.nome}`} className="block rounded-md hover:underline focus-visible:outline-2 focus-visible:outline-brand-500"><ProceedingsRankingAttributes summary={p.judicial}/></Link></td>
                         <td className={cn('tabular px-3 text-right font-mono text-sm text-slate-700 dark:text-slate-300', cellPad)}>
                           {votesText(p.totalVotacoes, currentStats?.votesAvailable)}
                         </td>

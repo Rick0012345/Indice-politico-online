@@ -9,9 +9,15 @@ import express, {type NextFunction, type Request, type Response} from 'express';
 import {Pool} from 'pg';
 import {CatalogEvents, attachCatalogRoutes} from './lib/catalogEvents';
 import {attachJudicialRoutes} from './lib/judicialRoutes';
+import {attachJudicialIngestionRoutes} from './lib/judicialIngestionRoutes';
+import {attachJudicialSummaries} from './lib/judicialRepository';
+import {judicialRankingSql,proceedingRankingSql} from './lib/judicialQueries';
+import {judicialCategories,type JudicialCategory} from './lib/judicialTypes';
+import {JudicialError} from './lib/judicialRules';
 import {buildProgressiveRankingQuery,expenseYearsQuery} from './lib/rankingQueries';
 import {startCatalogListener} from './lib/catalogListener';
 import {getGroqModelValidationError} from './lib/aiSettings';
+import {getDefaultIngestionPeriod} from './lib/ingestionPeriod';
 import {acquireIngestionLock} from './lib/ingestionLifecycle';
 import {resolveGroqSettings, type GroqSettings} from './lib/groqSettings';
 import {buildExpenseQuery,ExpenseFilterError,parseExpenseFilters,expenseScopeSql,expenseFinancialRowsCtes} from './lib/expenseQueries';
@@ -22,6 +28,8 @@ type ApiDurationMetric = {requests: number; errors: number; durations: number[]}
 const apiDurationMetrics = new Map<string, ApiDurationMetric>();
 
 const app = express();
+// Production has two private proxy hops; direct/local access trusts no forwarded headers.
+app.set('trust proxy', process.env.TRUST_PROXY_HOPS === '2' ? 2 : false);
 app.disable('x-powered-by');
 app.use(express.json({limit: '1mb'}));
 app.use((req, res, next) => {
@@ -57,6 +65,21 @@ const pool = databaseUrl
       password: process.env.APP_DB_PASSWORD ?? 'app',
       database: process.env.APP_DB_NAME ?? 'app',
     });
+
+/** Page ordering and its judicial attributes must describe the same database snapshot. */
+async function rankingWithJudicial<T extends {items?:Array<{id:string}>}>(text:string,values:Array<string|number>) {
+  const client=await pool.connect();
+  try {
+    await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
+    const result=await client.query<T>(text,values);
+    for(const row of result.rows)if(row.items)row.items=await attachJudicialSummaries(client,row.items);
+    await client.query('COMMIT');
+    return result;
+  } catch(error) {
+    await client.query('ROLLBACK').catch(()=>undefined);
+    throw error;
+  } finally {client.release();}
+}
 
 app.param('politicoId', (_req, res, next, value) => {
   if (!/^[1-9]\d{0,18}$/.test(value) || BigInt(value) > 9223372036854775807n) {
@@ -974,9 +997,15 @@ app.get('/api/politicos/ranking', async (req, res) => {
     }
 
     const metric =
-      metricParam === 'despesas' || metricParam === 'votacoes' || metricParam === 'nota'
+      metricParam === 'despesas' || metricParam === 'votacoes' || metricParam === 'nota' || metricParam === 'condenacoes' || metricParam === 'processos'
         ? metricParam
         : 'nota';
+
+    const category=req.query.category??'CRIMINAL';
+    if(typeof category!=='string'||!Object.hasOwn(judicialCategories,category))throw new JudicialError('Categoria judicial inválida.');
+    const prisonParam=req.query.prisonOnly;
+    if(prisonParam!==undefined&&prisonParam!=='true'&&prisonParam!=='false')throw new JudicialError('Filtro de prisão inválido.');
+    const prisonOnly=prisonParam==='true';
 
     const direction =
       directionParam === 'asc' || directionParam === 'desc'
@@ -988,7 +1017,11 @@ app.get('/api/politicos/ranking', async (req, res) => {
     const dirSql = direction === 'asc' ? 'ASC' : 'DESC';
 
     const orderBy =
-      metric === 'despesas'
+      metric === 'condenacoes'
+        ? `"judicialKnown" DESC, "judicialFinal" ${dirSql}, nome ASC`
+      : metric === 'processos'
+        ? `"proceedingsKnown" DESC, "proceedingsCount" ${dirSql}, nome ASC`
+      : metric === 'despesas'
         ? `"totalDespesas" ${dirSql}, "notaMedia" DESC, "totalAvaliacoes" DESC, "atualizadoEm" DESC`
         : metric === 'votacoes'
           ? `"totalVotacoes" ${dirSql}, "notaMedia" DESC, "totalAvaliacoes" DESC, "atualizadoEm" DESC`
@@ -997,16 +1030,19 @@ app.get('/api/politicos/ranking', async (req, res) => {
     const view=req.query.view;
     if(view==='cards'||view==='items'||view==='summary') {
       const revision=catalogEvents.revision;
-      const query=buildProgressiveRankingQuery({view,where:where.join(' AND '),values:params,filters:expenseFilters,metric,direction,limit,offset});
-      const result=await pool.query(query.text,query.values);
-      sendJson(res,200,{...result.rows[0],revision});
+      const query=buildProgressiveRankingQuery({view,where:where.join(' AND '),values:params,filters:expenseFilters,metric,direction,limit,offset,category:category as JudicialCategory,prisonOnly});
+      const result=view==='summary'?await pool.query(query.text,query.values):await rankingWithJudicial(query.text,query.values);
+      const row=result.rows[0];
+      sendJson(res,200,{...row,revision});
       return;
     }
 
+    const judicial=metric==='condenacoes'||prisonOnly?judicialRankingSql(params,category):null;
+    const proceedings=metric==='processos'?proceedingRankingSql():null;
     const financial=expenseFinancialRowsCtes(expenseFilters,params,'d.politico_id IN (SELECT id FROM filtrados)',true);
     const coverage=expenseCoverageSql('filtrados',expenseFilters,params);
 
-    const result = await pool.query<{
+    const result = await rankingWithJudicial<{
       totalCadastrados: number;
       total: number;
       totalDespesas: number;
@@ -1044,7 +1080,9 @@ app.get('/api/politicos/ranking', async (req, res) => {
     }>(
       `
       WITH filtrados AS (
-        SELECT p.id FROM politicos p WHERE ${where.join(' AND ')}
+        SELECT p.id ${metric==='condenacoes'?`,${judicial!.known} AS "judicialKnown",${judicial!.finalCount} AS "judicialFinal"`:''}
+        ${metric==='processos'?`,${proceedings!.known} AS "proceedingsKnown",${proceedings!.count} AS "proceedingsCount"`:''}
+        FROM politicos p ${judicial?.joins??''} ${proceedings?.joins??''} WHERE ${where.join(' AND ')} ${prisonOnly?`AND ${judicial!.prisons}>0`:''}
       ), ${financial}, despesas_filtradas AS (
         SELECT d.politico_id, SUM(d.valor_liquido) AS total_despesas
         FROM financial_rows d
@@ -1052,6 +1090,8 @@ app.get('/api/politicos/ranking', async (req, res) => {
       ), pagina AS (
       SELECT
         p.id::text AS id,
+        ${metric==='condenacoes'?'f."judicialKnown",f."judicialFinal",':''}
+        ${metric==='processos'?'f."proceedingsKnown",f."proceedingsCount",':''}
         p.nome,
         p.sigla_partido AS partido,
         p.sigla_uf AS estado,
@@ -1102,6 +1142,8 @@ app.get('/api/politicos/ranking', async (req, res) => {
         p.atualizado_em,
         dsum.total_despesas,
         vcnt.total_votacoes
+        ${metric==='condenacoes'?',f."judicialKnown",f."judicialFinal"':''}
+        ${metric==='processos'?',f."proceedingsKnown",f."proceedingsCount"':''}
       ORDER BY ${orderBy}, p.id ASC
       LIMIT $${params.length + 1}
       OFFSET $${params.length + 2}
@@ -1115,13 +1157,15 @@ app.get('/api/politicos/ranking', async (req, res) => {
         (SELECT COUNT(*)::int FROM votos_deputados v INNER JOIN filtrados f ON f.id=v.politico_id) AS "totalVotacoes",
         EXISTS(SELECT 1 FROM votos_deputados) AS "votacoesDisponiveis",
         ${coverage} AS cobertura,
-        COALESCE((SELECT json_agg(pagina ORDER BY ${orderBy}, id::bigint ASC) FROM pagina), '[]'::json) AS items
+        COALESCE((SELECT json_agg(to_jsonb(pagina)-'judicialKnown'-'judicialFinal'-'proceedingsKnown'-'proceedingsCount' ORDER BY ${orderBy}, id::bigint ASC) FROM pagina), '[]'::json) AS items
       `,
       [...params, limit, offset],
     );
 
-    sendJson(res, 200, result.rows[0]);
+    const row=result.rows[0];
+    sendJson(res, 200, row);
   } catch(error) {
+    if(error instanceof JudicialError){sendJson(res,error.status,{error:error.message});return;}
     if(error instanceof ExpenseFilterError){sendJson(res,400,{error:error.message});return;}
     sendJson(res, 500, {error: 'Erro ao processar requisição'});
   }
@@ -1970,7 +2014,7 @@ app.get('/api/politicos', async (req, res) => {
       params,
     );
 
-    sendJson(res, 200, {items: result.rows});
+    sendJson(res, 200, {items: await attachJudicialSummaries(pool,result.rows)});
   } catch {
     sendJson(res, 500, {error: 'Erro ao processar requisição'});
   }
@@ -2089,7 +2133,7 @@ app.get('/api/politicos/:politicoId', async (req, res) => {
       redesSociais: parseJsonStringArray(redesSociaisRaw),
     };
 
-    sendJson(res, 200, {politico});
+    sendJson(res, 200, {politico:(await attachJudicialSummaries(pool,[politico]))[0]});
   } catch {
     sendJson(res, 500, {error: 'Erro ao processar requisição'});
   }
@@ -2795,8 +2839,9 @@ app.post('/api/admin/ingestion/run', async (req, res) => {
     }
     await releaseStaleIngestionCheckpoints();
 
-    const from = parseIsoDateInput(req.body?.from, '2016-01-01');
-    const to = parseIsoDateInput(req.body?.to, '2020-12-31');
+    const defaultPeriod = getDefaultIngestionPeriod();
+    const from = parseIsoDateInput(req.body?.from, defaultPeriod.from);
+    const to = parseIsoDateInput(req.body?.to, defaultPeriod.to);
     const datasets = parseDatasetList(req.body?.datasets);
     const window = 'month';
     const concurrency = 2;
@@ -3024,6 +3069,7 @@ app.post('/api/admin/database/clear', async (req, res) => {
 });
 
 attachJudicialRoutes(app,pool,requireAdminAuthorization,catalogEvents);
+attachJudicialIngestionRoutes(app,pool,requireAdminAuthorization);
 
 app.use((req, res) => {
   if (req.path.startsWith('/api/')) {

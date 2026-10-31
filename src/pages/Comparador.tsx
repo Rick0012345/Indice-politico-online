@@ -15,8 +15,11 @@ import {
 } from '../lib/indicadores';
 import {Avatar} from '../components/DataBits';
 import {fetchCatalogJson} from '../lib/catalogResource';
+import type {JudicialSummary} from '../lib/judicialTypes';
+import {judicialAttributeValues, proceedingCoverageText} from '../components/judicial/JudicialAttributes';
+import {PrisonHistory} from '../components/judicial/JudicialDetails';
 
-type Perfil = CompareEntry & {notaMedia: number | null; totalAvaliacoes: number | null; ativo?: boolean | null};
+type Perfil = CompareEntry & {notaMedia: number | null; totalAvaliacoes: number | null; ativo?: boolean | null; judicial?: JudicialSummary};
 
 type Concordancia = {
   total: number;
@@ -190,6 +193,7 @@ export const Comparador = () => {
         notaMedia: typeof p.notaMedia === 'number' ? p.notaMedia : null,
         totalAvaliacoes: typeof p.totalAvaliacoes === 'number' ? p.totalAvaliacoes : null,
         ativo: typeof p.ativo === 'boolean' ? p.ativo : null,
+        judicial: p.judicial as JudicialSummary | undefined,
       };
       if (signal.aborted) return;
       setPerfis(current => new Map(current).set(id, perfil));
@@ -420,6 +424,20 @@ export const Comparador = () => {
                 </tr>
               </thead>
               <tbody>
+                {[...judicialAttributeValues(), {id: 'prisonHistory', label: 'Histórico de prisão', value: '', proceedings: false}].map(attribute => (
+                  <tr key={attribute.id} className="border-t border-slate-100 dark:border-slate-800">
+                    <th scope="row" className="px-5 py-3.5 align-top"><span className="block text-sm font-medium text-slate-800 dark:text-slate-200">{attribute.label}</span><span className="text-xs font-normal text-slate-500 dark:text-slate-400">Escopo pesquisado; não altera a nota</span></th>
+                    {ids.map(id => {
+                      const summary = perfis.get(id)?.judicial;
+                      return <td key={id} className="border-l border-slate-100 px-5 py-3.5 align-top text-sm text-slate-900 dark:border-slate-800 dark:text-slate-50">
+                        {!perfis.has(id) && perfilStates.get(id) !== 'error' ? 'Carregando...' : attribute.id === 'prisonHistory' ? summary ? <PrisonHistory summary={summary}/> : 'Indisponível' : judicialAttributeValues(summary).find(item => item.id === attribute.id)?.value ?? 'Indisponível'}
+                        {summary && <span className="mt-1 block text-xs text-slate-500 dark:text-slate-400">{attribute.proceedings ? proceedingCoverageText(summary.proceedings) : summary.coverage.status === 'PARTIAL' ? 'Pesquisa parcial' : summary.coverage.status === 'REVIEWED' ? 'Pesquisa revisada' : 'Pesquisa não realizada'}</span>}
+                        <Link to={`/politico/${id}?tab=geral#historico-judicial`} className="mt-1 inline-flex min-h-11 items-center text-xs font-medium text-brand-700 underline dark:text-brand-300">Ver fontes</Link>
+                      </td>;
+                    })}
+                    {ids.length < COMPARE_LIMIT && <td className="border-l border-slate-100 dark:border-slate-800"/>}
+                  </tr>
+                ))}
                 {linhas.map((linha) => {
                   const numeric = linha.values.filter((v): v is number => v != null);
                   const best =

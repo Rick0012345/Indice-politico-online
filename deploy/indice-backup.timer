@@ -1,0 +1,10 @@
+[Unit]
+Description=Backup diario do Indice Politico
+
+[Timer]
+OnCalendar=*-*-* 04:30:00 America/Sao_Paulo
+RandomizedDelaySec=300
+Persistent=true
+
+[Install]
+WantedBy=timers.target

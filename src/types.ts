@@ -1,3 +1,5 @@
+import type {JudicialSummary} from './lib/judicialTypes';
+
 export interface Votacao {
   id: string;
   projeto: string;
@@ -20,6 +22,7 @@ export interface Noticia {
 }
 
 export interface Politico {
+  judicial?: JudicialSummary;
   id: string;
   nome: string;
   partido: string;

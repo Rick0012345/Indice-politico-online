@@ -1,0 +1,13 @@
+[Unit]
+Description=Backup do Indice Politico
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh /opt/indice-politico/current/deploy/backup.sh
+Nice=10
+IOSchedulingClass=idle
+MemoryMax=512M
+CPUQuota=50%
+UMask=0077

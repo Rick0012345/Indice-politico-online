@@ -6,3 +6,8 @@ coverage/
 *.log
 .env*
 !.env.example
+output/deployment-contabo/
+/output/
+/logs/
+/.playwright-cli/
+/backups/
