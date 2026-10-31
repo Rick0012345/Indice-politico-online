@@ -31,14 +31,16 @@ export const createCancellationGuard = <Args extends unknown[]>(isCancelled: (..
 };
 
 // The dedicated connection owns the session lock until all workers have drained.
-export const acquireIngestionLock = async (pool: Pick<Pool, 'connect'>): Promise<{release(): Promise<void>} | null> => {
+export const acquireIngestionLock = async (pool: Pick<Pool, 'connect'>): Promise<{pid?:number;release(): Promise<void>} | null> => {
   const client = await pool.connect();
+  let pid:number|undefined;
   try {
-    const result = await client.query('SELECT pg_try_advisory_lock($1) AS acquired', [ingestionLockKey]);
+    const result = await client.query('SELECT pg_try_advisory_lock($1) AS acquired, pg_backend_pid() AS pid', [ingestionLockKey]);
     if (!result.rows[0]?.acquired) { client.release(); return null; }
+    pid=Number(result.rows[0]?.pid)||undefined;
   } catch (error) { client.release(true); throw error; }
   let released = false;
-  return {release: async () => {
+  return {pid,release: async () => {
     if (released) return;
     released = true;
     try { await client.query('SELECT pg_advisory_unlock($1)', [ingestionLockKey]); client.release(); }
@@ -46,9 +48,9 @@ export const acquireIngestionLock = async (pool: Pick<Pool, 'connect'>): Promise
   }};
 };
 
-export const runIngestion = async (pool: Pick<Pool, 'connect'>, dryRun: boolean, execute: () => Promise<void>) => {
+export const runIngestion = async (pool: Pick<Pool, 'connect'>, dryRun: boolean, execute: (owner:{pid?:number}) => Promise<void>) => {
   if (dryRun) return;
   const lock = await acquireIngestionLock(pool);
   if (!lock) throw new Error('Outra ingestão ou limpeza está em andamento.');
-  try { await execute(); } finally { await lock.release(); }
+  try { await execute({pid:lock.pid}); } finally { await lock.release(); }
 };

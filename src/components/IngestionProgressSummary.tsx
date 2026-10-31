@@ -2,17 +2,20 @@ import React from 'react';
 import {Activity, AlertCircle, Clock} from 'lucide-react';
 import {formatPercent, getIngestionStatus, type IngestionExecution, type IngestionProgress} from '../lib/ingestionProgress';
 import {cn} from '../lib/utils';
+import type {IngestionRunProgress} from '../lib/ingestionRunTypes';
+import {CurrentIngestionRun} from './CurrentIngestionRun';
 
 type Props = {
   progress: IngestionProgress;
   execution: IngestionExecution | null;
   lastUpdatedAt: Date | null;
   error: string | null;
+  currentRun?: IngestionRunProgress | null;
 };
 
 const number = (value: number) => value.toLocaleString('pt-BR');
 
-export const IngestionProgressSummary = ({progress, execution, lastUpdatedAt, error}: Props) => {
+export const IngestionProgressSummary = ({progress, execution, lastUpdatedAt, error, currentRun = null}: Props) => {
   const status = error
     ? {label: 'Status desatualizado', tone: 'warning', detail: lastUpdatedAt ? 'Não foi possível consultar a ingestão. Os números abaixo são da última leitura válida.' : 'Não foi possível consultar a ingestão. Aguardando uma leitura válida.'}
     : !lastUpdatedAt
@@ -30,17 +33,19 @@ export const IngestionProgressSummary = ({progress, execution, lastUpdatedAt, er
 
   return (
     <section aria-label="Resumo da ingestão" className="min-w-0 rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-950">
-      <div className="flex items-start gap-2.5">
+      <CurrentIngestionRun currentRun={currentRun} stale={Boolean(error) || !lastUpdatedAt} />
+      <div className="mt-4 flex items-start gap-2.5">
         <StatusIcon size={19} aria-hidden="true" className={cn('mt-0.5 shrink-0', status.tone === 'warning' ? 'text-amber-700 dark:text-amber-400' : status.tone === 'active' ? 'text-blue-700 dark:text-blue-400' : 'text-slate-500 dark:text-slate-400')} />
         <div className="min-w-0">
+          <p className="mb-1 text-xs text-slate-600 dark:text-slate-300">Situação geral da fila</p>
           <p role="status" className="text-sm font-semibold text-slate-900 dark:text-slate-50">{status.label}</p>
           <p className="mt-1 text-xs leading-5 text-slate-600 dark:text-slate-300">{status.detail}</p>
         </div>
       </div>
 
       {lastUpdatedAt && (
-        <div className="mt-5 border-t border-slate-200 pt-4 dark:border-slate-800">
-          <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-50">Tarefas acumuladas na base</h3>
+        <details className="mt-5 border-t border-slate-200 pt-4 dark:border-slate-800">
+          <summary className="min-h-11 cursor-pointer text-sm font-semibold text-slate-900 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-blue-600 dark:text-slate-50">Tarefas acumuladas na base</summary>
           <p className="mt-1 text-xs leading-5 text-slate-600 dark:text-slate-300">Todos os conjuntos e períodos já registrados. As datas e categorias de Nova coleta não filtram estes totais.</p>
           <div className="mb-2 mt-3 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 tabular-nums">
             <span className="text-sm font-semibold text-slate-900 dark:text-slate-50">{number(progress.done)} de {number(progress.total)} tarefas concluídas</span>
@@ -58,7 +63,7 @@ export const IngestionProgressSummary = ({progress, execution, lastUpdatedAt, er
             ))}
           </dl>
           <p className="mt-3 text-xs leading-5 text-slate-600 dark:text-slate-300">Com registros + sem registros = concluídas. Uma consulta sem registros não é uma falha. Canceladas ficam fora deste total.</p>
-        </div>
+        </details>
       )}
 
       <div className="mt-4 border-t border-slate-200 pt-3 text-xs leading-5 text-slate-600 dark:border-slate-800 dark:text-slate-300">

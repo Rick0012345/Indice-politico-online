@@ -18,6 +18,13 @@ describe('contratos de ingestão', () => {
     await runIngestion({connect} as any, true, execute);
     expect(connect).not.toHaveBeenCalled(); expect(execute).not.toHaveBeenCalled();
   });
+  it('expõe o PID da sessão dona do lock para identificar a execução correta', async () => {
+    const query=vi.fn().mockResolvedValue({rows:[{acquired:true,pid:321}]});
+    let owner:unknown;
+    await runIngestion({connect:async()=>({query,release:vi.fn()})} as any,false,async lock=>{owner=lock.pid;});
+    expect(owner).toBe(321);
+    expect(query.mock.calls[0][0]).toContain('pg_backend_pid()');
+  });
   it('mantém lock na sessão até release e devolve conexão quando ocupado', async () => {
     const query = vi.fn().mockResolvedValueOnce({rows:[{acquired:true}]}).mockResolvedValue({rows:[]});
     const release = vi.fn(); const client = {query,release};

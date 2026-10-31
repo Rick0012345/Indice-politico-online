@@ -1,6 +1,10 @@
 // @vitest-environment node
 import {randomUUID} from 'node:crypto';
 import {readFileSync} from 'node:fs';
+import {mkdtemp,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {loadCurrentIngestionRun} from './ingestionRun';
 import {Pool} from 'pg';
 import {afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest';
 import {claimExpenseBatch,runExpenseBatch,type ExpenseCheckpoint} from './expenseBatch';
@@ -10,6 +14,7 @@ describe.skipIf(!databaseUrl)('worker de despesas com PostgreSQL real e HTTP con
   const schema = `pipeline_${randomUUID().replaceAll('-', '')}`;
   const database = new Pool({connectionString: databaseUrl});
   let url: string;
+  let runDirectory:string;
   const argv = process.argv;
   const expense = (codDocumento: number) => ({codDocumento, ano: 2026, mes: 1, valorDocumento: 10, valorLiquido: 10});
   const response = (dados: unknown[], next = false) => ({ok: true, status: 200, json: async () => ({dados, links: next ? [{rel: 'next'}] : []})}) as Response;
@@ -34,6 +39,8 @@ describe.skipIf(!databaseUrl)('worker de despesas com PostgreSQL real e HTTP con
     url = parsed.toString();
   });
   beforeEach(async () => {
+    runDirectory=await mkdtemp(join(tmpdir(),'ingestion-pipeline-run-'));
+    vi.stubEnv('INGESTION_RUN_DIR',runDirectory);
     await database.query(`TRUNCATE ${schema}.despesas, ${schema}.camara_api_raw_items, ${schema}.ingestion_checkpoints, ${schema}.politicos`);
     await database.query(`INSERT INTO ${schema}.politicos (id,nome,sigla_partido,sigla_uf,id_legislatura) VALUES (900001,'Pessoa sintética','TST','SP',57)`);
     vi.stubEnv('DATABASE_URL', url);
@@ -43,7 +50,7 @@ describe.skipIf(!databaseUrl)('worker de despesas com PostgreSQL real e HTTP con
     vi.spyOn(console, 'error').mockImplementation(() => {});
     process.exitCode = 0;
   });
-  afterEach(() => {process.argv = argv; process.exitCode = 0; vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs();});
+  afterEach(async () => {process.argv = argv; process.exitCode = 0; vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs();if(runDirectory)await rm(runDirectory,{recursive:true,force:true});});
   afterAll(async () => {await database.query(`DROP SCHEMA ${schema} CASCADE`); await database.end();});
   const run = async (flags = ['--reset-failed'],from='2026-01-01',to='2026-01-31',concurrency=1,maxAttempts=1) => {
     vi.resetModules();
@@ -52,6 +59,22 @@ describe.skipIf(!databaseUrl)('worker de despesas com PostgreSQL real e HTTP con
     const worker = await import('../ingest-agent');
     await worker.ingestionRun;
   };
+
+  it('registra o escopo real enquanto processa e congela o resultado antes de liberar a execução',async()=>{
+    let finish!:(value:Response)=>void;
+    vi.mocked(fetch).mockImplementation(()=>new Promise(resolve=>{finish=resolve;}));
+    const running=run(['--reset-failed'],'2026-01-01','2026-02-28');
+    const scope=new Pool({connectionString:url});
+    try{
+      await vi.waitFor(()=>expect(fetch).toHaveBeenCalledTimes(1));
+      expect(await loadCurrentIngestionRun(scope,runDirectory)).toMatchObject({status:'running',currentDataset:'despesas',estimatedTotal:2,completed:0,remaining:2,notCreated:0,estimationComplete:true});
+      finish(response([expense(901)]) as Response);await running;
+      expect(process.exitCode,vi.mocked(console.error).mock.calls.flat().join('\n')).toBe(0);
+      expect(await loadCurrentIngestionRun(scope,runDirectory)).toMatchObject({status:'completed',estimatedTotal:2,completed:2,reused:0,remaining:0,percent:100});
+      await scope.query("UPDATE ingestion_checkpoints SET status='failed'");
+      expect(await loadCurrentIngestionRun(scope,runDirectory)).toMatchObject({status:'completed',completed:2,remaining:0});
+    }finally{if(finish)finish(response([]) as Response);await running;await scope.end();}
+  },20000);
 
   it('falha na página 2 preserva a página 1 e retoma sem buscá-la ou duplicá-la', async () => {
     vi.mocked(fetch).mockImplementation(async input => new URL(String(input)).searchParams.get('pagina') === '1'

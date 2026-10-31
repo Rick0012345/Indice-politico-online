@@ -23,6 +23,32 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe('planejamento por execução no admin',()=>{
+  it('acompanha a coleta recebida do servidor sem trocar seu escopo pelas escolhas do formulário',async()=>{
+    vi.useFakeTimers({toFake:['setInterval','clearInterval']});
+    window.sessionStorage.setItem('admin_api_token','token-atual');
+    let completed=25;
+    vi.stubGlobal('fetch',vi.fn(async input=>{
+      if(!String(input).endsWith('/summary'))return successfulResponse(input);
+      const counts={estimatedTotal:100,completed,reused:10,remaining:100-completed,running:0,pending:100-completed,failed:0,cancelled:0,notCreated:0,percent:completed};
+      return json({checkpoints:[{dataset:'despesas',status:'done',total:77003,emptyTotal:34791}],periods:[],execution:{processActive:true,maintenanceActive:true},currentRun:{...counts,id:'run-servidor',from:'2026-01-01',to:'2026-01-31',datasets:['despesas'],startedAt:'2026-10-31T12:00:00Z',updatedAt:'2026-10-31T12:00:00Z',finishedAt:null,status:'running',currentDataset:'despesas',estimationComplete:true,byDataset:[{...counts,dataset:'despesas',stage:'running'}]}});
+    }));
+    render(<Admin/>);
+    const current=await screen.findByRole('region',{name:'Execução atual'});
+    await waitFor(()=>expect(current).toHaveTextContent('25 de 100 tarefas concluídas'));
+    expect(current).toHaveTextContent('75 restantes');
+    expect(within(current).getByRole('progressbar',{name:'Progresso da ingestão atual'})).toHaveAttribute('aria-valuenow','25');
+    fireEvent.change(screen.getByLabelText('Inicio'),{target:{value:'2020-01-01'}});
+    fireEvent.click(screen.getByRole('button',{name:'Votações'}));
+    expect(current).toHaveTextContent('01/01/2026 a 31/01/2026');
+    expect(current).toHaveTextContent('Coletas selecionadas: Despesas');
+    completed=50;
+    await act(async()=>{await vi.advanceTimersByTimeAsync(5000);});
+    expect(current).toHaveTextContent('50 de 100 tarefas concluídas');
+    expect(current).toHaveTextContent('50 restantes');
+  });
+});
+
 describe('autorização administrativa', () => {
   it('preenche o período suportado até hoje e acompanha a virada do dia em Brasília', async () => {
     vi.useFakeTimers({toFake:['Date']});

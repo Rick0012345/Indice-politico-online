@@ -20,6 +20,7 @@ import {getGroqModelValidationError} from '../lib/aiSettings';
 import {cn} from '../lib/utils';
 import {JudicialAdmin} from '../components/judicial/JudicialAdmin';
 import {IngestionProgressSummary} from '../components/IngestionProgressSummary';
+import type {IngestionRunProgress} from '../lib/ingestionRunTypes';
 import {formatPercent, summarizeCheckpointProgress, type CheckpointSummary, type IngestionExecution} from '../lib/ingestionProgress';
 import {getDefaultIngestionPeriod, INGESTION_SUPPORTED_FROM} from '../lib/ingestionPeriod';
 
@@ -369,6 +370,7 @@ const AdminPanel = ({adminFetch, onSignOut}: {
   const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
   const [summaryError, setSummaryError] = useState<string | null>(null);
   const [execution, setExecution] = useState<IngestionExecution | null>(null);
+  const [currentRun,setCurrentRun]=useState<IngestionRunProgress|null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [logFile, setLogFile] = useState<string | null>(null);
   const [logText, setLogText] = useState('');
@@ -396,6 +398,7 @@ const AdminPanel = ({adminFetch, onSignOut}: {
       setCheckpoints(data.checkpoints ?? []);
       setPeriods(data.periods ?? []);
       setExecution(data.execution ?? null);
+      setCurrentRun(data.currentRun??null);
       setSummaryError(null);
       setLastUpdatedAt(new Date());
     } catch (error) {
@@ -659,7 +662,7 @@ const AdminPanel = ({adminFetch, onSignOut}: {
 
         {(activeSection === 'coleta' || activeSection === 'progresso') && (
           <div className="mb-6">
-            <IngestionProgressSummary progress={overallProgress} execution={execution} lastUpdatedAt={lastUpdatedAt} error={summaryError} />
+            <IngestionProgressSummary progress={overallProgress} execution={execution} lastUpdatedAt={lastUpdatedAt} error={summaryError} currentRun={currentRun} />
           </div>
         )}
 

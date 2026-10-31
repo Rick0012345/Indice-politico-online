@@ -6,6 +6,8 @@ import {claimExpenseBatch,runExpenseBatch,ExpenseBatchHandledError,ExpenseBatchC
 import {createHttpRateLimiter} from './lib/ingestionRateLimiter';
 import {getDefaultIngestionPeriod} from './lib/ingestionPeriod';
 import {seedCheckpointBatch, type CheckpointSeed} from './lib/ingestionSeeds';
+import {buildWindows,yearsForRange,legislaturesForYears} from './lib/ingestionPlan';
+import {createIngestionTracker} from './lib/ingestionRun';
 import {upsertRawBatch, type RawItemUpsert} from './lib/rawPersistence';
 import {iteratePages, commitCheckpointPage} from './lib/ingestionPages';
 import {votePresentationAssignments} from './lib/votePresentationPersistence';
@@ -28,6 +30,7 @@ type Dataset =
   | 'proposicoes'
   | 'referencias';
 type CheckpointStatus = 'pending' | 'running' | 'done' | 'failed';
+let ingestionTracker:Awaited<ReturnType<typeof createIngestionTracker>>|null=null;
 
 type CliOptions = {
   from: string;
@@ -317,54 +320,6 @@ const parseArgs = (): CliOptions => {
     resetEmpty: args.includes('--reset-empty'),
     dryRun: args.includes('--dry-run'),
   };
-};
-
-const toDateOnly = (date: Date) => date.toISOString().slice(0, 10);
-
-const addMonths = (date: Date, months: number) => {
-  const next = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + months, 1));
-  return next;
-};
-
-const endOfPreviousDay = (date: Date) => {
-  const next = new Date(date);
-  next.setUTCDate(next.getUTCDate() - 1);
-  return next;
-};
-
-const buildWindows = (from: string, to: string, mode: CliOptions['window']) => {
-  const step = mode === 'year' ? 12 : mode === 'quarter' ? 3 : 1;
-  const end = new Date(`${to}T00:00:00.000Z`);
-  const windows: Array<{start: string; end: string}> = [];
-  let cursor = new Date(`${from}T00:00:00.000Z`);
-
-  while (cursor <= end) {
-    const nextStart = addMonths(cursor, step);
-    const windowEnd = endOfPreviousDay(nextStart);
-    windows.push({
-      start: toDateOnly(cursor),
-      end: toDateOnly(windowEnd > end ? end : windowEnd),
-    });
-    cursor = nextStart;
-  }
-
-  return windows;
-};
-
-const yearsForRange = (from: string, to: string) => {
-  const startYear = new Date(`${from}T00:00:00.000Z`).getUTCFullYear();
-  const endYear = new Date(`${to}T00:00:00.000Z`).getUTCFullYear();
-  return Array.from({length: endYear - startYear + 1}, (_, index) => startYear + index);
-};
-
-const legislaturesForYears = (years: number[]) => {
-  const ids = new Set<number>();
-  for (const year of years) {
-    if (year >= 2015 && year <= 2018) ids.add(55);
-    if (year >= 2019 && year <= 2022) ids.add(56);
-    if (year >= 2023 && year <= 2026) ids.add(57);
-  }
-  return [...ids];
 };
 
 const numberOrNull = (value: unknown) => {
@@ -1882,6 +1837,7 @@ const runCheckpointWorkers = async (
     items_count?: number;
   }) => Promise<number | ExpenseBatchResult>,
 ) => {
+  await ingestionTracker?.seeded(dataset);
   const unresolvedFailures = new Map<string, string>();
   let fatalCleanup: ExpenseBatchCleanupError | undefined;
   const worker = async () => {
@@ -1970,10 +1926,13 @@ const runCheckpointWorkers = async (
   if (unresolvedFailures.size) {
     throw new Error(`Ingestão incompleta: ${unresolvedFailures.size} checkpoint(s) de ${dataset} falharam após as tentativas: ${[...unresolvedFailures.values()].slice(0, 3).join('; ')}`);
   }
+  await ingestionTracker?.completedDataset(dataset);
 };
 
 const seedExpenseCheckpoints = async (options: CliOptions) => {
+  await ingestionTracker?.beginDataset('despesas');
   const politicoIds = await getPoliticoIdsForRange(options.from, options.to);
+  await ingestionTracker?.refreshPoliticians(politicoIds);
   const windows = buildWindows(options.from, options.to, 'month');
   let batch: CheckpointSeed[] = [];
   const flush = async () => {
@@ -1992,6 +1951,7 @@ const seedExpenseCheckpoints = async (options: CliOptions) => {
 };
 
 const seedVoteCheckpoints = async (options: CliOptions) => {
+  await ingestionTracker?.beginDataset('votacoes');
   const windows = buildWindows(options.from, options.to, options.window);
   for (const window of windows) {
     await seedCheckpoint(
@@ -2008,6 +1968,7 @@ const seedVoteCheckpoints = async (options: CliOptions) => {
 };
 
 const seedDeputyCheckpoints = async (options: CliOptions) => {
+  await ingestionTracker?.beginDataset('deputados');
   const legislatures = legislaturesForYears(yearsForRange(options.from, options.to));
   for (const legislature of legislatures) {
     await seedCheckpoint(
@@ -2024,6 +1985,7 @@ const seedDeputyCheckpoints = async (options: CliOptions) => {
 };
 
 const seedSingleCheckpoint = async (dataset: Dataset, options: CliOptions) => {
+  await ingestionTracker?.beginDataset(dataset);
   await seedCheckpoint(
     dataset,
     '',
@@ -2037,6 +1999,7 @@ const seedSingleCheckpoint = async (dataset: Dataset, options: CliOptions) => {
 };
 
 const seedWindowCheckpoints = async (dataset: Dataset, options: CliOptions) => {
+  await ingestionTracker?.beginDataset(dataset);
   const windows = buildWindows(options.from, options.to, options.window);
   for (const window of windows) {
     await seedCheckpoint(
@@ -2065,7 +2028,10 @@ const run = async () => {
     return;
   }
 
-  await runIngestion(pool, options.dryRun, async () => {
+  await runIngestion(pool, options.dryRun, async ({pid}) => {
+    const ids=options.datasets.includes('despesas')?await getPoliticoIdsForRange(options.from,options.to):[];
+    ingestionTracker=pid?await createIngestionTracker(pool,options,pid,undefined,ids):null;
+    try {
     await releaseStaleCheckpoints(options.staleMinutes);
 
     if (options.datasets.includes('deputados')) {
@@ -2075,6 +2041,7 @@ const run = async () => {
       );
       const reconciled = await reconcilePendingVotes();
       if (reconciled > 0) writeLog('log', `[reconcile] ${reconciled} voto(s) pendente(s) incorporado(s)`);
+      if(options.datasets.includes('despesas'))await ingestionTracker?.refreshPoliticians(await getPoliticoIdsForRange(options.from,options.to));
     }
 
     if (options.datasets.includes('proposicoes')) {
@@ -2175,6 +2142,11 @@ const run = async () => {
       await seedSingleCheckpoint('referencias', options);
       await runCheckpointWorkers('referencias', options, async () => ingestReferences());
     }
+    await ingestionTracker?.finish('completed');
+    } catch(error) {
+      await ingestionTracker?.finish(error instanceof IngestionCancelledError?'cancelled':'failed').catch(trackingError=>writeLog('error',`[planning] ${trackingError instanceof Error?trackingError.message:String(trackingError)}`));
+      throw error;
+    } finally {ingestionTracker=null;}
   });
 };
 
