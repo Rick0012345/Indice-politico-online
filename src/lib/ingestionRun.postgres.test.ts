@@ -19,6 +19,7 @@ describe.skipIf(!url)('planejamento e execução com PostgreSQL isolado',()=>{
     const connection=new URL(url!);connection.searchParams.set('options',`-c search_path=${schema},public`);
     pool=new Pool({connectionString:connection.toString()});
     await pool.query(`CREATE TABLE ingestion_checkpoints(id uuid DEFAULT gen_random_uuid(),source text,dataset text,entity_id text,period_start date,period_end date,status text,items_count int DEFAULT 0)`);
+    await pool.query('CREATE UNIQUE INDEX checkpoints_scope_key ON ingestion_checkpoints(source,dataset,entity_id,period_start,period_end)');
     directory=await mkdtemp(join(tmpdir(),'run-progress-pg-'));
   });
   beforeEach(async()=>{await pool.query('TRUNCATE ingestion_checkpoints');});
@@ -61,4 +62,22 @@ describe.skipIf(!url)('planejamento e execução com PostgreSQL isolado',()=>{
       expect(await loadCurrentIngestionRun(pool,directory)).toMatchObject({status:'interrupted'});
     }finally{await second?.release();await other.end();}
   });
+  it('mede o plano de 1252 políticos por142 meses com e sem reconsulta de vazios',async()=>{
+    await pool.query(`INSERT INTO ingestion_checkpoints(source,dataset,entity_id,period_start,period_end,status,items_count)
+      SELECT 'camara','despesas',person::text,month::date,(month+INTERVAL '1 month - 1 day')::date,'done',CASE WHEN person%3=0 THEN 0 ELSE 1 END
+      FROM generate_series(1,1252) person CROSS JOIN generate_series('2015-01-01'::date,'2026-10-01'::date,INTERVAL '1 month') month
+      ORDER BY month,person LIMIT 77003`);
+    await pool.query('ANALYZE ingestion_checkpoints');
+    const lock=await acquireIngestionLock(pool);const measurements=[];
+    try{
+      for(const resetEmpty of [false,true]){
+        await createIngestionTracker(pool,{from:'2015-01-01',to:'2026-10-31',datasets:['despesas'],window:'month',resetEmpty},lock!.pid!,directory,Array.from({length:1252},(_,i)=>String(i+1)));
+        const start=performance.now();const result=await loadCurrentIngestionRun(pool,directory);const elapsedMs=performance.now()-start;
+        expect(result?.estimatedTotal).toBe(177784);expect(result?.remaining).toBe(177784-result!.completed);
+        if(resetEmpty)expect(result!.completed).toBeLessThan(77003);else expect(result!.completed).toBe(77003);
+        expect(elapsedMs).toBeLessThan(4000);measurements.push({resetEmpty,elapsedMs:Math.round(elapsedMs)});
+      }
+      console.log('INGESTION_PLAN_MEASUREMENT',JSON.stringify({plannedTasks:177784,existingTasks:77003,measurements}));
+    }finally{await lock?.release();}
+  },20000);
 });

@@ -21,11 +21,11 @@ WITH definitions AS (
   FROM definitions p CROSS JOIN LATERAL jsonb_array_elements_text(p."entityIds") e(value)
   CROSS JOIN LATERAL jsonb_array_elements(p.windows) w(value)
 ), existing AS (
-  SELECT c.*,CASE WHEN $4::boolean AND c.status='done' AND c.items_count=0 AND EXISTS (
-    SELECT 1 FROM planned p WHERE p.dataset=c.dataset AND p.entity_id=c.entity_id
-      AND p.period_start=c.period_start AND p.period_end=c.period_end AND NOT p.seeded
-  ) THEN 'pending' ELSE c.status END AS effective_status
+  SELECT c.*,CASE WHEN $4::boolean AND c.status='done' AND c.items_count=0 AND p.dataset IS NOT NULL
+    THEN 'pending' ELSE c.status END AS effective_status
   FROM ingestion_checkpoints c
+  LEFT JOIN planned p ON $4::boolean AND NOT p.seeded AND p.dataset=c.dataset AND p.entity_id=c.entity_id
+    AND p.period_start=c.period_start AND p.period_end=c.period_end
   WHERE c.source='camara' AND c.dataset IN (SELECT dataset FROM definitions)
     AND c.period_start >= $2::date AND c.period_end <= $3::date
 ), missing AS (
