@@ -62,18 +62,19 @@ describe.skipIf(!databaseUrl)('worker de despesas com PostgreSQL real e HTTP con
 
   it('registra o escopo real enquanto processa e congela o resultado antes de liberar a execução',async()=>{
     let finish!:(value:Response)=>void;
-    vi.mocked(fetch).mockImplementation(()=>new Promise(resolve=>{finish=resolve;}));
+    const firstResponse=new Promise<Response>(resolve=>{finish=resolve;});
+    vi.mocked(fetch).mockResolvedValue(response([])).mockImplementationOnce(()=>firstResponse);
     const running=run(['--reset-failed'],'2026-01-01','2026-02-28');
     const scope=new Pool({connectionString:url});
     try{
-      await vi.waitFor(()=>expect(fetch).toHaveBeenCalledTimes(1));
+      await vi.waitFor(()=>expect(fetch).toHaveBeenCalledTimes(1),{timeout:10000});
       expect(await loadCurrentIngestionRun(scope,runDirectory)).toMatchObject({status:'running',currentDataset:'despesas',estimatedTotal:2,completed:0,remaining:2,notCreated:0,estimationComplete:true});
       finish(response([expense(901)]) as Response);await running;
       expect(process.exitCode,vi.mocked(console.error).mock.calls.flat().join('\n')).toBe(0);
       expect(await loadCurrentIngestionRun(scope,runDirectory)).toMatchObject({status:'completed',estimatedTotal:2,completed:2,reused:0,remaining:0,percent:100});
       await scope.query("UPDATE ingestion_checkpoints SET status='failed'");
       expect(await loadCurrentIngestionRun(scope,runDirectory)).toMatchObject({status:'completed',completed:2,remaining:0});
-    }finally{if(finish)finish(response([]) as Response);await running;await scope.end();}
+    }finally{finish(response([]) as Response);await running;await scope.end();}
   },20000);
 
   it('falha na página 2 preserva a página 1 e retoma sem buscá-la ou duplicá-la', async () => {
