@@ -63,6 +63,18 @@ describe.skipIf(!databaseUrl)('totais do ranking no PostgreSQL', () => {
     return response.json();
   };
 
+  it('entrega o resumo da Home com os mesmos totais das rotas existentes', async () => {
+    const response = await fetch(`${base}/api/home/resumo`);
+    expect(response.status).toBe(200);
+    const data = await response.json();
+    expect(data.panorama).toEqual({total:55,totalCadastrados:60,totalDespesas:1555.40});
+    expect(typeof data.revision).toBe('string');
+    expect(data.estados).toEqual((await (await fetch(`${base}/api/estados/resumo?status=ativo`)).json()).items);
+    expect(data.partidos).toEqual((await (await fetch(`${base}/api/partidos/gastos?status=ativo&limit=40`)).json()).items);
+    expect(data).not.toHaveProperty('totalVotacoes');
+    expect(data).not.toHaveProperty('cobertura');
+  });
+
   it('conta o cadastro completo e o filtro antes da paginação', async () => {
     const data = await get('limit=50');
     expect(data.items).toHaveLength(50);

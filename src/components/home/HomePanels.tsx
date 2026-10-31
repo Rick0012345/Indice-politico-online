@@ -26,10 +26,12 @@ export const intFormat = new Intl.NumberFormat('pt-BR');
 const isFiniteNumber = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
 
 /* ------------------------------------------------------------------ */
-/* Panorama: KPIs reais vindos de /api/politicos/ranking               */
+/* Panorama, mapa e partidos compartilham uma consulta inicial.       */
 /* ------------------------------------------------------------------ */
 
 type Panorama = {total: number; totalCadastrados: number; totalDespesas: number};
+type HomeSummary = {panorama: Partial<Panorama>; estados: Array<Partial<EstadoResumo>>; partidos: Array<Partial<PartidoGasto>>};
+const HOME_SUMMARY_URL = '/api/home/resumo';
 
 export const PanoramaStrip: React.FC = () => {
   const [data, setData] = useState<Panorama | null>(null);
@@ -39,7 +41,8 @@ export const PanoramaStrip: React.FC = () => {
     const controller = new AbortController();
     (async () => {
       try {
-        const json = await fetchCatalogJson<Partial<Panorama>>('/api/politicos/ranking?view=summary&status=ativo', {signal: controller.signal});
+        const response = await fetchCatalogJson<HomeSummary>(HOME_SUMMARY_URL, {signal: controller.signal});
+        const json = response.panorama ?? {};
         if (controller.signal.aborted) return;
         if (isFiniteNumber(json.total) && isFiniteNumber(json.totalDespesas)) {
           setData({
@@ -179,9 +182,9 @@ export const BrazilTileMap: React.FC = () => {
     const controller = new AbortController();
     (async () => {
       try {
-        const json = await fetchCatalogJson<{items?: Array<Partial<EstadoResumo>>}>('/api/estados/resumo?status=ativo', {signal: controller.signal});
+        const json = await fetchCatalogJson<HomeSummary>(HOME_SUMMARY_URL, {signal: controller.signal});
         if (controller.signal.aborted) return;
-        const items = (json.items ?? []).filter(
+        const items = (json.estados ?? []).filter(
           (item): item is EstadoResumo =>
             typeof item.uf === 'string' &&
             item.uf.toUpperCase() in UF_TILES &&
@@ -362,10 +365,10 @@ export const PartySpendingBars: React.FC = () => {
     const controller = new AbortController();
     (async () => {
       try {
-        const json = await fetchCatalogJson<{items?: Array<Partial<PartidoGasto>>}>('/api/partidos/gastos?limit=40&status=ativo', {signal: controller.signal});
+        const json = await fetchCatalogJson<HomeSummary>(HOME_SUMMARY_URL, {signal: controller.signal});
         if (controller.signal.aborted) return;
         setItems(
-          (json.items ?? []).filter(
+          (json.partidos ?? []).filter(
             (item): item is PartidoGasto =>
               typeof item.partido === 'string' && isFiniteNumber(item.totalDespesas) && isFiniteNumber(item.totalPoliticos),
           ),
@@ -426,6 +429,10 @@ export const PartySpendingBars: React.FC = () => {
               </div>
             ))}
           </div>
+        ) : state === 'error' ? (
+          <p role="alert" className="py-12 text-center text-sm text-slate-600 dark:text-slate-400">
+            Não foi possível carregar os gastos por partido.
+          </p>
         ) : rows.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center rounded-xl border border-dashed border-slate-200 px-6 py-12 text-center dark:border-slate-700">
             <p className="text-sm font-semibold text-slate-900 dark:text-slate-50">Sem despesas por partido ainda</p>

@@ -1,4 +1,4 @@
-﻿import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
+import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {
   Activity,
   AlertCircle,
@@ -21,7 +21,7 @@ import {cn} from '../lib/utils';
 import {JudicialAdmin} from '../components/judicial/JudicialAdmin';
 import {IngestionProgressSummary} from '../components/IngestionProgressSummary';
 import type {IngestionRunProgress} from '../lib/ingestionRunTypes';
-import {formatPercent, summarizeCheckpointProgress, type CheckpointSummary, type IngestionExecution} from '../lib/ingestionProgress';
+import {formatPercent, getIngestionStatus, summarizeCheckpointProgress, type CheckpointSummary, type IngestionExecution} from '../lib/ingestionProgress';
 import {getDefaultIngestionPeriod, INGESTION_SUPPORTED_FROM} from '../lib/ingestionPeriod';
 
 type PopulatedPeriod = {
@@ -352,15 +352,7 @@ const AdminPanel = ({adminFetch, onSignOut}: {
       document.removeEventListener('visibilitychange', updateToday);
     };
   }, []);
-  const [selectedDatasets, setSelectedDatasets] = useState<string[]>([
-    'deputados',
-    'despesas',
-    'votacoes',
-    'legislaturas',
-    'partidos',
-    'orgaos',
-    'referencias',
-  ]);
+  const [selectedDatasets, setSelectedDatasets] = useState<string[]>([]);
   const [checkpoints, setCheckpoints] = useState<CheckpointSummary[]>([]);
   const [periods, setPeriods] = useState<PopulatedPeriod[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -371,6 +363,7 @@ const AdminPanel = ({adminFetch, onSignOut}: {
   const [summaryError, setSummaryError] = useState<string | null>(null);
   const [execution, setExecution] = useState<IngestionExecution | null>(null);
   const [currentRun,setCurrentRun]=useState<IngestionRunProgress|null>(null);
+  const [logsExecution, setLogsExecution] = useState<IngestionExecution | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [logFile, setLogFile] = useState<string | null>(null);
   const [logText, setLogText] = useState('');
@@ -415,6 +408,7 @@ const AdminPanel = ({adminFetch, onSignOut}: {
       if (!response.ok) throw new Error('HTTP');
       const data = await response.json();
       setLogFile(data.file ?? null);
+      setLogsExecution(data.execution ?? null);
       setLogText(data.log ?? '');
       setLogsTruncated(data.truncated === true);
       setLogStats(data.stats ?? defaultLogStats());
@@ -422,6 +416,8 @@ const AdminPanel = ({adminFetch, onSignOut}: {
       setCurrentStatus(Array.isArray(data.currentStatus) ? data.currentStatus : []);
       setLogTimeline(Array.isArray(data.timeline) ? data.timeline : []);
     } catch {
+      setLogsExecution(null);
+      setCurrentStatus([]);
       setLogsError('Não foi possível carregar os eventos recentes da ingestão. Tente atualizar os logs.');
     }
   }, [adminFetch]);
@@ -522,7 +518,8 @@ const AdminPanel = ({adminFetch, onSignOut}: {
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? 'Erro ao iniciar ingestao.');
-      setMessage(data.message ?? 'Ingestao iniciada.');
+      const confirmedDatasets = Array.isArray(data.datasets) ? data.datasets.map((id: string) => datasetOptions.find(option => option.id === id)?.label ?? id) : [];
+      setMessage(`${data.message ?? 'Ingestao iniciada.'}${confirmedDatasets.length > 0 ? ` Dados confirmados pelo servidor: ${confirmedDatasets.join(', ')}.` : ''}`);
       await refreshAdminData();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Erro ao iniciar ingestao.');
@@ -692,12 +689,14 @@ const AdminPanel = ({adminFetch, onSignOut}: {
 
               <div>
                 <span className="text-sm font-bold text-slate-700 dark:text-slate-200">Dados</span>
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Seleção múltipla: escolha um ou mais conjuntos de dados para coletar.</p>
                 <div className="mt-2 grid grid-cols-3 gap-2">
                   {datasetOptions.map((dataset) => (
                     <button
                       key={dataset.id}
                       type="button"
                       onClick={() => toggleDataset(dataset.id)}
+                      aria-pressed={selectedDatasets.includes(dataset.id)}
                       className={cn(
                         'rounded-lg px-3 py-2 text-xs font-semibold ring-1 ring-inset transition',
                         selectedDatasets.includes(dataset.id)
@@ -709,6 +708,7 @@ const AdminPanel = ({adminFetch, onSignOut}: {
                     </button>
                   ))}
                 </div>
+                <p className="mt-2 text-xs font-semibold text-slate-600 dark:text-slate-300">{selectedDatasets.length > 0 ? `Selecionados: ${datasetOptions.filter(dataset => selectedDatasets.includes(dataset.id)).map(dataset => dataset.label).join(', ')}` : 'Nenhum conjunto selecionado.'}</p>
               </div>
 
               <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-slate-200 p-3 text-sm text-slate-700 dark:border-slate-700 dark:text-slate-300">
@@ -896,7 +896,7 @@ const AdminPanel = ({adminFetch, onSignOut}: {
                   </div>
                   <div className="rounded-lg bg-slate-50 p-3 dark:bg-slate-950">
                     <div className="text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">
-                      Em andamento
+                      Progresso no log
                     </div>
                     <div className="mt-2 text-xl font-semibold tabular-nums text-blue-700 dark:text-blue-300">
                       {formatNumber(logStats.progressItems)}
@@ -942,7 +942,7 @@ const AdminPanel = ({adminFetch, onSignOut}: {
                     <div className="rounded-lg border border-slate-200 px-3 py-2 dark:border-slate-700">
                       Ultima atividade:{' '}
                       {logStats.lastActivityAt
-                        ? new Date(logStats.lastActivityAt).toLocaleTimeString('pt-BR')
+                        ? new Date(logStats.lastActivityAt).toLocaleString('pt-BR')
                         : 'sem timestamp'}
                     </div>
                   </div>
@@ -954,19 +954,17 @@ const AdminPanel = ({adminFetch, onSignOut}: {
                   </div>
                 )}
 
-                <div className="mb-5 rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-950">
+                <div role="region" aria-label="Status operacional dos logs" className="mb-5 rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-950">
                   <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                     <div>
                       <div className="text-sm font-semibold text-slate-900 dark:text-slate-50">
                         Status operacional
                       </div>
                       <div className="text-xs font-bold text-slate-500 dark:text-slate-400">
-                        {currentStatus.length > 0
-                          ? `${formatNumber(currentStatus.length)} fluxo(s) ativo(s) agora`
-                          : logEvents.length > 0
-                            ? 'Sem processo ativo; exibindo historico recente abaixo'
-                            : 'Aguardando eventos da ingestao ou da IA'}
+                        {getIngestionStatus(overallProgress, logsExecution).label}
                       </div>
+                      <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{getIngestionStatus(overallProgress, logsExecution).detail}</p>
+                      <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Histórico recente: o arquivo e os eventos abaixo não comprovam uma coleta em execução.</p>
                     </div>
                     <div className="inline-flex items-center gap-2 rounded-full bg-white px-3 py-1 text-xs font-semibold text-slate-500 ring-1 ring-slate-200 dark:bg-slate-900 dark:text-slate-300 dark:ring-slate-700">
                       <RefreshCw size={13} className={cn(isLoading && 'animate-spin')} />
