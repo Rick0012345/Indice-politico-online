@@ -15,10 +15,12 @@ import {judicialRankingSql,proceedingRankingSql} from './lib/judicialQueries';
 import {judicialCategories,type JudicialCategory} from './lib/judicialTypes';
 import {JudicialError} from './lib/judicialRules';
 import {buildProgressiveRankingQuery,expenseYearsQuery} from './lib/rankingQueries';
+import {homeSummaryQuery} from './lib/homeSummary';
 import {startCatalogListener} from './lib/catalogListener';
 import {getGroqModelValidationError} from './lib/aiSettings';
 import {getDefaultIngestionPeriod} from './lib/ingestionPeriod';
 import {acquireIngestionLock, loadIngestionExecution} from './lib/ingestionLifecycle';
+import type {IngestionExecution} from './lib/ingestionProgress';
 import {resolveGroqSettings, type GroqSettings} from './lib/groqSettings';
 import {buildExpenseQuery,ExpenseFilterError,parseExpenseFilters,expenseScopeSql,expenseFinancialRowsCtes} from './lib/expenseQueries';
 import {expenseCoverageSql,buildExpenseAnalysisQuery} from './lib/expenseAnalytics';
@@ -598,7 +600,8 @@ const buildRecentTimeline = (events: ActivityEvent[]) =>
     )
     .slice(0, 16);
 
-const loadActiveIngestionKeys = async (): Promise<Set<string>> => {
+const loadActiveIngestionKeys = async (execution: IngestionExecution): Promise<Set<string>> => {
+  if (!execution.processActive) return new Set<string>();
   const result = await pool.query<{
     dataset: string | null;
     periodStart: string | null;
@@ -1168,6 +1171,17 @@ app.get('/api/politicos/ranking', async (req, res) => {
     if(error instanceof JudicialError){sendJson(res,error.status,{error:error.message});return;}
     if(error instanceof ExpenseFilterError){sendJson(res,400,{error:error.message});return;}
     sendJson(res, 500, {error: 'Erro ao processar requisição'});
+  }
+});
+
+app.get('/api/home/resumo', async (_req, res) => {
+  try {
+    const revision = catalogEvents.revision;
+    const result = await pool.query(homeSummaryQuery);
+    sendJson(res, 200, {...result.rows[0], revision});
+  } catch (error) {
+    console.error('[home-summary]', error);
+    sendJson(res, 500, {error: 'Não foi possível carregar o resumo inicial.'});
   }
 });
 
@@ -2722,7 +2736,8 @@ app.get('/api/admin/ingestion/summary', async (_req, res) => {
 
 app.get('/api/admin/ingestion/logs', async (_req, res) => {
   try {
-    const activeIngestionKeys = await loadActiveIngestionKeys();
+    const execution = await loadIngestionExecution(pool, isStartingIngestion);
+    const activeIngestionKeys = await loadActiveIngestionKeys(execution);
     const logsDir = join(process.cwd(), 'logs');
     const names = await readdir(logsDir).catch((error: NodeJS.ErrnoException) => {
       if (error.code === 'ENOENT') return [] as string[];
@@ -2748,6 +2763,7 @@ app.get('/api/admin/ingestion/logs', async (_req, res) => {
       sendJson(res, 200, {
         log: '',
         file: null,
+        execution,
         truncated: activityTail.truncated,
         statsScope: 'recent',
         events: activityEvents.slice(0, 80),
@@ -2771,6 +2787,7 @@ app.get('/api/admin/ingestion/logs', async (_req, res) => {
     ].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
     sendJson(res, 200, {
       file: latest.file,
+      execution,
       log: content.slice(-12000),
       truncated: logTail.truncated || activityTail.truncated,
       statsScope: 'recent',

@@ -24,6 +24,72 @@ afterEach(() => {
 });
 
 describe('autorização administrativa', () => {
+  it('invalida a execução dos logs após falha de leitura e preserva o histórico', async () => {
+    window.sessionStorage.setItem('admin_api_token', 'token-atual');
+    let failLogs = false;
+    const event = {stage:'checkpoint_start', source:'ingestion', label:'Deputados em processamento', dataset:'deputados', timestamp:'2026-10-31T12:00:00Z'};
+    vi.stubGlobal('fetch', vi.fn(async input => {
+      if (String(input).endsWith('/summary')) return json({checkpoints:[{dataset:'deputados', status:'running', total:2}], periods:[], execution:{processActive:true, maintenanceActive:true}});
+      if (String(input).endsWith('/logs')) return failLogs ? json({error:'Falha'}, 500) : json({file:'ingest-history.log', log:'Histórico preservado', execution:{processActive:true, maintenanceActive:true}, events:[event], currentStatus:[event]});
+      return successfulResponse(input);
+    }));
+    render(<Admin />);
+    fireEvent.click(await screen.findByRole('button', {name:'Logs'}));
+    const status = await screen.findByRole('region', {name:'Status operacional dos logs'});
+    await waitFor(() => expect(status).toHaveTextContent('Coleta em execução'));
+    expect(within(status).getByText('Deputados em processamento')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('button', {name:'Atualizar logs'})).toBeEnabled());
+    failLogs = true;
+    fireEvent.click(screen.getByRole('button', {name:'Atualizar logs'}));
+    await waitFor(() => expect(status).toHaveTextContent('Execução não confirmada'));
+    expect(status).not.toHaveTextContent('Coleta em execução');
+    expect(within(status).queryByText('Deputados em processamento')).not.toBeInTheDocument();
+    expect(screen.getByText('Histórico preservado')).toBeInTheDocument();
+    expect(screen.getByText('Não foi possível carregar os eventos recentes da ingestão. Tente atualizar os logs.')).toBeInTheDocument();
+  });
+
+  it.each([
+    [false, false, 'Execução não confirmada'],
+    [false, true, 'Operação em andamento'],
+    [true, true, 'Coleta em execução'],
+  ])('mostra o estado confirmado dos logs separadamente do histórico (%s, %s)', async (processActive, maintenanceActive, label) => {
+    window.sessionStorage.setItem('admin_api_token', 'token-atual');
+    vi.stubGlobal('fetch', vi.fn(async input => {
+      if (String(input).endsWith('/summary')) return json({checkpoints:[{dataset:'deputados', status:'running', total:2}], periods:[], execution:{processActive, maintenanceActive}});
+      if (String(input).endsWith('/logs')) return json({file:'ingest-history.log', log:'coleta antiga', execution:{processActive, maintenanceActive}, events:[{stage:'checkpoint_start', source:'ingestion', label:'Deputados', timestamp:'2020-01-01T00:00:00Z'}], currentStatus:[]});
+      return successfulResponse(input);
+    }));
+    render(<Admin />);
+    fireEvent.click(await screen.findByRole('button', {name:'Logs'}));
+    const status = await screen.findByRole('region', {name:'Status operacional dos logs'});
+    await waitFor(() => expect(status).toHaveTextContent(label));
+    expect(status).toHaveTextContent('Histórico recente');
+    expect(status).not.toHaveTextContent('fluxo(s) ativo(s) agora');
+  });
+
+  it('começa sem seleção e envia somente Votações quando escolhida', async () => {
+    window.sessionStorage.setItem('admin_api_token', 'token-atual');
+    const requests: unknown[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input, init) => {
+      if (init?.method === 'POST' && String(input).endsWith('/ingestion/run')) {
+        requests.push(JSON.parse(String(init.body)));
+        return json({message:'Coleta iniciada.', datasets:['votacoes']});
+      }
+      return successfulResponse(input);
+    }));
+    const user = userEvent.setup();
+    render(<Admin />);
+    expect(await screen.findByRole('button', {name:'Iniciar coleta'})).toBeDisabled();
+    expect(screen.getByRole('button', {name:'Deputados'})).toHaveAttribute('aria-pressed', 'false');
+    await user.click(screen.getByRole('button', {name:'Votações'}));
+    expect(screen.getByRole('button', {name:'Votações'})).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByText('Selecionados: Votações')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', {name:'Iniciar coleta'}));
+    await waitFor(() => expect(requests).toHaveLength(1));
+    expect(requests[0]).toMatchObject({datasets:['votacoes']});
+    expect(await screen.findByText('Coleta iniciada. Dados confirmados pelo servidor: Votações.')).toBeInTheDocument();
+  });
+
   it('preenche o período suportado até hoje e acompanha a virada do dia em Brasília', async () => {
     vi.useFakeTimers({toFake:['Date']});
     vi.setSystemTime(new Date('2026-10-31T01:30:00Z'));
@@ -70,6 +136,7 @@ describe('autorização administrativa', () => {
     const option = await screen.findByRole('checkbox', {name:'Reconsultar períodos já concluídos sem registros'});
     expect(option).not.toBeChecked();
     if (reprocessEmpty) await user.click(option);
+    await user.click(screen.getByRole('button', {name:'Votações'}));
     await user.click(screen.getByRole('button', {name:'Iniciar coleta'}));
     await waitFor(() => expect(requests).toHaveLength(1));
     expect(requests[0]).toMatchObject({reprocessEmpty});
@@ -199,7 +266,7 @@ describe('autorização administrativa', () => {
     await user.type(screen.getByPlaceholderText('Token administrativo'), '  token-atual  ');
     await user.click(screen.getByRole('button', {name: 'Entrar'}));
 
-    expect(await screen.findByRole('button', {name: 'Iniciar coleta'})).toBeEnabled();
+    expect(await screen.findByRole('button', {name: 'Iniciar coleta'})).toBeDisabled();
     expect(window.sessionStorage.getItem('admin_api_token')).toBe('token-atual');
     await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/summary'))).toBe(true));
     for (const [, init] of fetchMock.mock.calls.slice(1)) {
@@ -226,6 +293,7 @@ describe('autorização administrativa', () => {
     render(<Admin />);
     await screen.findByRole('button', {name: 'Iniciar coleta'});
     if (button === 'Salvar IA') await user.click(screen.getByRole('button', {name: 'IA'}));
+    if (button === 'Iniciar coleta') await user.click(screen.getByRole('button', {name:'Votações'}));
     await user.click(screen.getByRole('button', {name: button}));
 
     expect(await screen.findByRole('heading', {name: 'Acesso administrativo'})).toBeInTheDocument();
