@@ -103,7 +103,9 @@ describe.skipIf(!databaseUrl)('contrato de despesas no PostgreSQL', () => {
         VALUES ('camara','despesas','2026-04-01','2026-04-30','running',NOW()-INTERVAL '2 hours')`);
       for (const path of ['summary','logs']) {
         const res=await fetch(`${base}/api/admin/ingestion/${path}`,{headers:{Authorization:'Bearer test-admin-only'}});
-        expect(res.status, `${path}: ${await res.text()}`).toBe(200);
+        const data=await res.json();
+        expect(res.status, `${path}: ${JSON.stringify(data)}`).toBe(200);
+        if (path==='summary') expect(data.execution).toEqual({processActive:false,maintenanceActive:true});
       }
       const row=await database.query(`SELECT status FROM ${schema}.ingestion_checkpoints`);
       expect(row.rows[0].status).toBe('running');

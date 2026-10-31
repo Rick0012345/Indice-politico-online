@@ -18,7 +18,7 @@ import {buildProgressiveRankingQuery,expenseYearsQuery} from './lib/rankingQueri
 import {startCatalogListener} from './lib/catalogListener';
 import {getGroqModelValidationError} from './lib/aiSettings';
 import {getDefaultIngestionPeriod} from './lib/ingestionPeriod';
-import {acquireIngestionLock} from './lib/ingestionLifecycle';
+import {acquireIngestionLock, loadIngestionExecution} from './lib/ingestionLifecycle';
 import {resolveGroqSettings, type GroqSettings} from './lib/groqSettings';
 import {buildExpenseQuery,ExpenseFilterError,parseExpenseFilters,expenseScopeSql,expenseFinancialRowsCtes} from './lib/expenseQueries';
 import {expenseCoverageSql,buildExpenseAnalysisQuery} from './lib/expenseAnalytics';
@@ -2713,6 +2713,7 @@ app.get('/api/admin/ingestion/summary', async (_req, res) => {
     sendJson(res, 200, {
       checkpoints: checkpointResult.rows,
       periods: periodResult.rows,
+      execution: await loadIngestionExecution(pool, isStartingIngestion),
     });
   } catch {
     sendJson(res, 500, {error: 'Erro ao carregar resumo de ingestao.'});

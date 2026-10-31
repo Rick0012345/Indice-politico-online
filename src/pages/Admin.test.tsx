@@ -1,5 +1,5 @@
 import React from 'react';
-import {act, fireEvent, render, screen, waitFor} from '@testing-library/react';
+import {act, fireEvent, render, screen, waitFor, within} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {Admin} from './Admin';
@@ -81,7 +81,71 @@ describe('autorização administrativa', () => {
       ? json({checkpoints:[{dataset:'despesas',status:'done',total:7,itemsCount:100,emptyTotal:3,periodStart:'2020-01-01',periodEnd:'2020-01-31'}],periods:[]})
       : successfulResponse(input)));
     render(<Admin />);
-    expect(await screen.findByText('3 concluídas sem registros')).toBeInTheDocument();
+    const summary = await screen.findByRole('region', {name: 'Resumo da ingestão'});
+    await waitFor(() => expect(within(summary).getByText('Sem registros').parentElement).toHaveTextContent('3'));
+    expect(within(summary).getByText('Com registros').parentElement).toHaveTextContent('4');
+  });
+
+  it('atualiza automaticamente após reabrir o painel, mesmo sem fila inicial', async () => {
+    vi.useFakeTimers({toFake: ['setInterval', 'clearInterval']});
+    window.sessionStorage.setItem('admin_api_token', 'token-atual');
+    let active = false;
+    vi.stubGlobal('fetch', vi.fn(async (input) => String(input).endsWith('/summary')
+      ? json({checkpoints: active ? [{dataset:'despesas',status:'running',total:2}] : [], periods: [], execution:{processActive:active,maintenanceActive:active}})
+      : successfulResponse(input)));
+    render(<Admin />);
+    await screen.findByRole('button', {name: 'Iniciar coleta'});
+    await screen.findByText('Nenhuma tarefa registrada');
+    expect(screen.getByText('Atualização automática a cada 5 s')).toBeInTheDocument();
+    active = true;
+    await act(async () => {await vi.advanceTimersByTimeAsync(5000);});
+    expect(screen.getByText('Coleta em execução')).toBeInTheDocument();
+    expect(screen.queryByText('Monitoramento parado')).not.toBeInTheDocument();
+    expect(screen.queryByText('Criacao da fila')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', {name: 'Progresso'}));
+    expect(screen.getByRole('region', {name: 'Resumo da ingestão'})).toHaveTextContent('Coleta em execução');
+  });
+
+  it('preserva os números e informa leitura desatualizada até a conexão voltar', async () => {
+    vi.useFakeTimers({toFake: ['setInterval', 'clearInterval']});
+    window.sessionStorage.setItem('admin_api_token', 'token-atual');
+    let fail = false;
+    vi.stubGlobal('fetch', vi.fn(async (input) => String(input).endsWith('/summary')
+      ? fail ? json({error:'Indisponível'}, 500) : json({checkpoints:[{dataset:'despesas',status:'done',total:7,emptyTotal:3}], periods:[]})
+      : successfulResponse(input)));
+    render(<Admin />);
+    const summary = await screen.findByRole('region', {name: 'Resumo da ingestão'});
+    await waitFor(() => expect(summary).toHaveTextContent('7 de 7 tarefas concluídas'));
+    fail = true;
+    await act(async () => {await vi.advanceTimersByTimeAsync(5000);});
+    expect(summary).toHaveTextContent('Status desatualizado');
+    expect(summary).toHaveTextContent('7 de 7 tarefas concluídas');
+    fail = false;
+    await act(async () => {await vi.advanceTimersByTimeAsync(5000);});
+    expect(summary).not.toHaveTextContent('Status desatualizado');
+  });
+
+  it('compartilha a leitura em andamento entre Atualizar logs e Atualizar', async () => {
+    window.sessionStorage.setItem('admin_api_token', 'token-atual');
+    let holdLogs = false;
+    const releases: Array<(response: Response) => void> = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (holdLogs && String(input).endsWith('/logs')) return new Promise<Response>(resolve => {releases.push(resolve);});
+      return successfulResponse(input);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    render(<Admin />);
+    await screen.findByRole('button', {name: 'Iniciar coleta'});
+    await waitFor(() => expect(screen.getByRole('button', {name: 'Atualizar'})).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', {name: 'Logs'}));
+    holdLogs = true;
+    try {
+      await act(async () => {fireEvent.click(screen.getByRole('button', {name: 'Atualizar logs'}));});
+      await act(async () => {fireEvent.click(screen.getByRole('button', {name: 'Atualizar'}));});
+      expect(releases).toHaveLength(1);
+    } finally {
+      await act(async () => {releases.forEach(resolve => resolve(json({log: ''})));});
+    }
   });
 
   it('aguarda o token sem consultar a API nem mostrar as operações', () => {

@@ -19,17 +19,9 @@ import {
 import {getGroqModelValidationError} from '../lib/aiSettings';
 import {cn} from '../lib/utils';
 import {JudicialAdmin} from '../components/judicial/JudicialAdmin';
+import {IngestionProgressSummary} from '../components/IngestionProgressSummary';
+import {formatPercent, summarizeCheckpointProgress, type CheckpointSummary, type IngestionExecution} from '../lib/ingestionProgress';
 import {getDefaultIngestionPeriod, INGESTION_SUPPORTED_FROM} from '../lib/ingestionPeriod';
-
-type CheckpointSummary = {
-  dataset: string;
-  status: string;
-  periodStart: string | null;
-  periodEnd: string | null;
-  total: number;
-  itemsCount: number | null;
-  emptyTotal?: number;
-};
 
 type PopulatedPeriod = {
   dataset: string;
@@ -126,43 +118,6 @@ const formatPeriodRange = (start: string | null, end: string | null) => {
   return `${formatDate(start)} a ${formatDate(end)}`;
 };
 
-const calculatePercent = (completed: number, total: number) =>
-  total > 0 ? Math.min(100, (completed / total) * 100) : 0;
-
-const formatPercent = (percent: number, completed: number, total: number) => {
-  if (total <= 0) return '0%';
-  if (completed >= total) return '100%';
-  const visiblePercent = Math.min(99.99, percent);
-  const fractionDigits = visiblePercent >= 99 ? 2 : visiblePercent >= 10 ? 1 : 0;
-  return `${visiblePercent.toLocaleString('pt-BR', {
-    minimumFractionDigits: fractionDigits,
-    maximumFractionDigits: fractionDigits,
-  })}%`;
-};
-
-const countWindows = (start: string, end: string, mode: 'month' | 'quarter' | 'year') => {
-  const fromDate = new Date(`${start}T00:00:00.000Z`);
-  const toDate = new Date(`${end}T00:00:00.000Z`);
-  if (Number.isNaN(fromDate.getTime()) || Number.isNaN(toDate.getTime())) return 0;
-
-  const months =
-    (toDate.getUTCFullYear() - fromDate.getUTCFullYear()) * 12 +
-    (toDate.getUTCMonth() - fromDate.getUTCMonth()) +
-    1;
-  const step = mode === 'year' ? 12 : mode === 'quarter' ? 3 : 1;
-  return Math.max(0, Math.ceil(months / step));
-};
-
-const countLegislatures = (start: string, end: string) => {
-  const fromYear = new Date(`${start}T00:00:00.000Z`).getUTCFullYear();
-  const toYear = new Date(`${end}T00:00:00.000Z`).getUTCFullYear();
-  const ranges = [
-    [2015, 2018],
-    [2019, 2022],
-    [2023, 2026],
-  ];
-  return ranges.filter(([rangeStart, rangeEnd]) => fromYear <= rangeEnd && toYear >= rangeStart).length;
-};
 
 const defaultLogStats = (): LogStats => ({
   totalLines: 0,
@@ -258,33 +213,6 @@ const LogEventCard = ({event, compact = false}: {event: LogEvent; compact?: bool
   );
 };
 
-const summarizeCheckpointProgress = (rows: CheckpointSummary[]) => {
-  const total = rows.reduce((sum, row) => sum + Number(row.total ?? 0), 0);
-  const empty = rows.reduce((sum, row) => sum + Number(row.emptyTotal ?? 0), 0);
-  const done = rows
-    .filter((row) => row.status === 'done')
-    .reduce((sum, row) => sum + Number(row.total ?? 0), 0);
-  const running = rows
-    .filter((row) => row.status === 'running')
-    .reduce((sum, row) => sum + Number(row.total ?? 0), 0);
-  const failed = rows
-    .filter((row) => row.status === 'failed')
-    .reduce((sum, row) => sum + Number(row.total ?? 0), 0);
-  const pending = rows
-    .filter((row) => row.status === 'pending')
-    .reduce((sum, row) => sum + Number(row.total ?? 0), 0);
-
-  return {
-    total,
-    empty,
-    done,
-    running,
-    failed,
-    pending,
-    percent: calculatePercent(done, total),
-    activePercent: calculatePercent(done + running, total),
-  };
-};
 
 const adminAuthorizationError = 'Acesso administrativo recusado. Informe o token administrativo atual configurado no servidor.';
 
@@ -438,8 +366,9 @@ const AdminPanel = ({adminFetch, onSignOut}: {
   const [isRunning, setIsRunning] = useState(false);
   const [reprocessEmpty, setReprocessEmpty] = useState(false);
   const [clearingDataset, setClearingDataset] = useState<string | null>(null);
-  const [isPolling, setIsPolling] = useState(false);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
+  const [summaryError, setSummaryError] = useState<string | null>(null);
+  const [execution, setExecution] = useState<IngestionExecution | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [logFile, setLogFile] = useState<string | null>(null);
   const [logText, setLogText] = useState('');
@@ -461,14 +390,16 @@ const AdminPanel = ({adminFetch, onSignOut}: {
   const loadSummary = useCallback(async () => {
     setIsLoading(true);
     try {
-      const response = await adminFetch('/api/admin/ingestion/summary');
+      const response = await adminFetch('/api/admin/ingestion/summary', {signal: AbortSignal.timeout(15_000)});
       if (!response.ok) throw new Error('Falha ao carregar resumo.');
       const data = await response.json();
       setCheckpoints(data.checkpoints ?? []);
       setPeriods(data.periods ?? []);
+      setExecution(data.execution ?? null);
+      setSummaryError(null);
       setLastUpdatedAt(new Date());
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Erro ao carregar dados.');
+      setSummaryError(error instanceof Error ? error.message : 'Erro ao carregar dados.');
     } finally {
       setIsLoading(false);
     }
@@ -477,7 +408,7 @@ const AdminPanel = ({adminFetch, onSignOut}: {
   const loadLogs = useCallback(async () => {
     try {
       setLogsError('');
-      const response = await adminFetch('/api/admin/ingestion/logs');
+      const response = await adminFetch('/api/admin/ingestion/logs', {signal: AbortSignal.timeout(15_000)});
       if (!response.ok) throw new Error('HTTP');
       const data = await response.json();
       setLogFile(data.file ?? null);
@@ -524,21 +455,9 @@ const AdminPanel = ({adminFetch, onSignOut}: {
   const groupedCheckpoints = useMemo(() => {
     return datasetOptions.map((dataset) => {
       const rows = checkpoints.filter((row) => row.dataset === dataset.id);
-      const total = rows.reduce((sum, row) => sum + Number(row.total ?? 0), 0);
-      const done = rows
-        .filter((row) => row.status === 'done')
-        .reduce((sum, row) => sum + Number(row.total ?? 0), 0);
-      const failed = rows
-        .filter((row) => row.status === 'failed')
-        .reduce((sum, row) => sum + Number(row.total ?? 0), 0);
-      return {...dataset, total, done, failed, progress: calculatePercent(done, total)};
+      return {...dataset, ...summarizeCheckpointProgress(rows)};
     });
   }, [checkpoints]);
-
-  const selectedProgress = useMemo(
-    () => summarizeCheckpointProgress(checkpoints.filter((row) => selectedDatasets.includes(row.dataset))),
-    [checkpoints, selectedDatasets],
-  );
 
   const overallProgress = useMemo(
     () => summarizeCheckpointProgress(checkpoints),
@@ -546,24 +465,9 @@ const AdminPanel = ({adminFetch, onSignOut}: {
   );
 
   const activeCheckpoints = useMemo(
-    () => checkpoints.filter((row) => row.status !== 'done'),
+    () => checkpoints.filter((row) => ['running', 'pending', 'failed'].includes(row.status)),
     [checkpoints],
   );
-
-  const estimatedQueueTotal = useMemo(() => {
-    return selectedDatasets.reduce((sum, dataset) => {
-      if (dataset === 'deputados') return sum + countLegislatures(from, to);
-      if (dataset === 'votacoes') return sum + countWindows(from, to, 'month');
-      return sum;
-    }, 0);
-  }, [from, selectedDatasets, to]);
-
-  const queuePercent =
-    estimatedQueueTotal > 0
-      ? Math.min(100, Math.round((selectedProgress.total / estimatedQueueTotal) * 100))
-      : selectedProgress.total > 0
-        ? 100
-        : 0;
 
   const httpStatusEntries = useMemo(
     () =>
@@ -584,22 +488,19 @@ const AdminPanel = ({adminFetch, onSignOut}: {
   );
 
   useEffect(() => {
-    const hasActiveWork = checkpoints.some((row) => row.status === 'running' || row.status === 'pending');
-    if (!hasActiveWork && !isPolling && activeSection !== 'logs') return;
-
     const timer = window.setInterval(() => {
       void refreshAdminData();
     }, 5000);
-
-    return () => window.clearInterval(timer);
-  }, [activeSection, checkpoints, isPolling, refreshAdminData]);
-
-  useEffect(() => {
-    const hasActiveWork = checkpoints.some((row) => row.status === 'running' || row.status === 'pending');
-    if (!hasActiveWork && isPolling && checkpoints.length > 0) {
-      setIsPolling(false);
-    }
-  }, [checkpoints, isPolling]);
+    const refreshOnFocus = () => {void refreshAdminData();};
+    const refreshOnVisible = () => {if (document.visibilityState === 'visible') void refreshAdminData();};
+    window.addEventListener('focus', refreshOnFocus);
+    document.addEventListener('visibilitychange', refreshOnVisible);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('focus', refreshOnFocus);
+      document.removeEventListener('visibilitychange', refreshOnVisible);
+    };
+  }, [refreshAdminData]);
 
   const toggleDataset = (dataset: string) => {
     setSelectedDatasets((current) =>
@@ -619,7 +520,6 @@ const AdminPanel = ({adminFetch, onSignOut}: {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? 'Erro ao iniciar ingestao.');
       setMessage(data.message ?? 'Ingestao iniciada.');
-      setIsPolling(true);
       await refreshAdminData();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Erro ao iniciar ingestao.');
@@ -639,7 +539,7 @@ const AdminPanel = ({adminFetch, onSignOut}: {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? 'Erro ao cancelar tarefas.');
       setMessage(`${data.cancelled ?? 0} tarefa(s) cancelada(s).`);
-      await loadSummary();
+      await refreshAdminData();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Erro ao cancelar tarefas.');
     }
@@ -757,6 +657,12 @@ const AdminPanel = ({adminFetch, onSignOut}: {
           })}
         </nav>
 
+        {(activeSection === 'coleta' || activeSection === 'progresso') && (
+          <div className="mb-6">
+            <IngestionProgressSummary progress={overallProgress} execution={execution} lastUpdatedAt={lastUpdatedAt} error={summaryError} />
+          </div>
+        )}
+
         {activeSection === 'judicial' && <JudicialAdmin adminFetch={judicialFetch} />}
 
         {activeSection === 'coleta' && (
@@ -810,78 +716,7 @@ const AdminPanel = ({adminFetch, onSignOut}: {
                 </span>
               </label>
 
-              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-950">
-                <div className="mb-2 flex items-center justify-between gap-3">
-                  <span className="text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">
-                    Criacao da fila
-                  </span>
-                  <span className="text-sm font-semibold text-slate-900 dark:text-slate-50">
-                    {queuePercent}%
-                  </span>
-                </div>
-                <div className="h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
-                  <div
-                    className="h-full rounded-full bg-cyan-500 transition-all"
-                    style={{width: `${queuePercent}%`}}
-                  />
-                </div>
-                <div className="mt-2 flex items-center justify-between text-xs font-bold text-slate-500 dark:text-slate-400">
-                  <span>{activeCheckpoints.length} checkpoints acionaveis</span>
-                  <span>{estimatedQueueTotal > 0 ? `${estimatedQueueTotal} estimados` : 'estimativa aberta'}</span>
-                </div>
-
-                <div className="mb-2 mt-4 flex items-center justify-between gap-3">
-                  <span className="text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">
-                    Processamento
-                  </span>
-                  <span className="text-sm font-semibold text-slate-900 dark:text-slate-50">
-                    {formatPercent(overallProgress.percent, overallProgress.done, overallProgress.total)}
-                  </span>
-                </div>
-                <div className="h-3 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
-                  <div
-                    className="h-full rounded-full bg-blue-600 transition-all"
-                    style={{width: `${overallProgress.percent}%`}}
-                  >
-                    <div className="h-full w-full bg-blue-500" />
-                  </div>
-                  {overallProgress.running > 0 && overallProgress.percent < 100 && (
-                    <div
-                      className="relative -mt-3 h-3 animate-pulse rounded-full bg-blue-400/70 transition-all"
-                      style={{
-                        marginLeft: `${overallProgress.percent}%`,
-                        width: `${Math.max(3, overallProgress.activePercent - overallProgress.percent)}%`,
-                      }}
-                    />
-                  )}
-                </div>
-                <div className="mt-3 grid grid-cols-2 gap-2 text-xs font-bold text-slate-500 dark:text-slate-400">
-                  <span>{overallProgress.done} concluidas</span>
-                  <span className="text-right text-amber-700 dark:text-amber-400">{overallProgress.empty} concluídas sem registros</span>
-                  <span className="text-right">{overallProgress.total} tarefas</span>
-                  <span>{overallProgress.running} rodando</span>
-                  <span className="text-right">{overallProgress.pending} na fila</span>
-                  <span>{overallProgress.failed} falhas</span>
-                  <span className="text-right">
-                    {overallProgress.running > 0 ? 'Agente trabalhando' : 'Sem tarefa ativa'}
-                  </span>
-                </div>
-                {overallProgress.total === 0 && (
-                  <div className="mt-2 text-xs font-semibold text-slate-500 dark:text-slate-400">
-                    Aguardando o agente criar os checkpoints desta coleta.
-                  </div>
-                )}
-                <div className="mt-2 flex items-center justify-between gap-2 text-xs font-semibold text-slate-500 dark:text-slate-400">
-                  <span>{isPolling ? 'Monitorando agente' : 'Monitoramento parado'}</span>
-                  <span>
-                    {lastUpdatedAt
-                      ? `Atualizado ${lastUpdatedAt.toLocaleTimeString('pt-BR')}`
-                      : 'Ainda sem leitura'}
-                  </span>
-                </div>
-              </div>
-
-              <button type="button" onClick={runIngestion} disabled={isRunning || selectedDatasets.length === 0} className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:opacity-60">
+              <button type="button" onClick={runIngestion} disabled={isRunning || execution?.processActive || execution?.maintenanceActive || selectedDatasets.length === 0} className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:opacity-60">
                 <Play size={18} />
                 {isRunning ? 'Iniciando...' : 'Iniciar coleta'}
               </button>
@@ -907,7 +742,7 @@ const AdminPanel = ({adminFetch, onSignOut}: {
                     key={dataset.id}
                     type="button"
                     onClick={() => clearDataset(dataset.id, dataset.label)}
-                    disabled={clearingDataset != null || overallProgress.running > 0}
+                    disabled={clearingDataset != null || overallProgress.running > 0 || execution?.processActive || execution?.maintenanceActive}
                     className={cn(
                       'inline-flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold ring-1 ring-inset transition disabled:cursor-not-allowed disabled:opacity-50',
                       isAll
@@ -921,9 +756,9 @@ const AdminPanel = ({adminFetch, onSignOut}: {
                 );
               })}
             </div>
-            {overallProgress.running > 0 && (
+            {(overallProgress.running > 0 || execution?.processActive || execution?.maintenanceActive) && (
               <div className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800 dark:bg-amber-950 dark:text-amber-200">
-                A limpeza fica bloqueada enquanto houver ingestao rodando.
+                A limpeza fica bloqueada enquanto houver operação ativa ou tarefas marcadas em processamento.
               </div>
             )}
           </div>
@@ -944,10 +779,10 @@ const AdminPanel = ({adminFetch, onSignOut}: {
                     <Database size={20} className="text-slate-400" />
                   </div>
                   <div className="mt-4 h-2 rounded-full bg-slate-100 dark:bg-slate-800">
-                    <div className="h-2 rounded-full bg-blue-600" style={{width: `${dataset.progress}%`}} />
+                    <div className="h-2 rounded-full bg-blue-600" style={{width: `${dataset.percent}%`}} />
                   </div>
                   <div className="mt-3 flex items-center justify-between text-xs font-bold text-slate-500 dark:text-slate-400">
-                    <span>{formatPercent(dataset.progress, dataset.done, dataset.total)} concluido</span>
+                    <span>{formatPercent(dataset.percent, dataset.done, dataset.total)} concluído no acumulado</span>
                     <span>{dataset.failed} falhas</span>
                   </div>
                 </div>
@@ -1020,7 +855,8 @@ const AdminPanel = ({adminFetch, onSignOut}: {
                 </div>
                 <button
                   type="button"
-                  onClick={loadLogs}
+                  onClick={refreshAdminData}
+                  disabled={isLoading}
                   className="rounded-lg p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-200"
                   aria-label="Atualizar logs"
                   title="Atualizar logs"
@@ -1130,7 +966,7 @@ const AdminPanel = ({adminFetch, onSignOut}: {
                       </div>
                     </div>
                     <div className="inline-flex items-center gap-2 rounded-full bg-white px-3 py-1 text-xs font-semibold text-slate-500 ring-1 ring-slate-200 dark:bg-slate-900 dark:text-slate-300 dark:ring-slate-700">
-                      <RefreshCw size={13} className={cn((isPolling || activeSection === 'logs') && 'animate-spin')} />
+                      <RefreshCw size={13} className={cn(isLoading && 'animate-spin')} />
                       Atualiza a cada 5s
                     </div>
                   </div>
